@@ -14,11 +14,11 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:8085',
+        target: 'http://13.203.60.173:8085',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'http://localhost:8085',
+        target: 'http://13.203.60.173:8085',
         ws: true,
       },
     },
