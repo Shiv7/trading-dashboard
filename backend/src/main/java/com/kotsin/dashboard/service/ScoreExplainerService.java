@@ -156,8 +156,23 @@ public class ScoreExplainerService {
         ));
         explanation.put("gates", gates);
 
-        // Summary
-        explanation.put("summary", generateSummary(score));
+        // Summary - Use Kafka summary if available, else generate
+        Map<String, Object> moduleDetails = score.getModuleDetails();
+        if (moduleDetails != null && moduleDetails.containsKey("summary") && moduleDetails.get("summary") != null) {
+            explanation.put("summary", moduleDetails.get("summary").toString());
+        } else {
+            explanation.put("summary", generateSummary(score));
+        }
+
+        // Contributors from family-score (if available)
+        if (moduleDetails != null && moduleDetails.containsKey("contributors")) {
+            explanation.put("contributors", moduleDetails.get("contributors"));
+        }
+
+        // Warnings from family-score (if available)
+        if (moduleDetails != null && moduleDetails.containsKey("warnings")) {
+            explanation.put("warnings", moduleDetails.get("warnings"));
+        }
 
         return explanation;
     }

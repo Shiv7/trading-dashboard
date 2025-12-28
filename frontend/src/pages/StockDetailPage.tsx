@@ -5,12 +5,28 @@ import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
 import type { FamilyScore, Signal } from '../types'
 
+interface Contributor {
+  category: string;
+  points: number;
+  reason: string;
+  dataSource?: string;
+  rawValue?: string;
+}
+
+interface Warning {
+  type: string;
+  severity: string;
+  message: string;
+}
+
 interface ExplanationData {
   vcp?: Record<string, string | number | boolean>;
   ipu?: Record<string, string | number | boolean>;
   regime?: Record<string, string | number | boolean>;
   oi?: Record<string, string | number | boolean>;
   summary?: string;
+  contributors?: Contributor[];
+  warnings?: Warning[];
 }
 
 export default function StockDetailPage() {
@@ -225,6 +241,44 @@ export default function StockDetailPage() {
       {explanation && (
         <div className="card">
           <div className="card-header">📝 Score Explanation</div>
+          
+          {/* Contributors - Score Breakdown */}
+          {explanation.contributors && explanation.contributors.length > 0 && (
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-slate-300 mb-2">Score Contributors</h4>
+              <div className="space-y-2">
+                {explanation.contributors.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between p-2 bg-slate-700/30 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded ${c.points > 0 ? 'bg-emerald-500/20 text-emerald-400' : c.points < 0 ? 'bg-red-500/20 text-red-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                        {c.points > 0 ? '+' : ''}{c.points.toFixed(1)}
+                      </span>
+                      <span className="text-white text-sm">{c.category.replace(/_/g, ' ')}</span>
+                    </div>
+                    <span className="text-xs text-slate-400">{c.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Warnings */}
+          {explanation.warnings && explanation.warnings.length > 0 && (
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-yellow-400 mb-2">⚠️ Warnings</h4>
+              <div className="space-y-2">
+                {explanation.warnings.map((w, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                    <span className={`text-xs px-2 py-0.5 rounded ${w.severity === 'HIGH' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                      {w.severity}
+                    </span>
+                    <span className="text-sm text-slate-300">{w.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {explanation.vcp && renderExplanationSection('VCP Analysis', explanation.vcp)}
             {explanation.ipu && renderExplanationSection('IPU Analysis', explanation.ipu)}
