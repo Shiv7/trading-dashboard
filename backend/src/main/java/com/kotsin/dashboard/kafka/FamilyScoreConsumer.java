@@ -110,34 +110,39 @@ public class FamilyScoreConsumer {
         double patternBonus = breakdown.path("patternBonus").asDouble(0);
         double levelRetestBonus = breakdown.path("levelRetestBonus").asDouble(0);
         
-        // VCP-like scores from breakdown
-        builder.vcpCombinedScore(priceScore)
-               .vcpRunway(patternBonus)
+        // VCP scores - use root level vcpScore which is the actual VCP combined score
+        double vcpScore = root.path("vcpScore").asDouble(0);
+        builder.vcpCombinedScore(vcpScore / 100.0)  // Normalize from 0-100 to 0-1
+               .vcpRunway(patternBonus / 15.0)     // Normalize pattern bonus
                .vcpStructuralBias(levelRetestBonus)
-               .vcpSupportScore(0)
-               .vcpResistanceScore(0);
+               .vcpSupportScore(priceScore > 0 ? priceScore / 10.0 : 0)
+               .vcpResistanceScore(priceScore < 0 ? Math.abs(priceScore) / 10.0 : 0);
 
-        // IPU scores
-        builder.ipuFinalScore(ipuScore)
-               .ipuInstProxy(microstructureScore)
-               .ipuMomentum(0)
+        // IPU scores - use root level ipuFinalScore which is the actual IPU score
+        double ipuFinal = root.path("ipuFinalScore").asDouble(0);
+        builder.ipuFinalScore(ipuFinal)
+               .ipuInstProxy(microstructureScore / 10.0)  // Normalize
+               .ipuMomentum(breakdown.path("mtisMomentumBonus").asDouble(0) / 10.0)
                .ipuExhaustion(root.path("hasExhaustion").asBoolean() ? 1.0 : 0.0)
-               .ipuUrgency(0)
-               .ipuDirectionalConviction(0)
+               .ipuUrgency(ipuFinal > 0.5 ? 1.0 : (ipuFinal > 0.3 ? 0.5 : 0.0))
+               .ipuDirectionalConviction(ipuFinal * (priceScore > 0 ? 1 : -1))
                .ipuXfactor(root.path("fudkiiIgnition").asBoolean())
                .ipuMomentumState(mtisTrend);
 
-        // Regime
-        builder.indexRegimeLabel(mtisLabel)
+        // Regime - use indexRegimeLabel from root
+        String regimeLabel = root.path("indexRegimeLabel").asText(mtisLabel);
+        builder.indexRegimeLabel(regimeLabel.isEmpty() ? mtisLabel : regimeLabel)
                .indexRegimeStrength(mtfRegimeScore / 10.0) // Normalize to 0-1
                .securityRegimeLabel(root.path("sessionPhase").asText("UNKNOWN"))
                .securityAligned(root.path("actionable").asBoolean());
 
-        // OI/F&O
+        // OI/F&O - calculate actual values
+        Double premium = calculatePremium(root);
+        String futuresBuildup = determineFuturesBuildup(foAlignmentScore, root);
         builder.oiSignal(root.path("oiSignal").asText("NEUTRAL"))
-               .pcr(null)
-               .spotFuturePremium(calculatePremium(root))
-               .futuresBuildup(foAlignmentScore > 0 ? "LONG_BUILDUP" : (foAlignmentScore < 0 ? "SHORT_BUILDUP" : "NONE"));
+               .pcr(null)  // PCR not available in family-score - would need from family-candle
+               .spotFuturePremium(premium)
+               .futuresBuildup(futuresBuildup);
 
         // Gate status from actionability
         boolean actionable = root.path("actionable").asBoolean();
@@ -173,12 +178,22 @@ public class FamilyScoreConsumer {
         // Add all breakdown scores
         details.put("priceScore", priceScore);
         details.put("foAlignmentScore", foAlignmentScore);
-        details.put("ipuScore", ipuScore);
+        details.put("ipuScoreBreakdown", ipuScore);
         details.put("microstructureScore", microstructureScore);
         details.put("orderbookScore", orderbookScore);
         details.put("mtfRegimeScore", mtfRegimeScore);
         details.put("patternBonus", patternBonus);
         details.put("levelRetestBonus", levelRetestBonus);
+        details.put("relativeStrengthBonus", breakdown.path("relativeStrengthBonus").asDouble(0));
+        details.put("mtisMomentumBonus", breakdown.path("mtisMomentumBonus").asDouble(0));
+        
+        // Root level scores for easy access
+        details.put("vcpScore", vcpScore);
+        details.put("ipuFinalScore", ipuFinal);
+        details.put("spotPrice", root.path("spotPrice").asDouble(0));
+        details.put("futurePrice", root.path("futurePrice").asDouble(0));
+        details.put("spotFuturePremium", premium);
+        details.put("indexRegimeLabel", regimeLabel);
         
         builder.moduleDetails(details);
 
@@ -192,6 +207,32 @@ public class FamilyScoreConsumer {
             return ((futurePrice - spotPrice) / spotPrice) * 100;
         }
         return null;
+    }
+    
+    private String determineFuturesBuildup(double foAlignmentScore, JsonNode root) {
+        // Check foAlignmentScore first
+        if (foAlignmentScore > 5) {
+            return "LONG_BUILDUP";
+        } else if (foAlignmentScore < -5) {
+            return "SHORT_BUILDUP";
+        }
+        
+        // Fallback: check oiSignal
+        String oiSignal = root.path("oiSignal").asText("NEUTRAL");
+        switch (oiSignal) {
+            case "BULLISH":
+            case "STRONG_BULLISH":
+                return "LONG_BUILDUP";
+            case "BEARISH":
+            case "STRONG_BEARISH":
+                return "SHORT_BUILDUP";
+            case "LONG_UNWINDING":
+                return "LONG_UNWINDING";
+            case "SHORT_COVERING":
+                return "SHORT_COVERING";
+            default:
+                return "NONE";
+        }
     }
     
     private String determineDirection(String mtisLabel, String mtisTrend) {
