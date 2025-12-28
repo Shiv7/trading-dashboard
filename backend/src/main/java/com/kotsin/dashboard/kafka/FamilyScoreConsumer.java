@@ -13,7 +13,9 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -194,6 +196,36 @@ public class FamilyScoreConsumer {
         details.put("futurePrice", root.path("futurePrice").asDouble(0));
         details.put("spotFuturePremium", premium);
         details.put("indexRegimeLabel", regimeLabel);
+        
+        // Score explanation - contributors array
+        List<Map<String, Object>> contributors = new ArrayList<>();
+        JsonNode contributorsNode = root.path("contributors");
+        if (contributorsNode.isArray()) {
+            for (JsonNode c : contributorsNode) {
+                Map<String, Object> contrib = new HashMap<>();
+                contrib.put("category", c.path("category").asText());
+                contrib.put("points", c.path("points").asDouble());
+                contrib.put("reason", c.path("reason").asText());
+                contrib.put("dataSource", c.path("dataSource").asText());
+                contrib.put("rawValue", c.path("rawValue").asText());
+                contributors.add(contrib);
+            }
+        }
+        details.put("contributors", contributors);
+        
+        // Warnings array
+        List<Map<String, Object>> warnings = new ArrayList<>();
+        JsonNode warningsNode = root.path("warnings");
+        if (warningsNode.isArray()) {
+            for (JsonNode w : warningsNode) {
+                Map<String, Object> warning = new HashMap<>();
+                warning.put("type", w.path("type").asText());
+                warning.put("severity", w.path("severity").asText());
+                warning.put("message", w.path("message").asText());
+                warnings.add(warning);
+            }
+        }
+        details.put("warnings", warnings);
         
         builder.moduleDetails(details);
 
