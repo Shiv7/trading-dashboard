@@ -27,10 +27,10 @@ public class SignalConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    @KafkaListener(topics = "trading-signals-curated", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
+    @KafkaListener(topics = {"trading-signals", "trading-signals-curated"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onSignal(String payload) {
         try {
-            log.info("Received curated signal from Kafka");
+            log.info("Received signal from Kafka: {}", payload.substring(0, Math.min(100, payload.length())));
             JsonNode root = objectMapper.readTree(payload);
             
             String scripCode = root.path("scripCode").asText();
