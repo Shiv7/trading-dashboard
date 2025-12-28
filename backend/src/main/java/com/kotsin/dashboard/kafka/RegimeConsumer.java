@@ -27,9 +27,10 @@ public class RegimeConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    @KafkaListener(topics = "regime-index-output", groupId = "trading-dashboard-regime")
+    @KafkaListener(topics = "regime-index-output", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onIndexRegime(String payload) {
         try {
+            log.info("Received regime update from Kafka");
             JsonNode root = objectMapper.readTree(payload);
             
             RegimeDTO dto = parseRegime(root);
@@ -37,11 +38,11 @@ public class RegimeConsumer {
             // Broadcast regime update
             sessionManager.broadcastRegimeUpdate(dto);
             
-            log.debug("Index regime update: {} - {} (strength={})", 
+            log.info("Index regime update broadcasted: {} - {} (strength={})", 
                 dto.getIndexName(), dto.getLabel(), dto.getRegimeStrength());
 
         } catch (Exception e) {
-            log.error("Error processing regime: {}", e.getMessage());
+            log.error("Error processing regime: {}", e.getMessage(), e);
         }
     }
 

@@ -30,28 +30,31 @@ public class FamilyCandleConsumer {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     @KafkaListener(topics = {"family-candle-1m", "family-candle-5m", "family-candle-15m", "family-candle-30m"},
-                   groupId = "trading-dashboard-family")
+                   groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onFamilyCandle(String payload) {
         try {
             JsonNode root = objectMapper.readTree(payload);
             JsonNode equity = root.path("equity");
             
             if (equity.isMissingNode() || equity.isNull()) {
+                log.trace("No equity node in message, skipping");
                 return;
             }
 
             String scripCode = equity.path("scripCode").asText();
             if (scripCode == null || scripCode.isEmpty()) {
+                log.trace("No scripCode in equity, skipping");
                 return;
             }
 
             FamilyScoreDTO dto = parseFamilyScore(root, equity);
+            log.info("Received family candle for {} ({}), broadcasting...", scripCode, dto.getTimeframe());
             
             // Broadcast to WebSocket
             sessionManager.broadcastScoreUpdate(scripCode, dto);
 
         } catch (Exception e) {
-            log.error("Error processing family candle: {}", e.getMessage());
+            log.error("Error processing family candle: {}", e.getMessage(), e);
         }
     }
 

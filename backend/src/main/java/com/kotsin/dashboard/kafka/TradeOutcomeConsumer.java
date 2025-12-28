@@ -31,15 +31,17 @@ public class TradeOutcomeConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    @KafkaListener(topics = "trade-outcomes", groupId = "trading-dashboard-trades")
+    @KafkaListener(topics = "trade-outcomes", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onTradeOutcome(String payload) {
         try {
+            log.info("Received trade outcome from Kafka");
             JsonNode root = objectMapper.readTree(payload);
             
             String signalId = root.path("signalId").asText();
             String scripCode = root.path("scripCode").asText();
             
             if (scripCode == null || scripCode.isEmpty()) {
+                log.warn("Trade outcome has no scripCode, skipping");
                 return;
             }
 
@@ -63,7 +65,7 @@ public class TradeOutcomeConsumer {
                 trade.getCompanyName(), trade.getStatus(), trade.getPnl());
 
         } catch (Exception e) {
-            log.error("Error processing trade outcome: {}", e.getMessage());
+            log.error("Error processing trade outcome: {}", e.getMessage(), e);
         }
     }
 

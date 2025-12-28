@@ -27,13 +27,15 @@ public class SignalConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    @KafkaListener(topics = "trading-signals-curated", groupId = "trading-dashboard-signals")
+    @KafkaListener(topics = "trading-signals-curated", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onSignal(String payload) {
         try {
+            log.info("Received curated signal from Kafka");
             JsonNode root = objectMapper.readTree(payload);
             
             String scripCode = root.path("scripCode").asText();
             if (scripCode == null || scripCode.isEmpty()) {
+                log.warn("Signal has no scripCode, skipping");
                 return;
             }
 
@@ -52,7 +54,7 @@ public class SignalConsumer {
                 dto.getCompanyName(), dto.getDirection(), dto.getEntryPrice());
 
         } catch (Exception e) {
-            log.error("Error processing signal: {}", e.getMessage());
+            log.error("Error processing signal: {}", e.getMessage(), e);
         }
     }
 
