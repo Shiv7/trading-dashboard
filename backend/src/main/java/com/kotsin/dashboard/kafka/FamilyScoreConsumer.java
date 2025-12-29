@@ -90,11 +90,12 @@ public class FamilyScoreConsumer {
                 .companyName(symbol)
                 .timeframe(timeframe)
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
-                .open(root.path("spotPrice").asDouble(0))
-                .high(root.path("spotPrice").asDouble(0))
-                .low(root.path("spotPrice").asDouble(0))
+                // Use actual OHLC from family-score (now available!)
+                .open(root.path("open").asDouble(root.path("spotPrice").asDouble(0)))
+                .high(root.path("high").asDouble(root.path("spotPrice").asDouble(0)))
+                .low(root.path("low").asDouble(root.path("spotPrice").asDouble(0)))
                 .close(root.path("spotPrice").asDouble(0))
-                .volume(0L) // Not available in family-score
+                .volume(root.path("volume").asLong(0))
                 .vwap(root.path("spotPrice").asDouble(0));
 
         // MTIS is the overall score
@@ -141,10 +142,16 @@ public class FamilyScoreConsumer {
         // OI/F&O - calculate actual values
         Double premium = calculatePremium(root);
         String futuresBuildup = determineFuturesBuildup(foAlignmentScore, root);
+        boolean isCommodity = root.path("isCommodity").asBoolean(false);
+        
+        // For commodities: future IS the primary instrument, so no spot-future premium exists
+        // PCR is now available from family-score
+        Double pcr = root.has("pcr") && !root.path("pcr").isNull() ? root.path("pcr").asDouble() : null;
+        
         builder.oiSignal(root.path("oiSignal").asText("NEUTRAL"))
-               .pcr(null)  // PCR not available in family-score - would need from family-candle
-               .spotFuturePremium(premium)
-               .futuresBuildup(futuresBuildup);
+               .pcr(pcr)
+               .spotFuturePremium(isCommodity ? null : premium)  // N/A for commodities
+               .futuresBuildup(isCommodity ? "COMMODITY" : futuresBuildup);
 
         // Gate status from actionability
         boolean actionable = root.path("actionable").asBoolean();
