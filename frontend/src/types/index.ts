@@ -52,14 +52,14 @@ export interface FamilyScore {
   close: number;
   volume: number;
   vwap: number;
-  
+
   // VCP
   vcpCombinedScore: number;
   vcpRunway: number;
   vcpStructuralBias: number;
   vcpSupportScore: number;
   vcpResistanceScore: number;
-  
+
   // IPU
   ipuFinalScore: number;
   ipuInstProxy: number;
@@ -69,19 +69,19 @@ export interface FamilyScore {
   ipuDirectionalConviction: number;
   ipuXfactor: boolean;
   ipuMomentumState: string;
-  
+
   // Regime
   indexRegimeLabel: string;
   indexRegimeStrength: number;
   securityRegimeLabel: string;
   securityAligned: boolean;
-  
+
   // OI
   oiSignal: string;
   pcr?: number;
   spotFuturePremium?: number;
   futuresBuildup: string;
-  
+
   // Gates
   hardGatePassed: boolean;
   hardGateReason: string;
@@ -91,12 +91,12 @@ export interface FamilyScore {
   qualityGateReason: string;
   statsGatePassed: boolean;
   statsGateReason: string;
-  
+
   // Overall
   overallScore: number;
   direction: string;
   signalEmitted: boolean;
-  
+
   moduleDetails?: Record<string, unknown>;
 }
 
@@ -106,19 +106,34 @@ export interface Signal {
   scripCode: string;
   companyName: string;
   timestamp: string;
+
+  // Signal Source (NEW)
+  signalSource?: 'MASTER_ARCH' | 'MTIS' | 'VCP' | 'IPU' | 'FUDKII' | 'BB_SUPERTREND' | 'CURATED' | string;
+  signalSourceLabel?: string;
+  isMasterArch?: boolean;
+
   signalType: string;
-  direction: 'BULLISH' | 'BEARISH' | 'UNKNOWN';
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'UNKNOWN';
   confidence: number;
   rationale: string;
   entryPrice: number;
   stopLoss: number;
   target1: number;
   target2: number;
+  target3?: number;
   riskRewardRatio: number;
   vcpScore: number;
   ipuScore: number;
   xfactorFlag: boolean;
   regimeLabel: string;
+
+  // Master Architecture specific (NEW)
+  finalOpportunityScore?: number;
+  directionConfidence?: number;
+  tradeDecision?: 'ENTER_NOW' | 'WATCHLIST' | 'MONITOR' | 'REJECT' | string;
+  recommendedLots?: number;
+  hedgeRecommended?: boolean;
+
   allGatesPassed: boolean;
   gateFailReason?: string;
   positionSizeMultiplier: number;

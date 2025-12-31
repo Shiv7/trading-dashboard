@@ -5,25 +5,45 @@ interface SignalCardProps {
   signal: Signal
 }
 
+// Signal source badge colors
+const sourceColors: Record<string, string> = {
+  MASTER_ARCH: 'bg-purple-500/20 text-purple-400 border-purple-500/50',
+  MTIS: 'bg-blue-500/20 text-blue-400 border-blue-500/50',
+  VCP: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50',
+  IPU: 'bg-amber-500/20 text-amber-400 border-amber-500/50',
+  FUDKII: 'bg-orange-500/20 text-orange-400 border-orange-500/50',
+  BB_SUPERTREND: 'bg-pink-500/20 text-pink-400 border-pink-500/50',
+  CURATED: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50',
+}
+
 export default function SignalCard({ signal }: SignalCardProps) {
   const isBullish = signal.direction === 'BULLISH'
+  const isMasterArch = signal.isMasterArch || signal.signalSource === 'MASTER_ARCH'
   
   const formatCurrency = (value: number) => {
     if (!value) return '-'
     return value.toFixed(2)
   }
 
+  const getSourceColor = (source: string | undefined) => {
+    return sourceColors[source || ''] || 'bg-slate-500/20 text-slate-400 border-slate-500/50'
+  }
+
   return (
     <Link 
       to={`/stock/${signal.scripCode}`}
-      className={`card border-l-4 ${isBullish ? 'border-l-emerald-500' : 'border-l-red-500'} hover:border-blue-500/50 transition-colors cursor-pointer block`}
+      className={`card border-l-4 ${isBullish ? 'border-l-emerald-500' : 'border-l-red-500'} hover:border-blue-500/50 transition-colors cursor-pointer block ${isMasterArch ? 'ring-1 ring-purple-500/30' : ''}`}
     >
       <div className="flex items-start justify-between mb-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-lg">{isBullish ? '📈' : '📉'}</span>
             <span className="font-semibold text-white">
               {signal.companyName || signal.scripCode}
+            </span>
+            {/* Signal Source Badge */}
+            <span className={`text-xs px-2 py-0.5 rounded-full border ${getSourceColor(signal.signalSource)}`}>
+              {signal.signalSourceLabel || signal.signalSource || 'MTIS'}
             </span>
             <span className={`badge ${signal.allGatesPassed ? 'badge-success' : 'badge-danger'}`}>
               {signal.allGatesPassed ? 'PASSED' : 'REJECTED'}
@@ -42,6 +62,42 @@ export default function SignalCard({ signal }: SignalCardProps) {
           )}
         </div>
       </div>
+
+      {/* Master Architecture Indicators */}
+      {isMasterArch && (
+        <div className="flex items-center gap-2 mb-3 p-2 bg-purple-500/10 rounded-lg border border-purple-500/20">
+          {signal.tradeDecision && (
+            <span className={`badge ${
+              signal.tradeDecision === 'ENTER_NOW' ? 'badge-success' : 
+              signal.tradeDecision === 'WATCHLIST' ? 'badge-warning' : 'badge-danger'
+            }`}>
+              {signal.tradeDecision}
+            </span>
+          )}
+          {signal.finalOpportunityScore !== undefined && (
+            <span className="text-xs text-white">
+              Score: <span className={signal.finalOpportunityScore > 0 ? 'text-emerald-400' : 'text-red-400'}>
+                {(signal.finalOpportunityScore * 100).toFixed(0)}%
+              </span>
+            </span>
+          )}
+          {signal.directionConfidence !== undefined && (
+            <span className="text-xs text-white">
+              Conf: <span className="text-purple-400">{(signal.directionConfidence * 100).toFixed(0)}%</span>
+            </span>
+          )}
+          {signal.recommendedLots !== undefined && signal.recommendedLots > 0 && (
+            <span className="text-xs px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">
+              {signal.recommendedLots} lot{signal.recommendedLots > 1 ? 's' : ''}
+            </span>
+          )}
+          {signal.hedgeRecommended && (
+            <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded">
+              🛡️ Hedge
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Levels */}
       <div className="grid grid-cols-4 gap-2 text-xs mb-3">
@@ -96,4 +152,5 @@ export default function SignalCard({ signal }: SignalCardProps) {
     </Link>
   )
 }
+
 

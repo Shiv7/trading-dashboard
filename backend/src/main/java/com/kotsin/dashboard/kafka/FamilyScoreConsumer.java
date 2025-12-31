@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.FamilyScoreDTO;
+import com.kotsin.dashboard.service.ScoreExplainerService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FamilyScoreConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScoreExplainerService scoreExplainerService;
+    
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     
@@ -51,8 +54,9 @@ public class FamilyScoreConsumer {
             log.info("Received family-score for {} (MTIS={}, label={})", 
                 familyId, dto.getOverallScore(), dto.getDirection());
             
-            // Cache latest score
+            // Cache latest score in both places
             latestScores.put(familyId, dto);
+            scoreExplainerService.updateScore(familyId, dto);  // FIX: Also update ScoreExplainerService cache
             
             // Broadcast to WebSocket
             sessionManager.broadcastScoreUpdate(familyId, dto);

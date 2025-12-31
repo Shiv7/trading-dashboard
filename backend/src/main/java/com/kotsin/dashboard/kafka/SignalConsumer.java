@@ -93,6 +93,7 @@ public class SignalConsumer {
         double stopLoss = entry.path("stopLoss").asDouble(root.path("stopLoss").asDouble(0));
         double target1 = entry.path("target").asDouble(root.path("target1").asDouble(0));
         double target2 = root.path("target2").asDouble(0);
+        double target3 = root.path("target3").asDouble(0);
         double riskReward = entry.path("riskReward").asDouble(root.path("riskRewardRatio").asDouble(0));
 
         // FIX: Raw TradingSignal uses "signal" field, CuratedSignal uses "signalType"
@@ -100,12 +101,22 @@ public class SignalConsumer {
         if (signalType == null || signalType.isEmpty() || "null".equals(signalType)) {
             signalType = root.path("signalType").asText("UNKNOWN");
         }
+        
+        // Detect signal source
+        String signalSource = detectSignalSource(root, signalType);
+        String signalSourceLabel = getSignalSourceLabel(signalSource);
+        boolean isMasterArch = "MASTER_ARCH".equals(signalSource);
 
         return SignalDTO.builder()
                 .signalId(root.path("signalId").asText(UUID.randomUUID().toString()))
                 .scripCode(root.path("scripCode").asText())
                 .companyName(root.path("companyName").asText(root.path("scripCode").asText()))
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
+                // Signal source
+                .signalSource(signalSource)
+                .signalSourceLabel(signalSourceLabel)
+                .isMasterArch(isMasterArch)
+                // Signal details
                 .signalType(signalType)
                 .direction(determineDirection(root))
                 .confidence(root.path("confidence").asDouble(0))
@@ -114,15 +125,74 @@ public class SignalConsumer {
                 .stopLoss(stopLoss)
                 .target1(target1)
                 .target2(target2)
+                .target3(target3)
                 .riskRewardRatio(riskReward)
                 .vcpScore(root.path("vcpCombinedScore").asDouble(0))
                 .ipuScore(root.path("ipuFinalScore").asDouble(0))
                 .xfactorFlag(root.path("xfactorFlag").asBoolean(false))
                 .regimeLabel(root.path("indexRegimeLabel").asText("UNKNOWN"))
+                // Master Arch specific
+                .finalOpportunityScore(root.has("finalScore") ? root.path("finalScore").path("current").asDouble() : null)
+                .directionConfidence(root.has("directionConfidence") ? root.path("directionConfidence").asDouble() : null)
+                .tradeDecision(root.path("decision").asText(null))
+                .recommendedLots(root.has("recommendedLots") ? root.path("recommendedLots").asInt() : null)
+                .hedgeRecommended(root.has("hedgeRecommended") ? root.path("hedgeRecommended").asBoolean() : null)
+                // Gates
                 .allGatesPassed(!root.path("warningSignal").asBoolean(false))
                 .positionSizeMultiplier(root.path("positionSizeMultiplier").asDouble(1.0))
                 .build();
     }
+    
+    /**
+     * Detect signal source based on JSON content
+     */
+    private String detectSignalSource(JsonNode root, String signalType) {
+        // Check for Master Architecture markers
+        if (root.has("finalScore") || root.has("decision") || root.has("directionConfidence")) {
+            return "MASTER_ARCH";
+        }
+        
+        // Check for specific signal types
+        if (signalType != null) {
+            if (signalType.contains("VCP") || signalType.contains("VOLUME_CLUSTER")) {
+                return "VCP";
+            }
+            if (signalType.contains("IPU") || signalType.contains("INSTITUTIONAL")) {
+                return "IPU";
+            }
+            if (signalType.contains("FUDKII") || signalType.contains("BB_SUPERTREND")) {
+                return "FUDKII";
+            }
+            if (signalType.contains("SUPERTREND")) {
+                return "BB_SUPERTREND";
+            }
+        }
+        
+        // Check for curated signal markers
+        if (root.has("entry") && root.path("entry").has("entryPrice")) {
+            return "CURATED";
+        }
+        
+        // Default to MTIS
+        return "MTIS";
+    }
+    
+    /**
+     * Get human-readable label for signal source
+     */
+    private String getSignalSourceLabel(String source) {
+        return switch (source) {
+            case "MASTER_ARCH" -> "🎯 Master Architecture";
+            case "MTIS" -> "📊 MTIS Score";
+            case "VCP" -> "📈 Volume Cluster Pivot";
+            case "IPU" -> "🏦 Institutional Flow";
+            case "FUDKII" -> "⚡ FUDKII Trigger";
+            case "BB_SUPERTREND" -> "📉 BB+SuperTrend";
+            case "CURATED" -> "✨ Curated Signal";
+            default -> "❓ " + source;
+        };
+    }
+
 
     /**
      * Determine direction from JSON - handles both formats
