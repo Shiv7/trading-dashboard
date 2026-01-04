@@ -5,6 +5,8 @@ import PositionCard from '../components/Wallet/PositionCard'
 import SignalCard from '../components/Signals/SignalCard'
 import RegimePanel from '../components/Dashboard/RegimePanel'
 import MarketPulse from '../components/Dashboard/MarketPulse'
+import MasterArchPanel from '../components/Dashboard/MasterArchPanel'
+import TrendStatePanel from '../components/Dashboard/TrendStatePanel'
 import { useDashboardStore } from '../store/dashboardStore'
 import { walletApi, scoresApi, signalsApi, tradesApi } from '../services/api'
 import type { Wallet, FamilyScore, Signal, TradeStats } from '../types'
@@ -20,6 +22,9 @@ export default function DashboardPage() {
   const wsSignals = useDashboardStore((s) => s.signals)
   const wsScores = useDashboardStore((s) => s.scores)
   const regime = useDashboardStore((s) => s.regime)
+  const masterArchSignals = useDashboardStore((s) => s.masterArchSignals)
+  const acl = useDashboardStore((s) => s.acl)
+  const activeIgnitions = useDashboardStore((s) => s.activeIgnitions)
 
   useEffect(() => {
     async function loadData() {
@@ -280,6 +285,16 @@ export default function DashboardPage() {
 
         {/* Right Column - 1/3 width */}
         <div className="space-y-6">
+          {/* Master Architecture Panel - Priority signals */}
+          <MasterArchPanel signals={masterArchSignals} />
+
+          {/* Trend State & Ignitions */}
+          <TrendStatePanel
+            acl={acl || undefined}
+            activeIgnitions={activeIgnitions}
+            indexName={regime?.indexName || 'NIFTY50'}
+          />
+
           {/* Regime Panel */}
           <RegimePanel regime={regime} />
 

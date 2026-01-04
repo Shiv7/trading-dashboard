@@ -148,8 +148,43 @@ public class WebSocketSessionManager {
         log.debug("Broadcasting VCP signal for {}", scripCode);
         messagingTemplate.convertAndSend("/topic/vcp/" + scripCode, payload);
         // Also broadcast to the aggregated indicators topic
-        messagingTemplate.convertAndSend("/topic/indicators/" + scripCode, 
+        messagingTemplate.convertAndSend("/topic/indicators/" + scripCode,
             Map.of("type", "VCP", "scripCode", scripCode, "data", payload));
+    }
+
+    /**
+     * Broadcast FUDKII ignition signal
+     */
+    public void broadcastFUDKII(String scripCode, Object payload) {
+        log.debug("Broadcasting FUDKII signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/fudkii/" + scripCode, payload);
+        messagingTemplate.convertAndSend("/topic/fudkii", payload);
+    }
+
+    /**
+     * Broadcast ACL (Anti-Cycle Limiter) update
+     */
+    public void broadcastACL(String scripCode, Object payload) {
+        log.debug("Broadcasting ACL update for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/acl/" + scripCode, payload);
+        messagingTemplate.convertAndSend("/topic/acl", payload);
+    }
+
+    /**
+     * Broadcast Security Regime update
+     */
+    public void broadcastSecurityRegime(String scripCode, Object payload) {
+        log.debug("Broadcasting security regime for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/security-regime/" + scripCode, payload);
+    }
+
+    /**
+     * Broadcast Master Architecture (FF1) decision
+     */
+    public void broadcastMasterArchDecision(String scripCode, Object payload) {
+        log.info("Broadcasting Master Arch decision for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/master-arch/" + scripCode, payload);
+        messagingTemplate.convertAndSend("/topic/master-arch", payload);
     }
 
     /**

@@ -10,15 +10,24 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: 3001,
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://13.203.60.173:8085',
+        target: 'http://localhost:8085',
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            console.log(`[PROXY] ${req.method} ${req.url} -> http://localhost:8085${req.url}`)
+          })
+          proxy.on('error', (err, req) => {
+            console.error(`[PROXY ERROR] ${req.url}:`, err.message)
+          })
+        },
       },
       '/ws': {
-        target: 'http://13.203.60.173:8085',
+        target: 'http://localhost:8085',
+        changeOrigin: true,
         ws: true,
       },
     },

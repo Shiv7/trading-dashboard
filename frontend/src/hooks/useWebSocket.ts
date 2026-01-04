@@ -16,7 +16,10 @@ export function useWebSocket() {
     addSignal,
     updateTrade,
     updateRegime,
-    addNotification
+    addNotification,
+    updateMasterArch,
+    updateACL,
+    updateFUDKII
   } = useDashboardStore()
 
   const connect = useCallback(() => {
@@ -92,6 +95,36 @@ export function useWebSocket() {
             console.error('Error parsing notification:', e)
           }
         })
+
+        // Subscribe to Master Architecture (FF1) decisions
+        client.subscribe('/topic/master-arch', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateMasterArch(data)
+          } catch (e) {
+            console.error('Error parsing master-arch message:', e)
+          }
+        })
+
+        // Subscribe to ACL (Anti-Cycle Limiter) updates
+        client.subscribe('/topic/acl', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateACL(data)
+          } catch (e) {
+            console.error('Error parsing ACL message:', e)
+          }
+        })
+
+        // Subscribe to FUDKII ignition signals
+        client.subscribe('/topic/fudkii', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateFUDKII(data)
+          } catch (e) {
+            console.error('Error parsing FUDKII message:', e)
+          }
+        })
       },
 
       onStompError: (frame) => {
@@ -113,7 +146,7 @@ export function useWebSocket() {
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {

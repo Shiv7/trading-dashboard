@@ -209,5 +209,60 @@ export interface Notification {
   timestamp: number;
 }
 
+// Master Architecture (FF1) Signal
+export interface MasterArchSignal {
+  scripCode: string;
+  companyName: string;
+  timestamp: string;
+  decision: 'ENTER_NOW' | 'WATCHLIST' | 'MONITOR' | 'REJECT';
+  finalScore: number;
+  directionConfidence: number;
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  recommendedLots: number;
+  hedgeRecommended: boolean;
+  hedgeType?: string;
+  indexContextScore: number;
+  securityContextScore: number;
+  signalStrengthScore: number;
+  decisionReason: string;
+  actionable: boolean;
+}
+
+// ACL (Anti-Cycle Limiter) Data
+export interface ACLData {
+  scripCode?: string;
+  indexName?: string;
+  timestamp: string;
+  aclState: 'EARLY_TREND' | 'MID_TREND' | 'LATE_TREND' | 'EXHAUSTION' | 'TRANSITION' | 'UNKNOWN';
+  exhaustionNear: boolean;
+  trendDirection: number;
+  aclMultiplier: number;
+  agreementScore: number;
+  trendAge30m: number;
+  trendAge2H: number;
+  trendAge4H: number;
+  trendAge1D: number;
+  flow30m?: number;
+  flow2H?: number;
+  flow4H?: number;
+  flow1D?: number;
+}
+
+// FUDKII (First-Up/Down-Kill Ignition Indicator) Data
+export interface FUDKIIData {
+  scripCode: string;
+  companyName: string;
+  timestamp: string;
+  ignitionFlag: boolean;
+  direction: 'BULLISH_IGNITION' | 'BEARISH_IGNITION' | 'NO_IGNITION';
+  fudkiiStrength: number;
+  simultaneityScore: number;
+  priceBreaking: boolean;
+  volumeSurging: boolean;
+  momentumPositive: boolean;
+  atrExpanding: boolean;
+  flowConfirming: boolean;
+}
+
 
 export * from './indicators';

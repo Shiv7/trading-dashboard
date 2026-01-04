@@ -44,10 +44,11 @@ public class FinalOpportunityScoreConsumer {
     private final Map<String, FinalOpportunityScoreDTO> actionableSignals = new ConcurrentHashMap<>();
 
     /**
-     * Listen to score-final-opportunity topic
+     * Listen to kotsin_FF1 topic (Master Architecture final decision)
+     * Also listens to legacy score-final-opportunity for backwards compatibility
      */
     @KafkaListener(
-            topics = "score-final-opportunity",
+            topics = {"kotsin_FF1", "score-final-opportunity"},
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
     )
     public void onFinalOpportunityScore(String payload) {
