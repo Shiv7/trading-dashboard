@@ -1,6 +1,6 @@
 import type { Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal } from '../types'
 
-const API_BASE = '/api'
+const API_BASE = 'http://13.203.60.173:8085/api'
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(`${API_BASE}${url}`)
