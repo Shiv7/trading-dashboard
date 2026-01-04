@@ -23,7 +23,9 @@ public class CorsConfig {
         // Allow frontend origins
         config.setAllowedOriginPatterns(List.of(
             "http://localhost:*",
-            "http://127.0.0.1:*"
+            "http://127.0.0.1:*",
+            "http://13.203.60.173:*",
+            "https://13.203.60.173:*"
         ));
         
         // Allow common HTTP methods
