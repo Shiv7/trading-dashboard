@@ -131,6 +131,28 @@ public class WebSocketSessionManager {
     }
 
     /**
+     * Broadcast IPU signal update for a specific stock
+     */
+    public void broadcastIPUSignal(String scripCode, Object payload) {
+        log.debug("Broadcasting IPU signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/ipu/" + scripCode, payload);
+        // Also broadcast to the aggregated indicators topic
+        messagingTemplate.convertAndSend("/topic/indicators/" + scripCode, 
+            Map.of("type", "IPU", "scripCode", scripCode, "data", payload));
+    }
+
+    /**
+     * Broadcast VCP signal update for a specific stock
+     */
+    public void broadcastVCPSignal(String scripCode, Object payload) {
+        log.debug("Broadcasting VCP signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/vcp/" + scripCode, payload);
+        // Also broadcast to the aggregated indicators topic
+        messagingTemplate.convertAndSend("/topic/indicators/" + scripCode, 
+            Map.of("type", "VCP", "scripCode", scripCode, "data", payload));
+    }
+
+    /**
      * Register a subscription for a scripCode
      */
     public void registerSubscription(String sessionId, String scripCode) {

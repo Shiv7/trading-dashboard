@@ -30,9 +30,9 @@ export default function SignalCard({ signal }: SignalCardProps) {
   }
 
   return (
-    <Link 
+    <Link
       to={`/stock/${signal.scripCode}`}
-      className={`card border-l-4 ${isBullish ? 'border-l-emerald-500' : 'border-l-red-500'} hover:border-blue-500/50 transition-colors cursor-pointer block ${isMasterArch ? 'ring-1 ring-purple-500/30' : ''}`}
+      className={`card border-l-4 ${isBullish ? 'border-l-emerald-500' : 'border-l-red-500'} hover:border-slate-600 hover:shadow-lg transition-all duration-200 cursor-pointer block ${isMasterArch ? 'ring-1 ring-purple-500/30 hover:ring-purple-500/50' : ''} hover:-translate-y-0.5`}
     >
       <div className="flex items-start justify-between mb-3">
         <div>

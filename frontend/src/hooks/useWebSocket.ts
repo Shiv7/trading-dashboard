@@ -9,14 +9,14 @@ export function useWebSocket() {
   const clientRef = useRef<Client | null>(null)
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  
-  const { 
-    updateWallet, 
-    updateScore, 
-    addSignal, 
-    updateTrade, 
+
+  const {
+    updateWallet,
+    updateScore,
+    addSignal,
+    updateTrade,
     updateRegime,
-    addNotification 
+    addNotification
   } = useDashboardStore()
 
   const connect = useCallback(() => {
@@ -27,7 +27,7 @@ export function useWebSocket() {
       reconnectDelay: 5000,
       heartbeatIncoming: 10000,
       heartbeatOutgoing: 10000,
-      
+
       onConnect: () => {
         console.log('WebSocket connected')
         setConnected(true)
@@ -136,11 +136,36 @@ export function useWebSocket() {
     }
   }, [updateScore])
 
+  const subscribeToIPU = useCallback((scripCode: string, callback: (data: unknown) => void) => {
+    if (clientRef.current?.connected) {
+      return clientRef.current.subscribe(`/topic/ipu/${scripCode}`, (message: IMessage) => {
+        try {
+          callback(JSON.parse(message.body))
+        } catch (e) {
+          console.error('Error parsing IPU message:', e)
+        }
+      })
+    }
+    return null
+  }, [])
+
+  const subscribeToVCP = useCallback((scripCode: string, callback: (data: unknown) => void) => {
+    if (clientRef.current?.connected) {
+      return clientRef.current.subscribe(`/topic/vcp/${scripCode}`, (message: IMessage) => {
+        try {
+          callback(JSON.parse(message.body))
+        } catch (e) {
+          console.error('Error parsing VCP message:', e)
+        }
+      })
+    }
+    return null
+  }, [])
+
   useEffect(() => {
     connect()
     return () => disconnect()
   }, [connect, disconnect])
 
-  return { connected, error, subscribeToStock, reconnect: connect }
+  return { connected, error, subscribeToStock, subscribeToIPU, subscribeToVCP, reconnect: connect }
 }
-

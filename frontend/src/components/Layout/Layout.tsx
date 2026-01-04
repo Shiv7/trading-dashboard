@@ -2,14 +2,15 @@ import { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { useDashboardStore } from '../../store/dashboardStore'
+import NotificationPanel from './NotificationPanel'
 
 interface LayoutProps {
   children: ReactNode
 }
 
 export default function Layout({ children }: LayoutProps) {
-  const { connected } = useWebSocket()
-  const { regime, notifications } = useDashboardStore()
+  const { connected, reconnect } = useWebSocket()
+  const { regime } = useDashboardStore()
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: '📊' },
@@ -19,11 +20,14 @@ export default function Layout({ children }: LayoutProps) {
     { to: '/signals', label: 'Signals', icon: '⚡' },
   ]
 
-  const regimeColor = regime?.label?.includes('BULLISH') 
-    ? 'text-emerald-400' 
-    : regime?.label?.includes('BEARISH') 
-      ? 'text-red-400' 
-      : 'text-slate-400'
+  const getRegimeStyle = () => {
+    if (!regime) return 'text-slate-400 bg-slate-700/50'
+    if (regime.label.includes('STRONG_BULLISH')) return 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/30'
+    if (regime.label.includes('BULLISH')) return 'text-emerald-400 bg-emerald-500/10'
+    if (regime.label.includes('STRONG_BEARISH')) return 'text-red-400 bg-red-500/10 border border-red-500/30'
+    if (regime.label.includes('BEARISH')) return 'text-red-400 bg-red-500/10'
+    return 'text-amber-400 bg-amber-500/10'
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -32,12 +36,14 @@ export default function Layout({ children }: LayoutProps) {
         <div className="container mx-auto px-4">
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
-            <div className="flex items-center gap-3">
-              <span className="text-2xl">📉</span>
-              <h1 className="text-xl font-display font-bold text-white">
-                KOTSIN TRADING
+            <NavLink to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+              <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                <span className="text-white font-bold">K</span>
+              </div>
+              <h1 className="text-xl font-display font-bold text-white hidden sm:block">
+                KOTSIN
               </h1>
-            </div>
+            </NavLink>
 
             {/* Navigation */}
             <nav className="flex items-center gap-1">
@@ -46,56 +52,53 @@ export default function Layout({ children }: LayoutProps) {
                   key={item.to}
                   to={item.to}
                   className={({ isActive }) =>
-                    `px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
+                    `px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
                       isActive
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/25'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
                     }`
                   }
                 >
                   <span>{item.icon}</span>
-                  <span>{item.label}</span>
+                  <span className="hidden md:inline">{item.label}</span>
                 </NavLink>
               ))}
             </nav>
 
             {/* Status indicators */}
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               {/* Regime indicator */}
-              {regime && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-700/50 rounded-lg">
-                  <span className="text-xs text-slate-400">
-                    {regime.indexName}:
-                  </span>
-                  <span className={`text-sm font-medium ${regimeColor}`}>
-                    {regime.label}
-                  </span>
-                </div>
-              )}
-
-              {/* WebSocket status */}
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    connected ? 'bg-emerald-400 pulse-green' : 'bg-red-400'
-                  }`}
-                />
-                <span className="text-xs text-slate-400">
-                  {connected ? 'LIVE' : 'OFFLINE'}
+              <div className={`hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all ${getRegimeStyle()}`}>
+                <span className="text-xs opacity-75">
+                  {regime?.indexName || 'NIFTY'}:
+                </span>
+                <span className="text-sm font-medium">
+                  {regime?.label?.replace(/_/g, ' ') || 'Loading...'}
                 </span>
               </div>
 
-              {/* Notifications bell */}
-              <div className="relative">
-                <button className="p-2 text-slate-400 hover:text-white transition-colors">
-                  <span className="text-lg">🔔</span>
-                  {notifications.length > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center text-white">
-                      {notifications.length > 9 ? '9+' : notifications.length}
-                    </span>
-                  )}
-                </button>
-              </div>
+              {/* WebSocket status */}
+              <button
+                onClick={() => !connected && reconnect()}
+                className={`flex items-center gap-2 px-2 py-1 rounded-lg transition-all ${
+                  connected
+                    ? 'bg-emerald-500/10 text-emerald-400'
+                    : 'bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer'
+                }`}
+                title={connected ? 'Connected to live data' : 'Click to reconnect'}
+              >
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'
+                  }`}
+                />
+                <span className="text-xs font-medium">
+                  {connected ? 'LIVE' : 'OFFLINE'}
+                </span>
+              </button>
+
+              {/* Notifications */}
+              <NotificationPanel />
             </div>
           </div>
         </div>

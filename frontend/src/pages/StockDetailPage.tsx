@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { scoresApi, signalsApi } from '../services/api'
+import { scoresApi, signalsApi, indicatorsApi } from '../services/api'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
-import type { FamilyScore, Signal } from '../types'
+import type { FamilyScore, Signal, IPUSignal, VCPSignal } from '../types'
+import { IPUPanel } from '../components/Indicators/IPUPanel'
+import { VCPClusters } from '../components/Indicators/VCPClusters'
 
 interface Contributor {
   category: string;
@@ -34,24 +36,33 @@ export default function StockDetailPage() {
   const [score, setScore] = useState<FamilyScore | null>(null)
   const [explanation, setExplanation] = useState<ExplanationData | null>(null)
   const [signals, setSignals] = useState<Signal[]>([])
+
+  // New state for detailed indicators
+  const [ipuSignal, setIpuSignal] = useState<IPUSignal | null>(null)
+  const [vcpSignal, setVcpSignal] = useState<VCPSignal | null>(null)
+
   const [loading, setLoading] = useState(true)
 
   const wsScores = useDashboardStore((s) => s.scores)
-  const { subscribeToStock } = useWebSocket()
+  const { subscribeToStock, subscribeToIPU, subscribeToVCP } = useWebSocket()
 
   useEffect(() => {
     if (!scripCode) return
 
     async function loadData() {
       try {
-        const [scoreData, explainData, signalsData] = await Promise.all([
+        const [scoreData, explainData, signalsData, ipuData, vcpData] = await Promise.all([
           scoresApi.getScore(scripCode!).catch(() => null),
           scoresApi.explainScore(scripCode!).catch(() => null),
           signalsApi.getSignalsForStock(scripCode!, 20).catch(() => []),
+          indicatorsApi.getIPUSignal(scripCode!).catch(() => null),
+          indicatorsApi.getVCPSignal(scripCode!).catch(() => null),
         ])
         setScore(scoreData)
         setExplanation(explainData)
         setSignals(signalsData)
+        setIpuSignal(ipuData)
+        setVcpSignal(vcpData)
       } catch (error) {
         console.error('Error loading stock data:', error)
       } finally {
@@ -61,7 +72,16 @@ export default function StockDetailPage() {
 
     loadData()
     subscribeToStock(scripCode)
-  }, [scripCode, subscribeToStock])
+
+    // Subscribe to detailed indicators
+    const unsubIPU = subscribeToIPU(scripCode, (data) => setIpuSignal(data as IPUSignal))
+    const unsubVCP = subscribeToVCP(scripCode, (data) => setVcpSignal(data as VCPSignal))
+
+    return () => {
+      if (unsubIPU) unsubIPU.unsubscribe()
+      if (unsubVCP) unsubVCP.unsubscribe()
+    }
+  }, [scripCode, subscribeToStock, subscribeToIPU, subscribeToVCP])
 
   // Use WebSocket score if available
   const displayScore = (scripCode && wsScores.get(scripCode)) || score
@@ -94,8 +114,8 @@ export default function StockDetailPage() {
             <span className="text-slate-400 capitalize">{key.replace(/([A-Z])/g, ' $1')}</span>
             <span className="text-white">
               {typeof value === 'boolean' ? (value ? '✅' : '❌') :
-               typeof value === 'number' ? (value < 1 ? `${(value * 100).toFixed(1)}%` : value.toFixed(2)) :
-               String(value)}
+                typeof value === 'number' ? (value < 1 ? `${(value * 100).toFixed(1)}%` : value.toFixed(2)) :
+                  String(value)}
             </span>
           </div>
         ))}
@@ -155,35 +175,43 @@ export default function StockDetailPage() {
       {/* Module Scores */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* VCP */}
-        <div className="card">
-          <div className="card-header">📊 VCP Module</div>
-          <div className="text-3xl font-bold text-center mb-4" style={{ color: displayScore.vcpCombinedScore >= 0.7 ? '#10b981' : displayScore.vcpCombinedScore >= 0.4 ? '#f59e0b' : '#6b7280' }}>
-            {(displayScore.vcpCombinedScore * 100).toFixed(0)}%
+        {vcpSignal ? (
+          <VCPClusters data={vcpSignal} />
+        ) : (
+          <div className="card">
+            <div className="card-header">📊 VCP Module</div>
+            <div className="text-3xl font-bold text-center mb-4" style={{ color: displayScore.vcpCombinedScore >= 0.7 ? '#10b981' : displayScore.vcpCombinedScore >= 0.4 ? '#f59e0b' : '#6b7280' }}>
+              {(displayScore.vcpCombinedScore * 100).toFixed(0)}%
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-slate-400">Runway</span><span>{(displayScore.vcpRunway * 100).toFixed(0)}%</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Structural Bias</span><span>{displayScore.vcpStructuralBias.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Support</span><span>{(displayScore.vcpSupportScore * 100).toFixed(0)}%</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Resistance</span><span>{(displayScore.vcpResistanceScore * 100).toFixed(0)}%</span></div>
+            </div>
           </div>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between"><span className="text-slate-400">Runway</span><span>{(displayScore.vcpRunway * 100).toFixed(0)}%</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Structural Bias</span><span>{displayScore.vcpStructuralBias.toFixed(2)}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Support</span><span>{(displayScore.vcpSupportScore * 100).toFixed(0)}%</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Resistance</span><span>{(displayScore.vcpResistanceScore * 100).toFixed(0)}%</span></div>
-          </div>
-        </div>
+        )}
 
         {/* IPU */}
-        <div className="card">
-          <div className="card-header">
-            🏛️ IPU Module
-            {displayScore.ipuXfactor && <span className="text-yellow-400 ml-2">⚡ X-Factor</span>}
+        {ipuSignal ? (
+          <IPUPanel data={ipuSignal} />
+        ) : (
+          <div className="card">
+            <div className="card-header">
+              🏛️ IPU Module
+              {displayScore.ipuXfactor && <span className="text-yellow-400 ml-2">⚡ X-Factor</span>}
+            </div>
+            <div className="text-3xl font-bold text-center mb-4" style={{ color: displayScore.ipuFinalScore >= 0.7 ? '#10b981' : displayScore.ipuFinalScore >= 0.4 ? '#f59e0b' : '#6b7280' }}>
+              {(displayScore.ipuFinalScore * 100).toFixed(0)}%
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-slate-400">Institutional</span><span>{(displayScore.ipuInstProxy * 100).toFixed(0)}%</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Momentum</span><span>{displayScore.ipuMomentumState}</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Exhaustion</span><span>{(displayScore.ipuExhaustion * 100).toFixed(0)}%</span></div>
+              <div className="flex justify-between"><span className="text-slate-400">Urgency</span><span>{(displayScore.ipuUrgency * 100).toFixed(0)}%</span></div>
+            </div>
           </div>
-          <div className="text-3xl font-bold text-center mb-4" style={{ color: displayScore.ipuFinalScore >= 0.7 ? '#10b981' : displayScore.ipuFinalScore >= 0.4 ? '#f59e0b' : '#6b7280' }}>
-            {(displayScore.ipuFinalScore * 100).toFixed(0)}%
-          </div>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between"><span className="text-slate-400">Institutional</span><span>{(displayScore.ipuInstProxy * 100).toFixed(0)}%</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Momentum</span><span>{displayScore.ipuMomentumState}</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Exhaustion</span><span>{(displayScore.ipuExhaustion * 100).toFixed(0)}%</span></div>
-            <div className="flex justify-between"><span className="text-slate-400">Urgency</span><span>{(displayScore.ipuUrgency * 100).toFixed(0)}%</span></div>
-          </div>
-        </div>
+        )}
 
         {/* Regime */}
         <div className="card">
@@ -241,7 +269,7 @@ export default function StockDetailPage() {
       {explanation && (
         <div className="card">
           <div className="card-header">📝 Score Explanation</div>
-          
+
           {/* Contributors - Score Breakdown */}
           {explanation.contributors && explanation.contributors.length > 0 && (
             <div className="mb-4">
@@ -278,7 +306,7 @@ export default function StockDetailPage() {
               </div>
             </div>
           )}
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {explanation.vcp && renderExplanationSection('VCP Analysis', explanation.vcp)}
             {explanation.ipu && renderExplanationSection('IPU Analysis', explanation.ipu)}
