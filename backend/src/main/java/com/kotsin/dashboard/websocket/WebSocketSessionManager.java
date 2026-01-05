@@ -188,6 +188,16 @@ public class WebSocketSessionManager {
     }
 
     /**
+     * Broadcast QuantScore update for a specific stock
+     */
+    public void broadcastQuantScore(String scripCode, Object payload) {
+        log.debug("Broadcasting QuantScore for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/quant-scores/" + scripCode, payload);
+        // Also broadcast to the aggregated quant-scores topic for sorted dashboard
+        messagingTemplate.convertAndSend("/topic/quant-scores", payload);
+    }
+
+    /**
      * Register a subscription for a scripCode
      */
     public void registerSubscription(String sessionId, String scripCode) {

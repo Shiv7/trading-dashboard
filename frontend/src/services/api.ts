@@ -1,4 +1,4 @@
-import type { Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal } from '../types'
+import type { Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal, QuantScore, QuantScoreStats } from '../types'
 
 const API_BASE = 'http://13.203.60.173:8085/api'
 
@@ -51,6 +51,16 @@ export const tradesApi = {
   },
   getTradeStats: () => fetchJson<TradeStats>('/trades/stats'),
   getTradeById: (tradeId: string) => fetchJson<Trade>(`/trades/${tradeId}`),
+}
+
+// QuantScores API (Institutional-Grade Scoring)
+export const quantScoresApi = {
+  getAllScores: (limit = 100) => fetchJson<QuantScore[]>(`/quant-scores?limit=${limit}`),
+  getActionableScores: (limit = 20) => fetchJson<QuantScore[]>(`/quant-scores/actionable?limit=${limit}`),
+  getScoresByDirection: (direction: string) => fetchJson<QuantScore[]>(`/quant-scores/direction/${direction}`),
+  getScore: (scripCode: string) => fetchJson<QuantScore>(`/quant-scores/${scripCode}`),
+  getStats: () => fetchJson<QuantScoreStats>('/quant-scores/stats'),
+  getBreakdownSummary: () => fetchJson<Record<string, number>>('/quant-scores/breakdown-summary'),
 }
 
 // Indicators API

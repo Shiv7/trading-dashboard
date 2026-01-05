@@ -265,4 +265,147 @@ export interface FUDKIIData {
 }
 
 
+// QuantScore types (Institutional-Grade Scoring System)
+export interface QuantScore {
+  familyId: string;
+  symbol: string;
+  scripCode: string;
+  timestamp: number;
+  timeframe: string;
+  humanReadableTime: string;
+
+  // Main Score
+  quantScore: number;           // 0-100
+  quantLabel: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
+  confidence: number;           // 0-1
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  directionalStrength: number;  // -1 to +1
+
+  // Score Breakdown
+  breakdown?: QuantScoreBreakdown;
+
+  // Summaries
+  greeksSummary?: GreeksSummary;
+  ivSummary?: IVSummary;
+  microstructureSummary?: MicrostructureSummary;
+  optionsFlowSummary?: OptionsFlowSummary;
+  priceActionSummary?: PriceActionSummary;
+  volumeProfileSummary?: VolumeProfileSummary;
+
+  // Warnings and status
+  warnings?: QuantWarning[];
+  actionable: boolean;
+  actionableReason?: string;
+  dataQuality?: DataQuality;
+}
+
+export interface QuantScoreBreakdown {
+  greeksScore: number;
+  ivSurfaceScore: number;
+  microstructureScore: number;
+  optionsFlowScore: number;
+  priceActionScore: number;
+  volumeProfileScore: number;
+  crossInstrumentScore: number;
+  confluenceScore: number;
+
+  greeksPct: number;
+  ivSurfacePct: number;
+  microstructurePct: number;
+  optionsFlowPct: number;
+  priceActionPct: number;
+  volumeProfilePct: number;
+  crossInstrumentPct: number;
+  confluencePct: number;
+
+  rawScore: number;
+  regimeModifier: number;
+  confidenceModifier: number;
+}
+
+export interface GreeksSummary {
+  totalDelta: number;
+  totalGamma: number;
+  totalVega: number;
+  totalTheta: number;
+  gammaSqueezeRisk: boolean;
+  gammaSqueezeDistance: number;
+  maxGammaStrike: number;
+  deltaBias: string;
+  vegaStructure: string;
+  riskScore: number;
+}
+
+export interface IVSummary {
+  atmIV: number;
+  ivRank: number;
+  ivSignal: string;
+  ivCrushRisk: boolean;
+  ivVelocity: number;
+  smileShape: string;
+  termStructure: string;
+  skew25Delta: number;
+}
+
+export interface MicrostructureSummary {
+  avgOFI: number;
+  avgVPIN: number;
+  avgDepthImbalance: number;
+  avgKyleLambda: number;
+  flowDirection: string;
+  flowStrength: number;
+}
+
+export interface OptionsFlowSummary {
+  pcr: number;
+  pcrChange: number;
+  pcrSignal: string;
+  oiBuildupType: string;
+  futuresBuildup: string;
+  spotFuturePremium: number;
+}
+
+export interface PriceActionSummary {
+  sequenceType: string;
+  momentumSlope: number;
+  wyckoffPhase: string;
+  wyckoffStrength: number;
+  pcrDivergence: boolean;
+  oiDivergence: boolean;
+}
+
+export interface VolumeProfileSummary {
+  poc: number;
+  vah: number;
+  val: number;
+  pocMigration: number;
+  pocTrend: string;
+  valueAreaExpanding: boolean;
+}
+
+export interface QuantWarning {
+  type: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  message: string;
+  recommendation?: string;
+}
+
+export interface DataQuality {
+  hasGreeks: boolean;
+  hasIVSurface: boolean;
+  hasMicrostructure: boolean;
+  hasOptionsFlow: boolean;
+  completenessScore: number;
+  qualityLevel: 'FULL' | 'PARTIAL' | 'MINIMAL';
+}
+
+export interface QuantScoreStats {
+  totalSymbols: number;
+  bullishCount: number;
+  bearishCount: number;
+  actionableCount: number;
+  averageScore: number;
+  maxScore: number;
+}
+
 export * from './indicators';
