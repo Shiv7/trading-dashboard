@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { quantScoresApi } from '../services/api'
 import type { QuantScore, QuantScoreStats } from '../types'
+import TradeModal from '../components/Trading/TradeModal'
 
 // Color utilities
 const getScoreColor = (score: number) => {
@@ -30,10 +31,11 @@ const getLabelBadge = (label: string) => {
 }
 
 // Score Row Component
-function QuantScoreRow({ score, expanded, onToggle }: {
+function QuantScoreRow({ score, expanded, onToggle, onTrade }: {
   score: QuantScore
   expanded: boolean
   onToggle: () => void
+  onTrade: () => void
 }) {
   const breakdown = score.breakdown
 
@@ -85,6 +87,14 @@ function QuantScoreRow({ score, expanded, onToggle }: {
             <span className="text-amber-400">⚠️ {score.warnings.length}</span>
           )}
         </td>
+        <td className="text-center">
+          <button
+            onClick={(e) => { e.stopPropagation(); onTrade() }}
+            className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-xs font-bold hover:from-blue-600 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/20"
+          >
+            📈 Trade
+          </button>
+        </td>
         <td className="text-right">
           <span className="text-slate-400">{expanded ? '▼' : '▶'}</span>
         </td>
@@ -93,7 +103,7 @@ function QuantScoreRow({ score, expanded, onToggle }: {
       {/* Expanded Details Row */}
       {expanded && breakdown && (
         <tr className="bg-slate-800/50">
-          <td colSpan={7} className="p-4">
+          <td colSpan={8} className="p-4">
             <div className="grid grid-cols-8 gap-3 text-sm">
               {/* Category Breakdown */}
               <CategoryBar label="Greeks" score={breakdown.greeksScore} max={15} pct={breakdown.greeksPct} />
@@ -144,11 +154,10 @@ function QuantScoreRow({ score, expanded, onToggle }: {
             {score.warnings && score.warnings.length > 0 && (
               <div className="mt-3 space-y-1">
                 {score.warnings.map((w, i) => (
-                  <div key={i} className={`text-xs p-2 rounded ${
-                    w.severity === 'CRITICAL' ? 'bg-red-500/20 text-red-400' :
+                  <div key={i} className={`text-xs p-2 rounded ${w.severity === 'CRITICAL' ? 'bg-red-500/20 text-red-400' :
                     w.severity === 'HIGH' ? 'bg-orange-500/20 text-orange-400' :
-                    'bg-yellow-500/20 text-yellow-400'
-                  }`}>
+                      'bg-yellow-500/20 text-yellow-400'
+                    }`}>
                     <span className="font-bold">{w.type}:</span> {w.message}
                   </div>
                 ))}
@@ -218,6 +227,10 @@ export default function QuantScoresPage() {
   const [filterDirection, setFilterDirection] = useState<string>('')
   const [filterActionable, setFilterActionable] = useState(false)
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
+  const [tradeModal, setTradeModal] = useState<{ open: boolean; score: QuantScore | null }>({
+    open: false,
+    score: null,
+  })
 
   useEffect(() => {
     async function loadData() {
@@ -256,117 +269,131 @@ export default function QuantScoresPage() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-white flex items-center gap-2">
-            <span className="text-3xl">📊</span>
-            QuantScore Dashboard
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Institutional-grade composite scoring across 8 categories
-          </p>
+    <>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-display font-bold text-white flex items-center gap-2">
+              <span className="text-3xl">📊</span>
+              QuantScore Dashboard
+            </h1>
+            <p className="text-sm text-slate-400 mt-1">
+              Institutional-grade composite scoring across 8 categories
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-sm text-slate-400">Live Updates</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-sm text-slate-400">Live Updates</span>
-        </div>
-      </div>
 
-      {/* Stats Summary */}
-      <StatsCard stats={stats} />
+        {/* Stats Summary */}
+        <StatsCard stats={stats} />
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-4">
-        <div className="flex gap-2">
-          <span className="text-sm text-slate-400 self-center">Direction:</span>
-          {['', 'BULLISH', 'BEARISH'].map(d => (
-            <button
-              key={d}
-              onClick={() => setFilterDirection(d)}
-              className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
-                filterDirection === d
+        {/* Filters */}
+        <div className="flex flex-wrap gap-4">
+          <div className="flex gap-2">
+            <span className="text-sm text-slate-400 self-center">Direction:</span>
+            {['', 'BULLISH', 'BEARISH'].map(d => (
+              <button
+                key={d}
+                onClick={() => setFilterDirection(d)}
+                className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${filterDirection === d
                   ? 'bg-blue-600 text-white'
                   : 'bg-slate-700 text-slate-400 hover:text-white'
-              }`}
-            >
-              {d || 'All'}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => setFilterActionable(!filterActionable)}
-          className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
-            filterActionable
+                  }`}
+              >
+                {d || 'All'}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setFilterActionable(!filterActionable)}
+            className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${filterActionable
               ? 'bg-emerald-600 text-white'
               : 'bg-slate-700 text-slate-400 hover:text-white'
-          }`}
-        >
-          Actionable Only
-        </button>
+              }`}
+          >
+            Actionable Only
+          </button>
+        </div>
+
+        {/* Scores Table */}
+        <div className="card overflow-hidden">
+          {displayScores.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-700/50">
+                  <tr>
+                    <th className="text-left p-3 text-slate-300 font-semibold">Symbol</th>
+                    <th className="text-left p-3 text-slate-300 font-semibold">Label</th>
+                    <th className="text-center p-3 text-slate-300 font-semibold">Score</th>
+                    <th className="text-center p-3 text-slate-300 font-semibold">Confidence</th>
+                    <th className="text-center p-3 text-slate-300 font-semibold">Status</th>
+                    <th className="text-center p-3 text-slate-300 font-semibold">Warnings</th>
+                    <th className="text-center p-3 text-slate-300 font-semibold">Trade</th>
+                    <th className="w-8"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700">
+                  {displayScores.map(score => (
+                    <QuantScoreRow
+                      key={score.familyId || score.scripCode}
+                      score={score}
+                      expanded={expandedRow === (score.familyId || score.scripCode)}
+                      onToggle={() => setExpandedRow(
+                        expandedRow === (score.familyId || score.scripCode) ? null : (score.familyId || score.scripCode)
+                      )}
+                      onTrade={() => setTradeModal({ open: true, score })}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center text-slate-500 py-12">
+              No scores available. Waiting for market data...
+            </div>
+          )}
+        </div>
+
+        {/* Legend */}
+        <div className="flex flex-wrap gap-4 text-xs text-slate-400">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-emerald-500 rounded" />
+            <span>80+ Excellent</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-green-500 rounded" />
+            <span>65-80 Strong</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-yellow-500 rounded" />
+            <span>50-65 Moderate</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-orange-500 rounded" />
+            <span>35-50 Weak</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-red-500 rounded" />
+            <span>&lt;35 Poor</span>
+          </div>
+        </div>
       </div>
 
-      {/* Scores Table */}
-      <div className="card overflow-hidden">
-        {displayScores.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-slate-700/50">
-                <tr>
-                  <th className="text-left p-3 text-slate-300 font-semibold">Symbol</th>
-                  <th className="text-left p-3 text-slate-300 font-semibold">Label</th>
-                  <th className="text-center p-3 text-slate-300 font-semibold">Score</th>
-                  <th className="text-center p-3 text-slate-300 font-semibold">Confidence</th>
-                  <th className="text-center p-3 text-slate-300 font-semibold">Status</th>
-                  <th className="text-center p-3 text-slate-300 font-semibold">Warnings</th>
-                  <th className="w-8"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-700">
-                {displayScores.map(score => (
-                  <QuantScoreRow
-                    key={score.familyId || score.scripCode}
-                    score={score}
-                    expanded={expandedRow === (score.familyId || score.scripCode)}
-                    onToggle={() => setExpandedRow(
-                      expandedRow === (score.familyId || score.scripCode) ? null : (score.familyId || score.scripCode)
-                    )}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-center text-slate-500 py-12">
-            No scores available. Waiting for market data...
-          </div>
-        )}
-      </div>
-
-      {/* Legend */}
-      <div className="flex flex-wrap gap-4 text-xs text-slate-400">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-emerald-500 rounded" />
-          <span>80+ Excellent</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-green-500 rounded" />
-          <span>65-80 Strong</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-yellow-500 rounded" />
-          <span>50-65 Moderate</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-orange-500 rounded" />
-          <span>35-50 Weak</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-red-500 rounded" />
-          <span>&lt;35 Poor</span>
-        </div>
-      </div>
-    </div>
+      {/* Trade Modal */}
+      <TradeModal
+        isOpen={tradeModal.open}
+        onClose={() => setTradeModal({ open: false, score: null })}
+        scripCode={tradeModal.score?.scripCode || ''}
+        companyName={tradeModal.score?.symbol}
+        currentPrice={0}
+        direction={tradeModal.score?.direction}
+        quantScore={tradeModal.score?.quantScore}
+      />
+    </>
   )
 }
+

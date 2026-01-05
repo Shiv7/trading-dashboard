@@ -1,4 +1,4 @@
-import type { Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal, QuantScore, QuantScoreStats } from '../types'
+import type { Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal, QuantScore, QuantScoreStats, CreateOrderRequest, ModifyPositionRequest, VirtualOrder, VirtualPosition } from '../types'
 
 const API_BASE = 'http://13.203.60.173:8085/api'
 
@@ -77,4 +77,48 @@ export const indicatorsApi = {
   getAlerts: (type?: string) =>
     fetchJson<{ alerts: IPUSignal[] }>(`/indicators/alerts${type ? `?type=${type}` : ''}`),
 }
+
+// Helper for POST requests
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${url}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || `HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+// Helper for PATCH requests
+async function patchJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${url}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || `HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+// Orders API - Virtual Trading
+export const ordersApi = {
+  createOrder: (order: CreateOrderRequest) =>
+    postJson<VirtualOrder>('/orders', order),
+
+  closePosition: (scripCode: string) =>
+    postJson<void>(`/orders/close/${scripCode}`, {}),
+
+  modifyPosition: (scripCode: string, req: ModifyPositionRequest) =>
+    patchJson<VirtualPosition>(`/orders/positions/${scripCode}`, req),
+
+  healthCheck: () =>
+    fetchJson<{ status: string; executionService?: unknown }>('/orders/health'),
+}
+
 
