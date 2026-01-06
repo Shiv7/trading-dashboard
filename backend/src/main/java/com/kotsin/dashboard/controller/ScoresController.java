@@ -28,6 +28,16 @@ public class ScoresController {
     }
 
     /**
+     * Search stocks by symbol or company name (ScripFinder)
+     */
+    @GetMapping("/search")
+    public ResponseEntity<List<FamilyScoreDTO>> searchStocks(
+            @RequestParam String q,
+            @RequestParam(defaultValue = "10") int limit) {
+        return ResponseEntity.ok(scoreExplainerService.searchStocks(q, limit));
+    }
+
+    /**
      * Get top N scores
      */
     @GetMapping("/top")

@@ -58,6 +58,43 @@ public class ScoreExplainerService {
     }
 
     /**
+     * Search stocks by symbol or company name
+     */
+    public List<FamilyScoreDTO> searchStocks(String query, int limit) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+
+        String q = query.toLowerCase().trim();
+
+        return latestScores.values().stream()
+                .filter(s -> {
+                    // Match scripCode (e.g., "N:C:1234")
+                    if (s.getScripCode() != null && s.getScripCode().toLowerCase().contains(q)) {
+                        return true;
+                    }
+                    // Match company name
+                    if (s.getCompanyName() != null && s.getCompanyName().toLowerCase().contains(q)) {
+                        return true;
+                    }
+                    return false;
+                })
+                .sorted((a, b) -> {
+                    // Prioritize exact matches
+                    boolean aExact = a.getCompanyName() != null &&
+                        a.getCompanyName().toLowerCase().startsWith(q);
+                    boolean bExact = b.getCompanyName() != null &&
+                        b.getCompanyName().toLowerCase().startsWith(q);
+                    if (aExact && !bExact) return -1;
+                    if (!aExact && bExact) return 1;
+                    // Then sort by score
+                    return Double.compare(b.getOverallScore(), a.getOverallScore());
+                })
+                .limit(limit)
+                .toList();
+    }
+
+    /**
      * Get score history for a stock from MongoDB
      */
     public List<FamilyScoreDTO> getScoreHistory(String scripCode, int limit) {

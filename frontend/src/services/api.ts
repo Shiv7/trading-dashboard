@@ -40,6 +40,8 @@ export const scoresApi = {
     fetchJson<FamilyScore[]>(`/scores/${scripCode}/history?limit=${limit}`),
   explainScore: (scripCode: string) =>
     fetchJson<Record<string, unknown>>(`/scores/${scripCode}/explain`),
+  searchStocks: (query: string, limit = 10) =>
+    fetchJson<FamilyScore[]>(`/scores/search?q=${encodeURIComponent(query)}&limit=${limit}`),
 }
 
 // Trades API
@@ -106,19 +108,43 @@ async function patchJson<T>(url: string, body: unknown): Promise<T> {
   return response.json()
 }
 
-// Orders API - Virtual Trading
+// Orders API - Trading (Virtual or Live based on mode)
 export const ordersApi = {
   createOrder: (order: CreateOrderRequest) =>
-    postJson<VirtualOrder>('/orders', order),
+    postJson<VirtualOrder & { tradingMode?: string; isLive?: boolean }>('/orders', order),
 
   closePosition: (scripCode: string) =>
-    postJson<void>(`/orders/close/${scripCode}`, {}),
+    postJson<{ tradingMode?: string }>(`/orders/close/${scripCode}`, {}),
 
   modifyPosition: (scripCode: string, req: ModifyPositionRequest) =>
-    patchJson<VirtualPosition>(`/orders/positions/${scripCode}`, req),
+    patchJson<VirtualPosition & { tradingMode?: string }>(`/orders/positions/${scripCode}`, req),
 
   healthCheck: () =>
     fetchJson<{ status: string; executionService?: unknown }>('/orders/health'),
+}
+
+// Trading Mode API
+export interface TradingModeStatus {
+  mode: 'VIRTUAL' | 'LIVE'
+  isVirtual: boolean
+  isLive: boolean
+  liveTradingEnabled: boolean
+}
+
+export const tradingModeApi = {
+  getMode: () => fetchJson<TradingModeStatus>('/trading-mode'),
+
+  setMode: (mode: 'VIRTUAL' | 'LIVE') =>
+    postJson<{ mode: string; changed: boolean; message: string }>(`/trading-mode/${mode}`, {}),
+
+  enableLive: (confirm = false) =>
+    postJson<{ liveTradingEnabled: boolean; mode: string; warning?: string; error?: string }>(
+      `/trading-mode/enable-live?confirm=${confirm}`,
+      {}
+    ),
+
+  disableLive: () =>
+    postJson<{ liveTradingEnabled: boolean; mode: string }>('/trading-mode/disable-live', {}),
 }
 
 

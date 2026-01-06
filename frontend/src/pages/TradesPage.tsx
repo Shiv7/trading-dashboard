@@ -3,12 +3,14 @@ import TradeRow from '../components/Trades/TradeRow'
 import { useDashboardStore } from '../store/dashboardStore'
 import { tradesApi } from '../services/api'
 import type { Trade, TradeStats } from '../types'
+import PerformanceCharts from '../components/Charts/PerformanceCharts'
 
 export default function TradesPage() {
   const [trades, setTrades] = useState<Trade[]>([])
   const [stats, setStats] = useState<TradeStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<string>('')
+  const [viewMode, setViewMode] = useState<'table' | 'analytics'>('table')
 
   // Get WebSocket trades
   const wsTrades = useDashboardStore((s) => s.trades)
@@ -123,63 +125,102 @@ export default function TradesPage() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex gap-2">
-        {[
-          { value: '', label: 'All' },
-          { value: 'CLOSED_WIN', label: 'Wins' },
-          { value: 'CLOSED_LOSS', label: 'Losses' },
-          { value: 'ACTIVE', label: 'Active' },
-        ].map(f => (
+      {/* View Toggle and Filters */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        {/* View Mode Toggle */}
+        <div className="flex bg-slate-700/50 rounded-lg p-1">
           <button
-            key={f.value}
-            onClick={() => setFilter(f.value)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              filter === f.value
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-700 text-slate-400 hover:text-white'
+            onClick={() => setViewMode('table')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+              viewMode === 'table'
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'text-slate-400 hover:text-white'
             }`}
           >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Trades Table */}
-      <div className="card">
-        {displayTrades.length > 0 ? (
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Stock</th>
-                  <th>Side</th>
-                  <th>Entry</th>
-                  <th>Exit</th>
-                  <th>P&L</th>
-                  <th>R-Multiple</th>
-                  <th>Duration</th>
-                  <th>Status</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayTrades.map(trade => (
-                  <TradeRow key={trade.tradeId} trade={trade} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-center text-slate-500 py-12">
-            <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
             </svg>
-            <p>No trades found</p>
-            <p className="text-xs mt-1 text-slate-600">Trades will appear when positions are opened</p>
+            Trades
+          </button>
+          <button
+            onClick={() => setViewMode('analytics')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+              viewMode === 'analytics'
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            Analytics
+          </button>
+        </div>
+
+        {/* Filters (only for table view) */}
+        {viewMode === 'table' && (
+          <div className="flex gap-2">
+            {[
+              { value: '', label: 'All' },
+              { value: 'CLOSED_WIN', label: 'Wins' },
+              { value: 'CLOSED_LOSS', label: 'Losses' },
+              { value: 'ACTIVE', label: 'Active' },
+            ].map(f => (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  filter === f.value
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-700 text-slate-400 hover:text-white'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
           </div>
         )}
       </div>
+
+      {/* Content based on view mode */}
+      {viewMode === 'analytics' ? (
+        <PerformanceCharts trades={mergedTrades} />
+      ) : (
+        <div className="card">
+          {displayTrades.length > 0 ? (
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Stock</th>
+                    <th>Side</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>P&L</th>
+                    <th>R-Multiple</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayTrades.map(trade => (
+                    <TradeRow key={trade.tradeId} trade={trade} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center text-slate-500 py-12">
+              <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              <p>No trades found</p>
+              <p className="text-xs mt-1 text-slate-600">Trades will appear when positions are opened</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

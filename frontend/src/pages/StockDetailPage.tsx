@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { scoresApi, signalsApi, indicatorsApi } from '../services/api'
+import { scoresApi, signalsApi, indicatorsApi, quantScoresApi } from '../services/api'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
-import type { FamilyScore, Signal, IPUSignal, VCPSignal } from '../types'
+import type { FamilyScore, Signal, IPUSignal, VCPSignal, QuantScore } from '../types'
 import { IPUPanel } from '../components/Indicators/IPUPanel'
 import { VCPClusters } from '../components/Indicators/VCPClusters'
+import PriceChart from '../components/Charts/PriceChart'
+import TradeModal from '../components/Trading/TradeModal'
+import OptionsPanel from '../components/Options/OptionsPanel'
 
 interface Contributor {
   category: string;
@@ -36,10 +39,15 @@ export default function StockDetailPage() {
   const [score, setScore] = useState<FamilyScore | null>(null)
   const [explanation, setExplanation] = useState<ExplanationData | null>(null)
   const [signals, setSignals] = useState<Signal[]>([])
+  const [scoreHistory, setScoreHistory] = useState<FamilyScore[]>([])
 
   // New state for detailed indicators
   const [ipuSignal, setIpuSignal] = useState<IPUSignal | null>(null)
   const [vcpSignal, setVcpSignal] = useState<VCPSignal | null>(null)
+  const [quantScore, setQuantScore] = useState<QuantScore | null>(null)
+
+  // Trade modal state
+  const [tradeModalOpen, setTradeModalOpen] = useState(false)
 
   const [loading, setLoading] = useState(true)
 
@@ -51,18 +59,22 @@ export default function StockDetailPage() {
 
     async function loadData() {
       try {
-        const [scoreData, explainData, signalsData, ipuData, vcpData] = await Promise.all([
+        const [scoreData, explainData, signalsData, ipuData, vcpData, historyData, quantData] = await Promise.all([
           scoresApi.getScore(scripCode!).catch(() => null),
           scoresApi.explainScore(scripCode!).catch(() => null),
           signalsApi.getSignalsForStock(scripCode!, 20).catch(() => []),
           indicatorsApi.getIPUSignal(scripCode!).catch(() => null),
           indicatorsApi.getVCPSignal(scripCode!).catch(() => null),
+          scoresApi.getScoreHistory(scripCode!, 100).catch(() => []),
+          quantScoresApi.getScore(scripCode!).catch(() => null),
         ])
         setScore(scoreData)
         setExplanation(explainData)
         setSignals(signalsData)
         setIpuSignal(ipuData)
         setVcpSignal(vcpData)
+        setScoreHistory(historyData)
+        setQuantScore(quantData)
       } catch (error) {
         console.error('Error loading stock data:', error)
       } finally {
@@ -138,38 +150,52 @@ export default function StockDetailPage() {
             {scripCode} • {displayScore.timeframe} • Last updated: {new Date(displayScore.timestamp).toLocaleTimeString()}
           </div>
         </div>
-        <div className="text-right">
-          <div className={`text-4xl font-bold ${displayScore.overallScore >= 7 ? 'text-emerald-400' : displayScore.overallScore >= 5 ? 'text-amber-400' : 'text-slate-400'}`}>
-            {displayScore.overallScore.toFixed(1)}
+        <div className="flex items-center gap-6">
+          <div className="text-right">
+            <div className={`text-4xl font-bold ${displayScore.overallScore >= 7 ? 'text-emerald-400' : displayScore.overallScore >= 5 ? 'text-amber-400' : 'text-slate-400'}`}>
+              {displayScore.overallScore.toFixed(1)}
+            </div>
+            <div className="text-sm text-slate-400">Overall Score</div>
           </div>
-          <div className="text-sm text-slate-400">Overall Score</div>
+          <button
+            onClick={() => setTradeModalOpen(true)}
+            className={`px-6 py-3 rounded-xl font-bold text-lg transition-all flex items-center gap-2 shadow-lg ${
+              displayScore.direction === 'BULLISH'
+                ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-emerald-500/30'
+                : displayScore.direction === 'BEARISH'
+                  ? 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-red-500/30'
+                  : 'bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-500 hover:to-slate-600 text-white shadow-slate-500/30'
+            }`}
+          >
+            {displayScore.direction === 'BULLISH' ? '🚀' : displayScore.direction === 'BEARISH' ? '📉' : '📊'}
+            Trade Now
+          </button>
         </div>
       </div>
 
-      {/* Price */}
+      {/* Price Chart */}
       <div className="card">
-        <div className="grid grid-cols-5 gap-4 text-center">
-          <div>
-            <div className="text-slate-400 text-xs">Open</div>
-            <div className="text-white font-medium">{displayScore.open?.toFixed(2)}</div>
-          </div>
-          <div>
-            <div className="text-slate-400 text-xs">High</div>
-            <div className="text-emerald-400 font-medium">{displayScore.high?.toFixed(2)}</div>
-          </div>
-          <div>
-            <div className="text-slate-400 text-xs">Low</div>
-            <div className="text-red-400 font-medium">{displayScore.low?.toFixed(2)}</div>
-          </div>
-          <div>
-            <div className="text-slate-400 text-xs">Close</div>
-            <div className="text-white font-medium">{displayScore.close?.toFixed(2)}</div>
-          </div>
-          <div>
-            <div className="text-slate-400 text-xs">Volume</div>
-            <div className="text-white font-medium">{(displayScore.volume / 1000).toFixed(0)}K</div>
+        <div className="card-header">
+          <span>📈 Price Action</span>
+          <div className="flex items-center gap-4 text-xs text-slate-400">
+            <span>O: <span className="text-white">{displayScore.open?.toFixed(2)}</span></span>
+            <span>H: <span className="text-emerald-400">{displayScore.high?.toFixed(2)}</span></span>
+            <span>L: <span className="text-red-400">{displayScore.low?.toFixed(2)}</span></span>
+            <span>C: <span className="text-white">{displayScore.close?.toFixed(2)}</span></span>
+            <span>Vol: <span className="text-white">{(displayScore.volume / 1000).toFixed(0)}K</span></span>
           </div>
         </div>
+        {scoreHistory.length > 0 ? (
+          <PriceChart
+            data={scoreHistory}
+            height={280}
+            showVolume
+          />
+        ) : (
+          <div className="flex items-center justify-center h-64 bg-slate-700/30 rounded-lg">
+            <span className="text-slate-500">Chart data loading...</span>
+          </div>
+        )}
       </div>
 
       {/* Module Scores */}
@@ -239,6 +265,9 @@ export default function StockDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Options Analytics - Institutional Grade */}
+      <OptionsPanel quantScore={quantScore} />
 
       {/* Gates */}
       <div className="card">
@@ -356,6 +385,17 @@ export default function StockDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Trade Modal */}
+      <TradeModal
+        isOpen={tradeModalOpen}
+        onClose={() => setTradeModalOpen(false)}
+        scripCode={scripCode || ''}
+        companyName={displayScore.companyName}
+        currentPrice={displayScore.close}
+        direction={displayScore.direction as 'BULLISH' | 'BEARISH' | 'NEUTRAL'}
+        quantScore={displayScore.overallScore * 10}
+      />
     </div>
   )
 }

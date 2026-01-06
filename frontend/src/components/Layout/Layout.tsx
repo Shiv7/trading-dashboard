@@ -4,6 +4,10 @@ import { useWebSocket } from '../../hooks/useWebSocket'
 import { useDashboardStore } from '../../store/dashboardStore'
 import { useAuth } from '../../context/AuthContext'
 import NotificationPanel from './NotificationPanel'
+import ScripFinder from '../Search/ScripFinder'
+import ToastContainer from '../Alerts/ToastContainer'
+import TradingModeToggle from '../Trading/TradingModeToggle'
+import { alertService } from '../../services/alertService'
 
 interface LayoutProps {
   children: ReactNode
@@ -15,6 +19,16 @@ export default function Layout({ children }: LayoutProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(alertService.isEnabled())
+
+  const toggleSound = () => {
+    const newState = !soundEnabled
+    setSoundEnabled(newState)
+    alertService.setEnabled(newState)
+    if (newState) {
+      alertService.playTest() // Play a test sound when enabling
+    }
+  }
 
   const navItems = [
     { to: '/dashboard', label: 'Dashboard', icon: '📊' },
@@ -77,8 +91,16 @@ export default function Layout({ children }: LayoutProps) {
               ))}
             </nav>
 
+            {/* Search */}
+            <div className="hidden md:block">
+              <ScripFinder placeholder="Search stocks (Ctrl+K)" />
+            </div>
+
             {/* Status indicators */}
             <div className="flex items-center gap-3">
+              {/* Trading Mode Toggle */}
+              <TradingModeToggle />
+
               {/* Regime indicator */}
               <div className={`hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all ${getRegimeStyle()}`}>
                 <span className="text-xs opacity-75">
@@ -107,6 +129,28 @@ export default function Layout({ children }: LayoutProps) {
                 <span className="text-xs font-medium hidden sm:inline">
                   {connected ? 'LIVE' : 'OFFLINE'}
                 </span>
+              </button>
+
+              {/* Sound Toggle */}
+              <button
+                onClick={toggleSound}
+                className={`p-2 rounded-lg transition-all ${
+                  soundEnabled
+                    ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                }`}
+                title={soundEnabled ? 'Sound alerts ON' : 'Sound alerts OFF'}
+              >
+                {soundEnabled ? (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                  </svg>
+                )}
               </button>
 
               {/* Notifications */}
@@ -208,6 +252,9 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         </div>
       </footer>
+
+      {/* Toast Notifications */}
+      <ToastContainer />
     </div>
   )
 }

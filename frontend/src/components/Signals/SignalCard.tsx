@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Signal } from '../../types'
+import TradeModal from '../Trading/TradeModal'
 
 interface SignalCardProps {
   signal: Signal
+  showQuickTrade?: boolean
 }
 
 // Signal source badge colors
@@ -16,10 +19,11 @@ const sourceColors: Record<string, string> = {
   CURATED: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50',
 }
 
-export default function SignalCard({ signal }: SignalCardProps) {
+export default function SignalCard({ signal, showQuickTrade = true }: SignalCardProps) {
+  const [tradeModalOpen, setTradeModalOpen] = useState(false)
   const isBullish = signal.direction === 'BULLISH'
   const isMasterArch = signal.isMasterArch || signal.signalSource === 'MASTER_ARCH'
-  
+
   const formatCurrency = (value: number) => {
     if (!value) return '-'
     return value.toFixed(2)
@@ -29,7 +33,14 @@ export default function SignalCard({ signal }: SignalCardProps) {
     return sourceColors[source || ''] || 'bg-slate-500/20 text-slate-400 border-slate-500/50'
   }
 
+  const handleQuickTrade = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setTradeModalOpen(true)
+  }
+
   return (
+    <>
     <Link
       to={`/stock/${signal.scripCode}`}
       className={`card border-l-4 ${isBullish ? 'border-l-emerald-500' : 'border-l-red-500'} hover:border-slate-600 hover:shadow-lg transition-all duration-200 cursor-pointer block ${isMasterArch ? 'ring-1 ring-purple-500/30 hover:ring-purple-500/50' : ''} hover:-translate-y-0.5`}
@@ -149,7 +160,36 @@ export default function SignalCard({ signal }: SignalCardProps) {
           )}
         </div>
       )}
+
+      {/* Quick Trade Button */}
+      {showQuickTrade && signal.allGatesPassed && !signal.tradeStatus && (
+        <div className="mt-3 pt-3 border-t border-slate-700/50">
+          <button
+            onClick={handleQuickTrade}
+            className={`w-full py-2.5 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+              isBullish
+                ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-lg shadow-emerald-500/20'
+                : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-lg shadow-red-500/20'
+            }`}
+          >
+            <span>{isBullish ? '🚀' : '📉'}</span>
+            Quick {isBullish ? 'BUY' : 'SELL'} @ ₹{formatCurrency(signal.entryPrice)}
+          </button>
+        </div>
+      )}
     </Link>
+
+    {/* Trade Modal */}
+    <TradeModal
+      isOpen={tradeModalOpen}
+      onClose={() => setTradeModalOpen(false)}
+      scripCode={signal.scripCode}
+      companyName={signal.companyName}
+      currentPrice={signal.entryPrice}
+      direction={signal.direction === 'UNKNOWN' ? 'NEUTRAL' : signal.direction}
+      quantScore={signal.confidence * 100}
+    />
+    </>
   )
 }
 
