@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData } from '../types'
+import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData, QuantScore } from '../types'
 
 interface DashboardState {
   // Wallet
@@ -40,6 +40,11 @@ interface DashboardState {
   activeIgnitions: FUDKIIData[]
   updateFUDKII: (data: FUDKIIData) => void
 
+  // QuantScores (keyed by scripCode)
+  quantScores: Map<string, QuantScore>
+  updateQuantScore: (score: QuantScore) => void
+  bulkUpdateQuantScores: (scores: QuantScore[]) => void
+
   // UI state
   selectedStock: string | null
   setSelectedStock: (scripCode: string | null) => void
@@ -49,7 +54,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   // Wallet
   wallet: null,
   updateWallet: (wallet) => set({ wallet }),
-  
+
   // Scores
   scores: new Map(),
   updateScore: (score) => set((state) => {
@@ -57,14 +62,14 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     newScores.set(score.scripCode, score)
     return { scores: newScores }
   }),
-  
+
   // Signals (keep last 100)
   signals: [],
   addSignal: (signal) => set((state) => ({
     signals: [signal, ...state.signals].slice(0, 100)
   })),
   clearSignals: () => set({ signals: [] }),
-  
+
   // Trades
   trades: [],
   updateTrade: (trade) => set((state) => {
@@ -76,11 +81,11 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     }
     return { trades: [trade, ...state.trades].slice(0, 100) }
   }),
-  
+
   // Regime
   regime: null,
   updateRegime: (regime) => set({ regime }),
-  
+
   // Notifications (keep last 50)
   notifications: [],
   addNotification: (notification) => set((state) => ({
@@ -120,6 +125,19 @@ export const useDashboardStore = create<DashboardState>((set) => ({
       // Remove from active ignitions
       return { activeIgnitions: state.activeIgnitions.filter(i => i.scripCode !== data.scripCode) }
     }
+  }),
+
+  // QuantScores
+  quantScores: new Map(),
+  updateQuantScore: (score) => set((state) => {
+    const newScores = new Map(state.quantScores)
+    newScores.set(score.scripCode, score)
+    return { quantScores: newScores }
+  }),
+  bulkUpdateQuantScores: (scores) => set((state) => {
+    const newScores = new Map(state.quantScores)
+    scores.forEach(score => newScores.set(score.scripCode, score))
+    return { quantScores: newScores }
   }),
 
   // UI state

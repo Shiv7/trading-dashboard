@@ -8,12 +8,16 @@ interface ScripFinderProps {
   onSelect?: (score: FamilyScore) => void
   placeholder?: string
   showTradeButton?: boolean
+  autoFocus?: boolean
+  onClose?: () => void
 }
 
 export default function ScripFinder({
   onSelect,
   placeholder = "Search stocks...",
   showTradeButton = true,
+  autoFocus = false,
+  onClose,
 }: ScripFinderProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<FamilyScore[]>([])
@@ -26,6 +30,13 @@ export default function ScripFinder({
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+
+  // Auto focus on mount
+  useEffect(() => {
+    if (autoFocus && inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [autoFocus])
 
   // Debounced search
   useEffect(() => {
@@ -68,12 +79,13 @@ export default function ScripFinder({
     setQuery('')
     setIsOpen(false)
     setSelectedIndex(-1)
+    onClose?.()
     if (onSelect) {
       onSelect(score)
     } else {
       navigate(`/stock/${score.scripCode}`)
     }
-  }, [onSelect, navigate])
+  }, [onSelect, navigate, onClose])
 
   const handleTrade = useCallback((score: FamilyScore, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -103,9 +115,10 @@ export default function ScripFinder({
       case 'Escape':
         setIsOpen(false)
         setSelectedIndex(-1)
+        onClose?.()
         break
     }
-  }, [isOpen, results, selectedIndex, handleSelect])
+  }, [isOpen, results, selectedIndex, handleSelect, onClose])
 
   const getDirectionColor = (direction: string) => {
     switch (direction) {

@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react'
+import { ReactNode, useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { useDashboardStore } from '../../store/dashboardStore'
@@ -20,32 +20,72 @@ export default function Layout({ children }: LayoutProps) {
   const navigate = useNavigate()
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(alertService.isEnabled())
+  const [showSearch, setShowSearch] = useState(false)
+
+  // Keyboard shortcut for search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowSearch(true)
+      }
+      if (e.key === 'Escape') {
+        setShowSearch(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const toggleSound = () => {
     const newState = !soundEnabled
     setSoundEnabled(newState)
     alertService.setEnabled(newState)
     if (newState) {
-      alertService.playTest() // Play a test sound when enabling
+      alertService.playTest()
     }
   }
 
   const navItems = [
-    { to: '/dashboard', label: 'Dashboard', icon: '📊' },
-    { to: '/quant-scores', label: 'QuantScores', icon: '🎯' },
-    { to: '/wallet', label: 'Wallet', icon: '💰' },
-    { to: '/trades', label: 'Trades', icon: '📈' },
-    { to: '/scores', label: 'Family Scores', icon: '🔢' },
-    { to: '/signals', label: 'Signals', icon: '⚡' },
+    { to: '/dashboard', label: 'Dashboard', icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+      </svg>
+    )},
+    { to: '/quant-scores', label: 'Quant', icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      </svg>
+    )},
+    { to: '/wallet', label: 'Wallet', icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+      </svg>
+    )},
+    { to: '/trades', label: 'Trades', icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+      </svg>
+    )},
+    { to: '/scores', label: 'Scores', icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+      </svg>
+    )},
+    { to: '/signals', label: 'Signals', icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+    )},
   ]
 
-  const getRegimeStyle = () => {
-    if (!regime) return 'text-slate-400 bg-slate-700/50'
-    if (regime.label.includes('STRONG_BULLISH')) return 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/30'
-    if (regime.label.includes('BULLISH')) return 'text-emerald-400 bg-emerald-500/10'
-    if (regime.label.includes('STRONG_BEARISH')) return 'text-red-400 bg-red-500/10 border border-red-500/30'
-    if (regime.label.includes('BEARISH')) return 'text-red-400 bg-red-500/10'
-    return 'text-amber-400 bg-amber-500/10'
+  const getRegimeColor = () => {
+    if (!regime) return 'text-slate-400'
+    if (regime.label.includes('STRONG_BULLISH')) return 'text-emerald-400'
+    if (regime.label.includes('BULLISH')) return 'text-emerald-400'
+    if (regime.label.includes('STRONG_BEARISH')) return 'text-red-400'
+    if (regime.label.includes('BEARISH')) return 'text-red-400'
+    return 'text-amber-400'
   }
 
   const handleLogout = () => {
@@ -54,99 +94,116 @@ export default function Layout({ children }: LayoutProps) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-slate-900">
       {/* Header */}
-      <header className="bg-slate-800/80 backdrop-blur-md border-b border-slate-700/50 sticky top-0 z-50">
-        <div className="container mx-auto px-4">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo */}
-            <NavLink to="/dashboard" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-              <img
-                src="/logo.jpeg"
-                alt="Kotsin Logo"
-                className="w-10 h-10 rounded-xl shadow-lg shadow-amber-500/20"
-              />
-              <h1 className="text-xl font-display font-bold text-white hidden sm:block">
-                KOTSIN
-              </h1>
-            </NavLink>
+      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+        <div className="px-4 lg:px-6">
+          <div className="flex items-center h-14">
+            {/* Left: Logo + Nav */}
+            <div className="flex items-center gap-1">
+              {/* Logo */}
+              <NavLink to="/dashboard" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800 transition-colors">
+                <img
+                  src="/logo.jpeg"
+                  alt="Kotsin"
+                  className="w-8 h-8 rounded-lg"
+                />
+                <span className="text-lg font-bold text-white hidden sm:block">KOTSIN</span>
+              </NavLink>
 
-            {/* Navigation */}
-            <nav className="flex items-center gap-1">
-              {navItems.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  className={({ isActive }) =>
-                    `px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
-                      isActive
-                        ? 'bg-amber-500/20 text-amber-400 shadow-lg shadow-amber-500/10'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                    }`
-                  }
-                >
-                  <span>{item.icon}</span>
-                  <span className="hidden lg:inline">{item.label}</span>
-                </NavLink>
-              ))}
-            </nav>
+              {/* Divider */}
+              <div className="w-px h-6 bg-slate-700 mx-2 hidden md:block" />
 
-            {/* Search */}
-            <div className="hidden md:block">
-              <ScripFinder placeholder="Search stocks (Ctrl+K)" />
+              {/* Navigation */}
+              <nav className="hidden md:flex items-center">
+                {navItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={({ isActive }) =>
+                      `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                        isActive
+                          ? 'bg-slate-800 text-white'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                      }`
+                    }
+                    title={item.label}
+                  >
+                    {item.icon}
+                    <span className="hidden lg:inline">{item.label}</span>
+                  </NavLink>
+                ))}
+              </nav>
             </div>
 
-            {/* Status indicators */}
-            <div className="flex items-center gap-3">
-              {/* Trading Mode Toggle */}
+            {/* Center: Search */}
+            <div className="flex-1 flex justify-center px-4">
+              <div className="w-full max-w-md">
+                {showSearch ? (
+                  <div className="relative">
+                    <ScripFinder
+                      placeholder="Search stocks..."
+                      autoFocus
+                      onClose={() => setShowSearch(false)}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowSearch(true)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-400 text-sm hover:border-slate-600 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span className="hidden sm:inline">Search stocks...</span>
+                    <kbd className="hidden sm:inline-flex ml-auto px-1.5 py-0.5 text-xs bg-slate-700 rounded">
+                      Ctrl K
+                    </kbd>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Right: Status + User */}
+            <div className="flex items-center gap-2">
+              {/* Trading Mode - Compact */}
               <TradingModeToggle />
 
-              {/* Regime indicator */}
-              <div className={`hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all ${getRegimeStyle()}`}>
-                <span className="text-xs opacity-75">
-                  {regime?.indexName || 'NIFTY'}:
-                </span>
-                <span className="text-sm font-medium">
-                  {regime?.label?.replace(/_/g, ' ') || 'Loading...'}
-                </span>
-              </div>
-
-              {/* WebSocket status */}
-              <button
-                onClick={() => !connected && reconnect()}
-                className={`flex items-center gap-2 px-2 py-1 rounded-lg transition-all ${
-                  connected
-                    ? 'bg-emerald-500/10 text-emerald-400'
-                    : 'bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer'
-                }`}
-                title={connected ? 'Connected to live data' : 'Click to reconnect'}
-              >
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    connected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'
+              {/* Status Indicators - Grouped */}
+              <div className="hidden lg:flex items-center gap-1 px-2 py-1 bg-slate-800/50 rounded-lg">
+                {/* Connection */}
+                <button
+                  onClick={() => !connected && reconnect()}
+                  className={`p-1.5 rounded transition-colors ${
+                    connected ? 'text-emerald-400' : 'text-red-400 hover:bg-slate-700'
                   }`}
-                />
-                <span className="text-xs font-medium hidden sm:inline">
-                  {connected ? 'LIVE' : 'OFFLINE'}
-                </span>
-              </button>
+                  title={connected ? 'Connected' : 'Disconnected - Click to reconnect'}
+                >
+                  <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'}`} />
+                </button>
+
+                {/* Regime */}
+                <div className={`px-2 py-1 text-xs font-medium ${getRegimeColor()}`} title="Market Regime">
+                  {regime?.label?.replace(/_/g, ' ').slice(0, 12) || '...'}
+                </div>
+              </div>
 
               {/* Sound Toggle */}
               <button
                 onClick={toggleSound}
-                className={`p-2 rounded-lg transition-all ${
+                className={`p-2 rounded-lg transition-colors ${
                   soundEnabled
-                    ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                    ? 'text-emerald-400 hover:bg-slate-800'
+                    : 'text-slate-500 hover:bg-slate-800'
                 }`}
-                title={soundEnabled ? 'Sound alerts ON' : 'Sound alerts OFF'}
+                title={soundEnabled ? 'Sound ON' : 'Sound OFF'}
               >
                 {soundEnabled ? (
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                   </svg>
                 ) : (
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
                   </svg>
@@ -160,62 +217,76 @@ export default function Layout({ children }: LayoutProps) {
               <div className="relative">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-700/50 hover:bg-slate-700 transition-all"
+                  className="flex items-center gap-2 p-1 rounded-lg hover:bg-slate-800 transition-colors"
                 >
-                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center">
                     <span className="text-slate-900 font-bold text-sm">
                       {user?.name?.charAt(0).toUpperCase() || 'U'}
                     </span>
                   </div>
-                  <span className="text-sm text-slate-300 hidden md:inline max-w-[100px] truncate">
-                    {user?.name || 'User'}
-                  </span>
-                  <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
                 </button>
 
-                {/* Dropdown Menu */}
+                {/* Dropdown */}
                 {showUserMenu && (
                   <>
                     <div
                       className="fixed inset-0 z-40"
                       onClick={() => setShowUserMenu(false)}
                     />
-                    <div className="absolute right-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                    <div className="absolute right-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
                       {/* User Info */}
-                      <div className="px-4 py-3 border-b border-slate-700">
+                      <div className="px-4 py-3 border-b border-slate-700 bg-slate-800/50">
                         <p className="text-sm font-medium text-white">{user?.name}</p>
-                        <p className="text-xs text-slate-400">{user?.email}</p>
+                        <p className="text-xs text-slate-400 truncate">{user?.email}</p>
                         {user?.role === 'admin' && (
-                          <span className="inline-flex mt-1 px-2 py-0.5 text-xs font-medium bg-amber-500/20 text-amber-400 rounded">
+                          <span className="inline-flex mt-1.5 px-2 py-0.5 text-xs font-medium bg-amber-500/20 text-amber-400 rounded">
                             Admin
                           </span>
                         )}
                       </div>
 
+                      {/* Quick Stats */}
+                      <div className="px-4 py-2 border-b border-slate-700 bg-slate-900/30">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-400">Connection</span>
+                          <span className={connected ? 'text-emerald-400' : 'text-red-400'}>
+                            {connected ? 'Live' : 'Offline'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs mt-1">
+                          <span className="text-slate-400">Market</span>
+                          <span className={getRegimeColor()}>
+                            {regime?.label?.replace(/_/g, ' ') || 'Loading'}
+                          </span>
+                        </div>
+                      </div>
+
                       {/* Menu Items */}
-                      <div className="py-2">
-                        <NavLink
-                          to="/dashboard"
-                          onClick={() => setShowUserMenu(false)}
-                          className="flex items-center gap-3 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700/50 hover:text-white transition-colors"
-                        >
-                          <span>📊</span>
-                          Dashboard
-                        </NavLink>
+                      <div className="py-1">
                         <NavLink
                           to="/wallet"
                           onClick={() => setShowUserMenu(false)}
                           className="flex items-center gap-3 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700/50 hover:text-white transition-colors"
                         >
-                          <span>💰</span>
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                          </svg>
                           My Wallet
+                        </NavLink>
+                        <NavLink
+                          to="/trades"
+                          onClick={() => setShowUserMenu(false)}
+                          className="flex items-center gap-3 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700/50 hover:text-white transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                          </svg>
+                          Trade History
                         </NavLink>
                       </div>
 
                       {/* Logout */}
-                      <div className="border-t border-slate-700 py-2">
+                      <div className="border-t border-slate-700 py-1">
                         <button
                           onClick={handleLogout}
                           className="flex items-center gap-3 w-full px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
@@ -233,25 +304,34 @@ export default function Layout({ children }: LayoutProps) {
             </div>
           </div>
         </div>
+
+        {/* Mobile Nav */}
+        <div className="md:hidden border-t border-slate-800 px-2 py-1 overflow-x-auto">
+          <nav className="flex items-center gap-1 min-w-max">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors ${
+                    isActive
+                      ? 'bg-slate-800 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`
+                }
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </div>
       </header>
 
       {/* Main content */}
-      <main className="flex-1 container mx-auto px-4 py-6">
+      <main className="flex-1 px-4 lg:px-6 py-4">
         {children}
       </main>
-
-      {/* Footer */}
-      <footer className="bg-slate-800/50 border-t border-slate-700/50 py-3">
-        <div className="container mx-auto px-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <img src="/logo.jpeg" alt="Kotsin" className="w-6 h-6 rounded-lg" />
-            <span className="text-xs text-slate-500">Kotsin Trading Platform</span>
-          </div>
-          <div className="text-xs text-slate-500">
-            Institutional-Grade Quantitative Analytics
-          </div>
-        </div>
-      </footer>
 
       {/* Toast Notifications */}
       <ToastContainer />

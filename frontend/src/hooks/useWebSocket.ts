@@ -19,7 +19,8 @@ export function useWebSocket() {
     addNotification,
     updateMasterArch,
     updateACL,
-    updateFUDKII
+    updateFUDKII,
+    updateQuantScore
   } = useDashboardStore()
 
   const connect = useCallback(() => {
@@ -125,6 +126,16 @@ export function useWebSocket() {
             console.error('Error parsing FUDKII message:', e)
           }
         })
+
+        // Subscribe to QuantScore updates
+        client.subscribe('/topic/quant-scores', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateQuantScore(data)
+          } catch (e) {
+            console.error('Error parsing QuantScore message:', e)
+          }
+        })
       },
 
       onStompError: (frame) => {
@@ -146,7 +157,7 @@ export function useWebSocket() {
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {

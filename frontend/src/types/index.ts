@@ -345,6 +345,8 @@ export interface IVSummary {
   smileShape: string;
   termStructure: string;
   skew25Delta: number;
+  nearTermIV?: number;
+  farTermIV?: number;
 }
 
 export interface MicrostructureSummary {
@@ -395,6 +397,9 @@ export interface DataQuality {
   hasIVSurface: boolean;
   hasMicrostructure: boolean;
   hasOptionsFlow: boolean;
+  hasPriceAction: boolean;
+  hasVolumeProfile: boolean;
+  hasCrossInstrument: boolean;
   completenessScore: number;
   qualityLevel: 'FULL' | 'PARTIAL' | 'MINIMAL';
 }
