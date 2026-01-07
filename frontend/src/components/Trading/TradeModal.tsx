@@ -15,12 +15,14 @@ interface TradeModalProps {
 export default function TradeModal({
     isOpen,
     onClose,
-    scripCode,
+    scripCode: initialScripCode,
     companyName,
     currentPrice = 0,
     direction = 'NEUTRAL',
     quantScore,
 }: TradeModalProps) {
+    // FIX: Allow scripCode to be entered manually if not provided
+    const [scripCode, setScripCode] = useState(initialScripCode || '')
     const [side, setSide] = useState<OrderSide>('BUY')
     const [orderType, setOrderType] = useState<OrderType>('MARKET')
     const [qty, setQty] = useState(1)
@@ -33,6 +35,13 @@ export default function TradeModal({
     const [trailingValue, setTrailingValue] = useState(1)
     const [submitting, setSubmitting] = useState(false)
     const [error, setError] = useState<string | null>(null)
+
+    // Reset scripCode when modal opens with a new initialScripCode
+    useEffect(() => {
+        if (isOpen && initialScripCode) {
+            setScripCode(initialScripCode)
+        }
+    }, [isOpen, initialScripCode])
 
     // Reset form when modal opens
     useEffect(() => {
@@ -142,6 +151,20 @@ export default function TradeModal({
                     {error && (
                         <div className="bg-red-500/20 border border-red-500/50 text-red-400 px-3 py-2 rounded-lg text-sm">
                             {error}
+                        </div>
+                    )}
+
+                    {/* ScripCode Input - show when no scripCode provided */}
+                    {!initialScripCode && (
+                        <div>
+                            <label className="text-sm text-slate-400 mb-1 block">Scrip Code *</label>
+                            <input
+                                type="text"
+                                value={scripCode}
+                                onChange={(e) => setScripCode(e.target.value.toUpperCase())}
+                                placeholder="Enter scrip code (e.g., RELIANCE)"
+                                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+                            />
                         </div>
                     )}
 
@@ -341,7 +364,7 @@ export default function TradeModal({
                         </button>
                         <button
                             onClick={handleSubmit}
-                            disabled={submitting || qty < 1}
+                            disabled={submitting || qty < 1 || !scripCode.trim()}
                             className={`flex-1 py-3 rounded-lg font-bold transition-all ${side === 'BUY'
                                     ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-lg shadow-emerald-500/30'
                                     : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-lg shadow-red-500/30'
