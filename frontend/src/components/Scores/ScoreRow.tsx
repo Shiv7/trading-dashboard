@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import type { FamilyScore } from '../../types'
 
 interface ScoreRowProps {
@@ -6,7 +6,10 @@ interface ScoreRowProps {
 }
 
 export default function ScoreRow({ score }: ScoreRowProps) {
-  const getScoreColor = (value: number, max: number = 1) => {
+  const navigate = useNavigate()
+
+  const getScoreColor = (value: number | undefined, max: number = 1) => {
+    if (value === undefined || value === null) return 'text-slate-400'
     const normalized = value / max
     if (normalized >= 0.7) return 'text-emerald-400'
     if (normalized >= 0.4) return 'text-amber-400'
@@ -23,10 +26,24 @@ export default function ScoreRow({ score }: ScoreRowProps) {
 
   const gate = getGateStatus()
 
+  const handleRowClick = () => {
+    navigate(`/stock/${score.scripCode}`)
+  }
+
+  const formatPercent = (value: number | undefined) => {
+    if (value === undefined || value === null) return '-'
+    return `${(value * 100).toFixed(0)}%`
+  }
+
+  const formatScore = (value: number | undefined) => {
+    if (value === undefined || value === null) return '-'
+    return value.toFixed(1)
+  }
+
   return (
-    <Link 
-      to={`/stock/${score.scripCode}`}
-      className="table-row hover:bg-slate-700/30 cursor-pointer"
+    <tr
+      onClick={handleRowClick}
+      className="hover:bg-slate-700/30 cursor-pointer"
     >
       <td className="py-3 px-4">
         <div className="font-medium text-white">
@@ -36,18 +53,18 @@ export default function ScoreRow({ score }: ScoreRowProps) {
       </td>
       <td className="py-3 px-4">
         <span className={`font-medium ${score.direction === 'BULLISH' ? 'text-emerald-400' : score.direction === 'BEARISH' ? 'text-red-400' : 'text-slate-400'}`}>
-          {score.direction === 'BULLISH' ? '📈' : score.direction === 'BEARISH' ? '📉' : '➡️'} {score.direction}
+          {score.direction === 'BULLISH' ? '📈' : score.direction === 'BEARISH' ? '📉' : '➡️'} {score.direction || 'NEUTRAL'}
         </span>
       </td>
       <td className="py-3 px-4">
         <span className={getScoreColor(score.vcpCombinedScore)}>
-          {(score.vcpCombinedScore * 100).toFixed(0)}%
+          {formatPercent(score.vcpCombinedScore)}
         </span>
       </td>
       <td className="py-3 px-4">
         <div className="flex items-center gap-1">
           <span className={getScoreColor(score.ipuFinalScore)}>
-            {(score.ipuFinalScore * 100).toFixed(0)}%
+            {formatPercent(score.ipuFinalScore)}
           </span>
           {score.ipuXfactor && (
             <span className="text-yellow-400" title="X-Factor detected">⚡</span>
@@ -56,7 +73,7 @@ export default function ScoreRow({ score }: ScoreRowProps) {
       </td>
       <td className="py-3 px-4">
         <span className={score.securityAligned ? 'text-emerald-400' : 'text-amber-400'}>
-          {score.indexRegimeLabel}
+          {score.indexRegimeLabel || '-'}
         </span>
       </td>
       <td className="py-3 px-4">
@@ -66,7 +83,7 @@ export default function ScoreRow({ score }: ScoreRowProps) {
       </td>
       <td className="py-3 px-4">
         <span className={`text-lg font-bold ${getScoreColor(score.overallScore, 10)}`}>
-          {score.overallScore.toFixed(1)}
+          {formatScore(score.overallScore)}
         </span>
       </td>
       <td className="py-3 px-4">
@@ -76,7 +93,7 @@ export default function ScoreRow({ score }: ScoreRowProps) {
           <span className="badge badge-neutral">-</span>
         )}
       </td>
-    </Link>
+    </tr>
   )
 }
 
