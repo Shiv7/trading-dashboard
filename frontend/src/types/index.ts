@@ -107,13 +107,28 @@ export interface Signal {
   companyName: string;
   timestamp: string;
 
-  // Signal Source (NEW)
-  signalSource?: 'MASTER_ARCH' | 'MTIS' | 'VCP' | 'IPU' | 'FUDKII' | 'BB_SUPERTREND' | 'CURATED' | string;
+  // Signal Source - SMTIS v2.0 and legacy
+  signalSource?: 'PATTERN' | 'SETUP' | 'FORECAST' | 'INTELLIGENCE' | 'QUANT' | 'MASTER_ARCH' | 'MTIS' | 'VCP' | 'IPU' | 'FUDKII' | 'BB_SUPERTREND' | 'CURATED' | string;
   signalSourceLabel?: string;
   isMasterArch?: boolean;
 
+  // SMTIS v2.0 enrichment fields
+  category?: 'BREAKOUT' | 'BREAKDOWN' | 'REVERSAL' | 'TREND_CONTINUATION' | 'MOMENTUM' | 'MEAN_REVERSION' | string;
+  horizon?: 'SCALP' | 'INTRADAY' | 'SWING' | 'POSITIONAL' | string;
+  qualityScore?: number;
+  patternId?: string;
+  setupId?: string;
+  narrative?: string;
+  expiresAt?: string;
+  predictions?: string[];
+  invalidationWatch?: string[];
+  gexRegime?: string;
+  session?: string;
+  daysToExpiry?: number;
+  atConfluenceZone?: boolean;
+
   signalType: string;
-  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'UNKNOWN';
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'LONG' | 'SHORT' | 'UNKNOWN';
   confidence: number;
   rationale: string;
   entryPrice: number;
@@ -127,7 +142,7 @@ export interface Signal {
   xfactorFlag: boolean;
   regimeLabel: string;
 
-  // Master Architecture specific (NEW)
+  // Master Architecture specific (legacy)
   finalOpportunityScore?: number;
   directionConfidence?: number;
   tradeDecision?: 'ENTER_NOW' | 'WATCHLIST' | 'MONITOR' | 'REJECT' | string;
@@ -415,4 +430,266 @@ export interface QuantScoreStats {
 
 export * from './indicators';
 export * from './orders';
+
+// ==================== Performance Analytics Types ====================
+
+export interface PerformanceMetrics {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  avgPnl: number;
+  avgRMultiple: number;
+  profitFactor: number;
+  expectancy: number;
+  drawdown: DrawdownAnalysis;
+  streaks: StreakAnalysis;
+  dailyPerformance: DailyPerformance[];
+  weeklyPerformance: WeeklyPerformance[];
+  monthlyPerformance: MonthlyPerformance[];
+  winRateTrend: WinRateTrend[];
+  bySource: Record<string, SourcePerformance>;
+  byExitReason: Record<string, OutcomeStats>;
+  byCategory: Record<string, OutcomeStats>;
+  timeAnalysis: TimeAnalysis;
+  lastUpdated: string;
+}
+
+export interface DrawdownAnalysis {
+  maxDrawdown: number;
+  maxDrawdownPercent: number;
+  currentDrawdown: number;
+  currentDrawdownPercent: number;
+  drawdownStart: string | null;
+  drawdownEnd: string | null;
+  recoveryPeriod: number;
+}
+
+export interface StreakAnalysis {
+  currentStreak: number;
+  currentStreakType: 'WIN' | 'LOSS' | 'NONE';
+  maxWinStreak: number;
+  maxLossStreak: number;
+  avgWinStreak: number;
+  avgLossStreak: number;
+}
+
+export interface DailyPerformance {
+  date: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  pnl: number;
+  winRate: number;
+}
+
+export interface WeeklyPerformance {
+  weekStart: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  pnl: number;
+  winRate: number;
+}
+
+export interface MonthlyPerformance {
+  month: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  pnl: number;
+  winRate: number;
+}
+
+export interface WinRateTrend {
+  period: string;
+  winRate: number;
+  trades: number;
+}
+
+export interface SourcePerformance {
+  source: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  avgRMultiple: number;
+}
+
+export interface OutcomeStats {
+  count: number;
+  winRate: number;
+  avgPnl: number;
+  totalPnl: number;
+}
+
+export interface TimeAnalysis {
+  bestTradingHour: number;
+  worstTradingHour: number;
+  bestTradingDay: string;
+  worstTradingDay: string;
+  avgHoldingTime: number;
+  byHour: Record<number, OutcomeStats>;
+  byDayOfWeek: Record<string, OutcomeStats>;
+}
+
+// ==================== Pattern Signal Types ====================
+
+export interface PatternSignal {
+  patternId: string;
+  signalId?: string;
+  scripCode: string;
+  companyName: string;
+  patternType: string;
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  status: 'ACTIVE' | 'COMPLETED_WIN' | 'COMPLETED_LOSS' | 'EXPIRED' | 'INVALIDATED';
+  confidence: number;
+  qualityScore: number;
+  entryPrice: number;
+  stopLoss: number;
+  target1: number;
+  target2: number;
+  riskRewardRatio: number;
+  invalidationPrice?: number;
+  timeframe?: string;
+  patternDescription?: string;
+  triggerCondition?: string;
+  gexRegime?: string;
+  session?: string;
+  daysToExpiry?: number;
+  triggeredAt: string;
+  expiresAt?: string;
+  completedAt?: string;
+  actualPnl?: number;
+  rMultiple?: number;
+}
+
+export interface PatternSummary {
+  totalActive: number;
+  totalCompleted: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  activeByType: Record<string, number>;
+}
+
+export interface PatternStats {
+  patternType: string;
+  totalOccurrences: number;
+  wins: number;
+  losses: number;
+  totalPnl: number;
+  winRate: number;
+  avgPnl: number;
+}
+
+// ==================== Risk Analytics Types ====================
+
+export interface RiskMetrics {
+  portfolioExposure: PortfolioExposure;
+  concentrationRisk: ConcentrationRisk;
+  sectorExposure: Record<string, number>;
+  directionExposure: DirectionExposure;
+  riskBreakdown: RiskBreakdown;
+  valueAtRisk: ValueAtRisk;
+  maxLossExposure: number;
+  correlationMetrics: CorrelationMetrics;
+  riskScore: RiskScore;
+  alerts: RiskAlert[];
+  lastUpdated: string;
+}
+
+export interface PortfolioExposure {
+  longExposure: number;
+  shortExposure: number;
+  netExposure: number;
+  grossExposure: number;
+  longCount: number;
+  shortCount: number;
+  netDirection: string;
+}
+
+export interface ConcentrationRisk {
+  herfindahlIndex: number;
+  riskLevel: 'LOW' | 'MODERATE' | 'HIGH';
+  uniqueStocks: number;
+  topHoldings: Record<string, number>;
+  singleStockMaxPercent: number;
+}
+
+export interface DirectionExposure {
+  bullishPercent: number;
+  bearishPercent: number;
+  neutralPercent: number;
+  bullishCount: number;
+  bearishCount: number;
+  neutralCount: number;
+}
+
+export interface RiskBreakdown {
+  totalRiskAmount: number;
+  averageRiskPerTrade: number;
+  averageRiskReward: number;
+  openPositions: number;
+}
+
+export interface ValueAtRisk {
+  var95: number;
+  var99: number;
+  expectedShortfall: number;
+  sampleSize: number;
+}
+
+export interface CorrelationMetrics {
+  sourceConcentration: number;
+  diversificationScore: number;
+  signalsBySource: Record<string, number>;
+}
+
+export interface RiskScore {
+  score: number;
+  level: 'LOW' | 'MODERATE' | 'HIGH';
+  concentrationComponent: number;
+  exposureComponent: number;
+  varComponent: number;
+}
+
+export interface RiskAlert {
+  type: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  message: string;
+  recommendation?: string;
+}
+
+// ==================== Alert History Types ====================
+
+export interface AlertHistory {
+  id: string;
+  type: 'SIGNAL' | 'PATTERN' | 'RISK' | 'SYSTEM' | 'TRADE' | 'PRICE' | string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+  title: string;
+  message: string;
+  scripCode?: string;
+  isRead: boolean;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AlertStats {
+  totalAlerts: number;
+  unreadCount: number;
+  byType: Record<string, number>;
+  bySeverity: Record<string, number>;
+  recentCount: number;
+}
+
+export interface AlertSummary {
+  unreadCount: number;
+  criticalCount: number;
+  highCount: number;
+  recentAlerts: AlertHistory[];
+}
 

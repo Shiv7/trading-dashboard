@@ -1,6 +1,13 @@
-import type { Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal, QuantScore, QuantScoreStats, CreateOrderRequest, ModifyPositionRequest, VirtualOrder, VirtualPosition } from '../types'
+import type {
+  Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal,
+  QuantScore, QuantScoreStats, CreateOrderRequest, ModifyPositionRequest, VirtualOrder, VirtualPosition,
+  PerformanceMetrics, PatternSignal, PatternSummary, PatternStats,
+  RiskMetrics, RiskScore, RiskAlert,
+  AlertHistory, AlertStats, AlertSummary
+} from '../types'
 
-const API_BASE = 'http://13.203.60.173:8085/api'
+// Use environment variable or fallback to default
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085/api'
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(`${API_BASE}${url}`)
@@ -145,6 +152,124 @@ export const tradingModeApi = {
 
   disableLive: () =>
     postJson<{ liveTradingEnabled: boolean; mode: string }>('/trading-mode/disable-live', {}),
+}
+
+// Performance Analytics API
+export const performanceApi = {
+  getMetrics: () => fetchJson<PerformanceMetrics>('/performance'),
+
+  getSummary: () => fetchJson<{
+    totalTrades: number
+    wins: number
+    losses: number
+    winRate: number
+    totalPnl: number
+    avgRMultiple: number
+    profitFactor: number
+    maxDrawdown: number
+    currentStreak: number
+  }>('/performance/summary'),
+
+  getDrawdown: () => fetchJson<PerformanceMetrics['drawdown']>('/performance/drawdown'),
+
+  getDailyPerformance: (days = 30) =>
+    fetchJson<PerformanceMetrics['dailyPerformance']>(`/performance/daily?days=${days}`),
+
+  getWeeklyPerformance: (weeks = 12) =>
+    fetchJson<PerformanceMetrics['weeklyPerformance']>(`/performance/weekly?weeks=${weeks}`),
+
+  getMonthlyPerformance: (months = 12) =>
+    fetchJson<PerformanceMetrics['monthlyPerformance']>(`/performance/monthly?months=${months}`),
+
+  getWinRateTrend: () => fetchJson<PerformanceMetrics['winRateTrend']>('/performance/winrate-trend'),
+
+  getBySource: () => fetchJson<PerformanceMetrics['bySource']>('/performance/by-source'),
+
+  getByExitReason: () => fetchJson<PerformanceMetrics['byExitReason']>('/performance/by-exit-reason'),
+
+  getByCategory: () => fetchJson<PerformanceMetrics['byCategory']>('/performance/by-category'),
+
+  getStreaks: () => fetchJson<PerformanceMetrics['streaks']>('/performance/streaks'),
+
+  getTimeAnalysis: () => fetchJson<PerformanceMetrics['timeAnalysis']>('/performance/time-analysis'),
+}
+
+// Pattern Signals API
+export const patternsApi = {
+  getActivePatterns: () => fetchJson<PatternSignal[]>('/patterns'),
+
+  getSummary: () => fetchJson<PatternSummary>('/patterns/summary'),
+
+  getPatternsByStock: (scripCode: string) =>
+    fetchJson<PatternSignal[]>(`/patterns/stock/${scripCode}`),
+
+  getPattern: (patternId: string) => fetchJson<PatternSignal>(`/patterns/${patternId}`),
+
+  getHistory: (limit = 50) => fetchJson<PatternSignal[]>(`/patterns/history?limit=${limit}`),
+
+  getStats: () => fetchJson<Record<string, PatternStats>>('/patterns/stats'),
+
+  updateOutcome: (patternId: string, isWin: boolean, pnl: number) =>
+    postJson<string>(`/patterns/${patternId}/outcome?isWin=${isWin}&pnl=${pnl}`, {}),
+}
+
+// Risk Analytics API
+export const riskApi = {
+  getMetrics: () => fetchJson<RiskMetrics>('/risk'),
+
+  getExposure: () => fetchJson<RiskMetrics['portfolioExposure']>('/risk/exposure'),
+
+  getConcentration: () => fetchJson<RiskMetrics['concentrationRisk']>('/risk/concentration'),
+
+  getDirection: () => fetchJson<RiskMetrics['directionExposure']>('/risk/direction'),
+
+  getVaR: () => fetchJson<RiskMetrics['valueAtRisk']>('/risk/var'),
+
+  getRiskScore: () => fetchJson<RiskScore>('/risk/score'),
+
+  getAlerts: () => fetchJson<RiskAlert[]>('/risk/alerts'),
+
+  getSummary: () => fetchJson<{
+    riskScore: number
+    riskLevel: string
+    openPositions: number
+    maxLossExposure: number
+    netDirection: string
+    alertCount: number
+    var95: number
+  }>('/risk/summary'),
+}
+
+// Alerts API
+export const alertsApi = {
+  getAlerts: (limit = 50, type?: string, severity?: string, unreadOnly?: boolean) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (type) params.set('type', type)
+    if (severity) params.set('severity', severity)
+    if (unreadOnly !== undefined) params.set('unreadOnly', String(unreadOnly))
+    return fetchJson<AlertHistory[]>(`/alerts?${params}`)
+  },
+
+  getSummary: () => fetchJson<AlertSummary>('/alerts/summary'),
+
+  getStats: () => fetchJson<AlertStats>('/alerts/stats'),
+
+  getAlertsForStock: (scripCode: string, limit = 20) =>
+    fetchJson<AlertHistory[]>(`/alerts/stock/${scripCode}?limit=${limit}`),
+
+  getAlert: (alertId: string) => fetchJson<AlertHistory>(`/alerts/${alertId}`),
+
+  markAsRead: (alertId: string) =>
+    postJson<{ success: boolean }>(`/alerts/${alertId}/read`, {}),
+
+  markAllAsRead: () =>
+    postJson<{ markedCount: number }>('/alerts/read-all', {}),
+
+  deleteAlert: (alertId: string) =>
+    fetch(`${API_BASE}/alerts/${alertId}`, { method: 'DELETE' }).then(r => r.json()),
+
+  createAlert: (alert: { type: string; severity: string; title: string; message: string; scripCode?: string }) =>
+    postJson<AlertHistory>('/alerts', alert),
 }
 
 

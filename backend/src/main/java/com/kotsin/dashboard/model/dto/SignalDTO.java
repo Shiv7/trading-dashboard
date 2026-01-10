@@ -26,15 +26,31 @@ public class SignalDTO {
     
     /**
      * Signal source/generator type:
-     * - MTIS: Multi-Timeframe Intelligence Score (old system)
-     * - MASTER_ARCH: Master Architecture FinalOpportunityScore (new system)
-     * - VCP: Volume Cluster Pivot signal
-     * - IPU: Institutional Participation signal
-     * - FUDKII: BB+SuperTrend structural trigger
-     * - BB_SUPERTREND: Direct BB+SuperTrend confluence
-     * - CURATED: CuratedSignalProcessor combined signal
+     * - PATTERN: Pattern recognition signals
+     * - SETUP: Setup-based signals
+     * - FORECAST: Forecast-based signals
+     * - INTELLIGENCE: Intelligence-based signals
+     * - QUANT: Quant score processor signals
+     * (Legacy: MTIS, MASTER_ARCH, VCP, IPU, FUDKII, BB_SUPERTREND, CURATED)
      */
     private String signalSource;
+
+    /**
+     * Signal category (SMTIS v2.0):
+     * BREAKOUT, BREAKDOWN, REVERSAL, TREND_CONTINUATION, MOMENTUM, MEAN_REVERSION
+     */
+    private String category;
+
+    /**
+     * Trading horizon:
+     * SCALP, INTRADAY, SWING, POSITIONAL
+     */
+    private String horizon;
+
+    /**
+     * Quality score (0-100)
+     */
+    private Integer qualityScore;
     
     /** Human-readable signal source label */
     private String signalSourceLabel;
@@ -89,7 +105,39 @@ public class SignalDTO {
     private Double actualPnl;
     private Double rMultiple;
     private String exitReason;
-    
+
+    // ========== SMTIS v2.0 Enrichment Fields ==========
+
+    /** Pattern ID if signal from pattern recognition */
+    private String patternId;
+
+    /** Setup ID if signal from setup tracker */
+    private String setupId;
+
+    /** Signal narrative context */
+    private String narrative;
+
+    /** Signal expiry timestamp */
+    private LocalDateTime expiresAt;
+
+    /** List of predicted events */
+    private java.util.List<String> predictions;
+
+    /** List of invalidation conditions to watch */
+    private java.util.List<String> invalidationWatch;
+
+    /** GEX regime at signal generation */
+    private String gexRegime;
+
+    /** Trading session at signal */
+    private String session;
+
+    /** Days to expiry at signal */
+    private Integer daysToExpiry;
+
+    /** Is at confluence zone */
+    private Boolean atConfluenceZone;
+
     // ========== Helper Methods ==========
     
     public String getSignalSourceDisplay() {
@@ -98,6 +146,13 @@ public class SignalDTO {
         }
         if (signalSource == null) return "UNKNOWN";
         return switch (signalSource) {
+            // SMTIS v2.0 sources
+            case "PATTERN" -> "Pattern Signal";
+            case "SETUP" -> "Setup Signal";
+            case "FORECAST" -> "Forecast Signal";
+            case "INTELLIGENCE" -> "Intelligence Signal";
+            case "QUANT" -> "Quant Signal";
+            // Legacy sources
             case "MASTER_ARCH" -> "Master Architecture";
             case "MTIS" -> "MTIS Score";
             case "VCP" -> "Volume Cluster Pivot";

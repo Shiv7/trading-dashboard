@@ -186,7 +186,9 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
       scripCode={signal.scripCode}
       companyName={signal.companyName}
       currentPrice={signal.entryPrice}
-      direction={signal.direction === 'UNKNOWN' ? 'NEUTRAL' : signal.direction}
+      direction={signal.direction === 'UNKNOWN' ? 'NEUTRAL' :
+                 signal.direction === 'LONG' ? 'BULLISH' :
+                 signal.direction === 'SHORT' ? 'BEARISH' : signal.direction as 'BULLISH' | 'BEARISH' | 'NEUTRAL'}
       quantScore={signal.confidence * 100}
     />
     </>

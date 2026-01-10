@@ -12,6 +12,9 @@ import ScoresPage from './pages/ScoresPage'
 import SignalsPage from './pages/SignalsPage'
 import StockDetailPage from './pages/StockDetailPage'
 import QuantScoresPage from './pages/QuantScoresPage'
+import PerformancePage from './pages/PerformancePage'
+import PatternsPage from './pages/PatternsPage'
+import RiskPage from './pages/RiskPage'
 
 function App() {
   return (
@@ -89,6 +92,36 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <StockDetailPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/performance"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <PerformancePage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patterns"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <PatternsPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/risk"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <RiskPage />
               </Layout>
             </ProtectedRoute>
           }

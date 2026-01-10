@@ -18,7 +18,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Kafka consumer for trading signals (both raw and curated).
+ * Kafka consumer for trading signals from SMTIS v2.0 enrichment pipeline.
+ * Consumes from trading-signals-v2 (unified signal topic).
  * Parses signals, stores in memory, and broadcasts to WebSocket clients.
  */
 @Component
@@ -34,7 +35,7 @@ public class SignalConsumer {
     private final Map<String, SignalDTO> signalCache = new ConcurrentHashMap<>();
     private final Map<String, Map<String, SignalDTO>> signalsByStock = new ConcurrentHashMap<>();
 
-    @KafkaListener(topics = {"trading-signals", "trading-signals-curated"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
+    @KafkaListener(topics = {"trading-signals-v2", "trading-signals-high-priority"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onSignal(String payload) {
         try {
             log.info("📥 Received signal from Kafka: {}", payload.substring(0, Math.min(150, payload.length())));
@@ -82,30 +83,43 @@ public class SignalConsumer {
     }
 
     /**
-     * Parse signal from JSON - handles BOTH raw TradingSignal and CuratedSignal formats
+     * Parse signal from JSON - handles SMTIS v2.0 enrichment signals and legacy formats
      */
     private SignalDTO parseSignal(JsonNode root) {
-        long timestamp = root.path("timestamp").asLong(System.currentTimeMillis());
-        
-        // Parse entry details - try nested "entry" object first (CuratedSignal), then root (TradingSignal)
-        JsonNode entry = root.path("entry");
-        double entryPrice = entry.path("entryPrice").asDouble(root.path("entryPrice").asDouble(0));
-        double stopLoss = entry.path("stopLoss").asDouble(root.path("stopLoss").asDouble(0));
-        double target1 = entry.path("target").asDouble(root.path("target1").asDouble(0));
+        long timestamp = root.path("timestamp").asLong(
+                root.path("generatedAt").asLong(System.currentTimeMillis()));
+
+        // Parse entry details - SMTIS v2.0 uses entryPrice, stopLoss, target1/2/3 directly
+        double entryPrice = root.path("entryPrice").asDouble(0);
+        double stopLoss = root.path("stopLoss").asDouble(0);
+        double target1 = root.path("target1").asDouble(0);
         double target2 = root.path("target2").asDouble(0);
         double target3 = root.path("target3").asDouble(0);
-        double riskReward = entry.path("riskReward").asDouble(root.path("riskRewardRatio").asDouble(0));
+        double riskReward = root.path("riskRewardRatio").asDouble(0);
 
-        // FIX: Raw TradingSignal uses "signal" field, CuratedSignal uses "signalType"
-        String signalType = root.path("signal").asText();
+        // SMTIS v2.0 uses "category" for signal type, legacy uses "signal" or "signalType"
+        String signalType = root.path("category").asText();
         if (signalType == null || signalType.isEmpty() || "null".equals(signalType)) {
-            signalType = root.path("signalType").asText("UNKNOWN");
+            signalType = root.path("signal").asText(root.path("signalType").asText("UNKNOWN"));
         }
-        
-        // Detect signal source
-        String signalSource = detectSignalSource(root, signalType);
+
+        // Detect signal source - SMTIS v2.0 has "source" field directly
+        String signalSource = root.path("source").asText();
+        if (signalSource == null || signalSource.isEmpty() || "null".equals(signalSource)) {
+            signalSource = detectSignalSource(root, signalType);
+        }
         String signalSourceLabel = getSignalSourceLabel(signalSource);
         boolean isMasterArch = "MASTER_ARCH".equals(signalSource);
+
+        // Parse narrative - SMTIS v2.0 has rich rationale object
+        String narrative = "";
+        if (root.has("rationale") && root.path("rationale").isObject()) {
+            JsonNode rationaleNode = root.path("rationale");
+            narrative = rationaleNode.path("summary").asText(
+                    rationaleNode.path("headline").asText(""));
+        } else {
+            narrative = root.path("rationale").asText("");
+        }
 
         return SignalDTO.builder()
                 .signalId(root.path("signalId").asText(UUID.randomUUID().toString()))
@@ -116,11 +130,22 @@ public class SignalConsumer {
                 .signalSource(signalSource)
                 .signalSourceLabel(signalSourceLabel)
                 .isMasterArch(isMasterArch)
+                // SMTIS v2.0 fields
+                .category(root.path("category").asText(null))
+                .horizon(root.path("horizon").asText(null))
+                .qualityScore(root.has("qualityScore") ? root.path("qualityScore").asInt() : null)
+                .patternId(root.path("patternId").asText(null))
+                .setupId(root.path("setupId").asText(null))
+                .gexRegime(root.path("gexRegime").asText(null))
+                .session(root.path("session").asText(null))
+                .daysToExpiry(root.has("daysToExpiry") ? root.path("daysToExpiry").asInt() : null)
+                .atConfluenceZone(root.has("atConfluenceZone") ? root.path("atConfluenceZone").asBoolean() : null)
                 // Signal details
                 .signalType(signalType)
                 .direction(determineDirection(root))
                 .confidence(root.path("confidence").asDouble(0))
-                .rationale(root.path("rationale").asText(""))
+                .rationale(narrative)
+                .narrative(narrative)
                 .entryPrice(entryPrice)
                 .stopLoss(stopLoss)
                 .target1(target1)
@@ -130,8 +155,8 @@ public class SignalConsumer {
                 .vcpScore(root.path("vcpCombinedScore").asDouble(0))
                 .ipuScore(root.path("ipuFinalScore").asDouble(0))
                 .xfactorFlag(root.path("xfactorFlag").asBoolean(false))
-                .regimeLabel(root.path("indexRegimeLabel").asText("UNKNOWN"))
-                // Master Arch specific
+                .regimeLabel(root.path("gexRegime").asText(root.path("indexRegimeLabel").asText("UNKNOWN")))
+                // Master Arch specific (legacy)
                 .finalOpportunityScore(root.has("finalScore") ? root.path("finalScore").path("current").asDouble() : null)
                 .directionConfidence(root.has("directionConfidence") ? root.path("directionConfidence").asDouble() : null)
                 .tradeDecision(root.path("decision").asText(null))
@@ -182,6 +207,13 @@ public class SignalConsumer {
      */
     private String getSignalSourceLabel(String source) {
         return switch (source) {
+            // SMTIS v2.0 sources
+            case "PATTERN" -> "🔷 Pattern Signal";
+            case "SETUP" -> "📐 Setup Signal";
+            case "FORECAST" -> "🔮 Forecast Signal";
+            case "INTELLIGENCE" -> "🧠 Intelligence Signal";
+            case "QUANT" -> "📊 Quant Signal";
+            // Legacy sources
             case "MASTER_ARCH" -> "🎯 Master Architecture";
             case "MTIS" -> "📊 MTIS Score";
             case "VCP" -> "📈 Volume Cluster Pivot";

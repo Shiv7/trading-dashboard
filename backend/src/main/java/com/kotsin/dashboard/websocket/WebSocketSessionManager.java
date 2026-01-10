@@ -198,6 +198,22 @@ public class WebSocketSessionManager {
     }
 
     /**
+     * Broadcast pattern signal update
+     */
+    public void broadcastPatternSignal(Object payload) {
+        log.info("Broadcasting pattern signal");
+        messagingTemplate.convertAndSend("/topic/patterns", payload);
+    }
+
+    /**
+     * Broadcast alert
+     */
+    public void broadcastAlert(Object payload) {
+        log.info("Broadcasting alert");
+        messagingTemplate.convertAndSend("/topic/alerts", payload);
+    }
+
+    /**
      * Register a subscription for a scripCode
      */
     public void registerSubscription(String sessionId, String scripCode) {
