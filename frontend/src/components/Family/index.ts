@@ -1,0 +1,1 @@
+export { FamilyInstrumentsPanel } from './FamilyInstrumentsPanel';

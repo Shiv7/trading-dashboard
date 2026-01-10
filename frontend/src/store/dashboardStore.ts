@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData, QuantScore } from '../types'
 
 interface DashboardState {
+  // Trading Mode
+  tradingMode: 'DEMO' | 'LIVE'
+  setTradingMode: (mode: 'DEMO' | 'LIVE') => void
+
   // Wallet
   wallet: Wallet | null
   updateWallet: (wallet: Wallet) => void
@@ -51,6 +55,10 @@ interface DashboardState {
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
+  // Trading Mode
+  tradingMode: 'DEMO',
+  setTradingMode: (mode) => set({ tradingMode: mode }),
+
   // Wallet
   wallet: null,
   updateWallet: (wallet) => set({ wallet }),

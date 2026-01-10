@@ -76,6 +76,7 @@ export default function TradeModal({
             type: orderType,
             qty,
             limitPrice: orderType === 'LIMIT' ? limitPrice : undefined,
+            currentPrice: currentPrice > 0 ? currentPrice : undefined,  // FIX: Send currentPrice for MARKET orders
             sl: sl > 0 ? sl : undefined,
             tp1: tp1 > 0 ? tp1 : undefined,
             tp2: tp2 > 0 ? tp2 : undefined,

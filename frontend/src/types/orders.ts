@@ -10,6 +10,7 @@ export interface CreateOrderRequest {
     type: OrderType
     qty: number
     limitPrice?: number
+    currentPrice?: number  // FIX: For MARKET orders, use this as entry price
     sl?: number
     tp1?: number
     tp2?: number
