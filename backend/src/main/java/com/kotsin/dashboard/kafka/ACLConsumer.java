@@ -56,8 +56,8 @@ public class ACLConsumer {
             // Cache latest
             latestACLState.put(scripCode, aclData);
 
-            // Broadcast to WebSocket
-            sessionManager.broadcastRegimeUpdate(Map.of(
+            // Broadcast to WebSocket - FIX: use broadcastACL instead of broadcastRegimeUpdate
+            sessionManager.broadcastACL(scripCode, Map.of(
                     "type", "ACL_UPDATE",
                     "scripCode", scripCode,
                     "data", aclData

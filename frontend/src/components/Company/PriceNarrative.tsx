@@ -1,7 +1,10 @@
 import type { FamilyScore } from '../../types'
+import type { MarketNarrative, MarketIntelligence } from '../../store/dashboardStore'
 
 interface PriceNarrativeProps {
     score: FamilyScore | null
+    narrative?: MarketNarrative
+    intelligence?: MarketIntelligence
     className?: string
 }
 
@@ -11,8 +14,8 @@ interface NarrativePoint {
     positive: boolean
 }
 
-export default function PriceNarrative({ score, className = '' }: PriceNarrativeProps) {
-    if (!score) {
+export default function PriceNarrative({ score, narrative, intelligence, className = '' }: PriceNarrativeProps) {
+    if (!score && !narrative) {
         return (
             <div className={`bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 ${className}`}>
                 <div className="text-slate-500 text-center py-4">Select a stock to see price narrative</div>
@@ -20,7 +23,94 @@ export default function PriceNarrative({ score, className = '' }: PriceNarrative
         )
     }
 
-    // Generate narrative points from FamilyScore data
+    // If we have real narrative data from Kafka, use it
+    if (narrative) {
+        return (
+            <div className={`bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 ${className}`}>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3 flex items-center gap-2">
+                    <span className="text-amber-400">💡</span>
+                    Market Narrative
+                </h3>
+
+                {/* Headline */}
+                {narrative.headline && (
+                    <div className="bg-gradient-to-r from-slate-700/50 to-slate-800/50 rounded-lg p-3 mb-4 border border-slate-600/30">
+                        <p className="text-sm font-medium text-white">{narrative.headline}</p>
+                    </div>
+                )}
+
+                {/* One-liner summary */}
+                {narrative.oneLiner && (
+                    <div className="bg-slate-700/30 rounded-lg p-3 mb-4">
+                        <p className="text-sm text-slate-200 leading-relaxed">{narrative.oneLiner}</p>
+                    </div>
+                )}
+
+                {/* Intelligence highlights */}
+                {intelligence && (
+                    <div className="space-y-2 mb-4">
+                        {intelligence.isActionableMoment && (
+                            <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-500/10 text-emerald-300 text-sm">
+                                <span>🎯</span>
+                                <span>Actionable Moment - High probability setup detected</span>
+                            </div>
+                        )}
+                        {intelligence.hasReadySetups && (
+                            <div className="flex items-center gap-2 p-2 rounded-lg bg-blue-500/10 text-blue-300 text-sm">
+                                <span>📊</span>
+                                <span>Active setups ready for entry</span>
+                            </div>
+                        )}
+                        {intelligence.recommendation && (
+                            <div className={`flex items-start gap-2 p-2 rounded-lg text-sm ${
+                                intelligence.recommendation.direction === 'BULLISH'
+                                    ? 'bg-emerald-500/10 text-emerald-300'
+                                    : intelligence.recommendation.direction === 'BEARISH'
+                                        ? 'bg-red-500/10 text-red-300'
+                                        : 'bg-slate-500/10 text-slate-300'
+                            }`}>
+                                <span>💡</span>
+                                <div>
+                                    <div className="font-medium">{intelligence.recommendation.action} - {intelligence.recommendation.direction}</div>
+                                    <div className="text-xs opacity-80 mt-1">{intelligence.recommendation.rationale}</div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Posture and Control */}
+                <div className="mt-4 pt-3 border-t border-slate-700">
+                    <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-400">Market Posture:</span>
+                        <span className={`font-bold px-3 py-1 rounded ${
+                            narrative.posture?.includes('BULL') ? 'bg-emerald-500/20 text-emerald-400' :
+                            narrative.posture?.includes('BEAR') ? 'bg-red-500/20 text-red-400' :
+                            'bg-slate-700 text-slate-400'
+                        }`}>
+                            {narrative.posture || 'NEUTRAL'}
+                        </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm mt-2">
+                        <span className="text-slate-400">Control Side:</span>
+                        <span className={`font-bold px-3 py-1 rounded ${
+                            narrative.controlSide === 'BUYERS' ? 'bg-emerald-500/20 text-emerald-400' :
+                            narrative.controlSide === 'SELLERS' ? 'bg-red-500/20 text-red-400' :
+                            'bg-slate-700 text-slate-400'
+                        }`}>
+                            {narrative.controlSide === 'BUYERS' ? '🐂 BUYERS' :
+                             narrative.controlSide === 'SELLERS' ? '🐻 SELLERS' : '⚖️ BALANCED'}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
+    // Fallback: Generate narrative points from FamilyScore data
+    // At this point, we know score is not null (checked above)
+    if (!score) return null
+
     const generateNarrativePoints = (): NarrativePoint[] => {
         const points: NarrativePoint[] = []
 

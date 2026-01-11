@@ -22,7 +22,27 @@ import {
 import { SessionBadge } from '../components/SMTIS/SessionBadge'
 import { RegimePanel } from '../components/SMTIS/RegimePanel'
 import { MicrostructurePanel } from '../components/Microstructure/MicrostructurePanel'
+import { ActiveSetupsPanel } from '../components/Intelligence/ActiveSetupsPanel'
 
+
+// Helper functions for microstructure data mapping
+const getOfiRegime = (flowDirection?: string): 'STRONG_POSITIVE' | 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'STRONG_NEGATIVE' => {
+  if (!flowDirection) return 'NEUTRAL'
+  switch (flowDirection) {
+    case 'STRONG_BULLISH': return 'STRONG_POSITIVE'
+    case 'BULLISH': return 'POSITIVE'
+    case 'BEARISH': return 'NEGATIVE'
+    case 'STRONG_BEARISH': return 'STRONG_NEGATIVE'
+    default: return 'NEUTRAL'
+  }
+}
+
+const getVpinRegime = (vpin?: number): 'HIGH_TOXIC' | 'MODERATE' | 'LOW' => {
+  if (!vpin) return 'LOW'
+  if (vpin >= 0.7) return 'HIGH_TOXIC'
+  if (vpin >= 0.5) return 'MODERATE'
+  return 'LOW'
+}
 
 export default function StockDetailPage() {
   const { scripCode } = useParams<{ scripCode: string }>()
@@ -39,10 +59,15 @@ export default function StockDetailPage() {
   const [vcpSignal, setVcpSignal] = useState<VCPSignal | null>(null)
   const [quantScore, setQuantScore] = useState<QuantScore | null>(null)
 
-  // Store
+  // Store - integrate WebSocket data
   const wsScores = useDashboardStore((s) => s.scores)
   const wsWallet = useDashboardStore((s) => s.wallet)
   const tradingMode = useDashboardStore((s) => s.tradingMode)
+  const wsQuantScores = useDashboardStore((s) => s.quantScores)
+  const wsSignals = useDashboardStore((s) => s.signals)
+  const narratives = useDashboardStore((s) => s.narratives)
+  const intelligence = useDashboardStore((s) => s.intelligence)
+  const activeSetups = useDashboardStore((s) => s.activeSetups)
 
   // WebSocket
   const { subscribeToStock, subscribeToIPU, subscribeToVCP } = useWebSocket()
@@ -90,9 +115,21 @@ export default function StockDetailPage() {
     }
   }, [scripCode, subscribeToStock, subscribeToIPU, subscribeToVCP])
 
-  // Use WebSocket data if available
+  // Use WebSocket data if available, fallback to API data
   const displayScore = (scripCode && wsScores.get(scripCode)) || score
   const displayWallet = wsWallet || wallet
+  const displayQuantScore = (scripCode && wsQuantScores.get(scripCode)) || quantScore
+
+  // Merge signals: WebSocket signals for this stock + API signals
+  const stockWsSignals = wsSignals.filter(s => s.scripCode === scripCode)
+  const displaySignals = stockWsSignals.length > 0
+    ? [...stockWsSignals, ...signals.filter(s => !stockWsSignals.find(ws => ws.signalId === s.signalId))]
+    : signals
+
+  // Get market intelligence data from store
+  const narrative = scripCode ? narratives.get(scripCode) : undefined
+  const marketIntel = scripCode ? intelligence.get(scripCode) : undefined
+  const stockSetups = scripCode ? activeSetups.get(scripCode) : undefined
 
   // Get active position for this stock
   const activePosition = displayWallet?.positions?.find(
@@ -258,21 +295,29 @@ export default function StockDetailPage() {
             </div>
           )}
 
-          {/* Microstructure Panel - using placeholder data until backend integration */}
+          {/* Microstructure Panel - using QuantScore data */}
           <MicrostructurePanel
             data={{
-              ofi: 0,
-              ofiZScore: 0,
-              ofiRegime: 'NEUTRAL',
-              vpin: 0.4,
-              vpinRegime: 'LOW',
-              kyleLambda: 0.00005,
-              lambdaZScore: 0,
-              depthImbalance: 0.1,
-              buyPressure: 55,
-              sellPressure: 45,
-              spread: 0.5,
-              spreadZScore: 0
+              ofi: displayQuantScore?.microstructureSummary?.avgOFI || 0,
+              ofiZScore: 0, // TODO: Add to backend
+              ofiRegime: getOfiRegime(displayQuantScore?.microstructureSummary?.flowDirection),
+              vpin: displayQuantScore?.microstructureSummary?.avgVPIN || 0.4,
+              vpinRegime: getVpinRegime(displayQuantScore?.microstructureSummary?.avgVPIN),
+              kyleLambda: displayQuantScore?.microstructureSummary?.avgKyleLambda || 0.00005,
+              lambdaZScore: 0, // TODO: Add to backend
+              depthImbalance: displayQuantScore?.microstructureSummary?.avgDepthImbalance || 0,
+              buyPressure: displayQuantScore?.microstructureSummary?.flowStrength
+                ? (displayQuantScore.microstructureSummary.flowDirection === 'BULLISH'
+                  ? 50 + displayQuantScore.microstructureSummary.flowStrength * 50
+                  : 50 - displayQuantScore.microstructureSummary.flowStrength * 50)
+                : 50,
+              sellPressure: displayQuantScore?.microstructureSummary?.flowStrength
+                ? (displayQuantScore.microstructureSummary.flowDirection === 'BEARISH'
+                  ? 50 + displayQuantScore.microstructureSummary.flowStrength * 50
+                  : 50 - displayQuantScore.microstructureSummary.flowStrength * 50)
+                : 50,
+              spread: 0.5, // TODO: Add to backend
+              spreadZScore: 0 // TODO: Add to backend
             }}
           />
 
@@ -299,6 +344,9 @@ export default function StockDetailPage() {
               }
             ]}
           />
+
+          {/* Active Setups from Market Intelligence */}
+          <ActiveSetupsPanel setups={stockSetups} />
         </div>
 
         {/* Center Column - Chart + Narrative + Signals */}
@@ -326,14 +374,18 @@ export default function StockDetailPage() {
             )}
           </div>
 
-          {/* Price Narrative */}
-          <PriceNarrative score={displayScore} />
+          {/* Price Narrative - using real Kafka narrative data when available */}
+          <PriceNarrative
+            score={displayScore}
+            narrative={narrative}
+            intelligence={marketIntel}
+          />
 
-          {/* Options Panel */}
-          <OptionsPanel quantScore={quantScore} />
+          {/* Options Panel - using WebSocket QuantScore with API fallback */}
+          <OptionsPanel quantScore={displayQuantScore} />
 
-          {/* Signal History */}
-          <SignalHistory signals={signals} />
+          {/* Signal History - merged WebSocket + API signals */}
+          <SignalHistory signals={displaySignals} />
 
           {/* Gate Status */}
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
