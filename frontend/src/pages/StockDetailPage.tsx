@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { scoresApi, signalsApi, indicatorsApi, quantScoresApi, walletApi } from '../services/api'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { useTimeframeScores } from '../hooks/useTimeframeScores'
 import type { FamilyScore, Signal, IPUSignal, VCPSignal, QuantScore, Wallet } from '../types'
 import { IPUPanel } from '../components/Indicators/IPUPanel'
 import { VCPClusters } from '../components/Indicators/VCPClusters'
@@ -23,6 +24,9 @@ import { SessionBadge } from '../components/SMTIS/SessionBadge'
 import { RegimePanel } from '../components/SMTIS/RegimePanel'
 import { MicrostructurePanel } from '../components/Microstructure/MicrostructurePanel'
 import { ActiveSetupsPanel } from '../components/Intelligence/ActiveSetupsPanel'
+
+// Multi-Timeframe Analysis components
+import { MTFScoreHeatmap, MTFMicrostructurePanel, MTFOptionsFlowPanel } from '../components/MTF'
 
 
 // Helper functions for microstructure data mapping
@@ -67,11 +71,13 @@ export default function StockDetailPage() {
   const wsScores = useDashboardStore((s) => s.scores)
   const wsWallet = useDashboardStore((s) => s.wallet)
   const tradingMode = useDashboardStore((s) => s.tradingMode)
-  const wsQuantScores = useDashboardStore((s) => s.quantScores)
   const wsSignals = useDashboardStore((s) => s.signals)
   const narratives = useDashboardStore((s) => s.narratives)
   const intelligence = useDashboardStore((s) => s.intelligence)
   const activeSetups = useDashboardStore((s) => s.activeSetups)
+
+  // Multi-timeframe QuantScore data
+  const { allScores: allTimeframeScores, latestScore: wsQuantScore, directionConsensus } = useTimeframeScores(scripCode)
 
   // WebSocket
   const { subscribeToStock, subscribeToIPU, subscribeToVCP } = useWebSocket()
@@ -122,7 +128,7 @@ export default function StockDetailPage() {
   // Use WebSocket data if available, fallback to API data
   const displayScore = (scripCode && wsScores.get(scripCode)) || score
   const displayWallet = wsWallet || wallet
-  const displayQuantScore = (scripCode && wsQuantScores.get(scripCode)) || quantScore
+  const displayQuantScore = wsQuantScore || quantScore
 
   // Merge signals: WebSocket signals for this stock + API signals
   const stockWsSignals = wsSignals.filter(s => s.scripCode === scripCode)
@@ -228,6 +234,38 @@ export default function StockDetailPage() {
         {/* Right: Wallet Summary */}
         <WalletHeader wallet={displayWallet} />
       </header>
+
+      {/* Multi-Timeframe Analysis Section - Collapsible */}
+      {allTimeframeScores.length > 0 && (
+        <details className="mb-6 bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden" open>
+          <summary className="px-4 py-3 bg-slate-800/50 cursor-pointer hover:bg-slate-700/30 transition-colors flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold text-white">Multi-Timeframe Analysis</span>
+              <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                {allTimeframeScores.length} TFs
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded ${
+                directionConsensus.dominant === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' :
+                directionConsensus.dominant === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
+                'bg-slate-700 text-slate-400'
+              }`}>
+                {directionConsensus.percentage.toFixed(0)}% {directionConsensus.dominant}
+              </span>
+            </div>
+            <span className="text-slate-400 text-xs">Click to expand/collapse</span>
+          </summary>
+          <div className="p-4 space-y-4">
+            {/* Score Heatmap - Full Width */}
+            <MTFScoreHeatmap scores={allTimeframeScores} />
+
+            {/* Microstructure and Options Flow - Side by Side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <MTFMicrostructurePanel scores={allTimeframeScores} />
+              <MTFOptionsFlowPanel scores={allTimeframeScores} />
+            </div>
+          </div>
+        </details>
+      )}
 
       {/* Main Content - 3 Column Layout */}
       <div className="grid grid-cols-12 gap-6">

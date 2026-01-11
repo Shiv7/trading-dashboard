@@ -98,8 +98,8 @@ interface DashboardState {
   activeIgnitions: FUDKIIData[]
   updateFUDKII: (data: FUDKIIData) => void
 
-  // QuantScores (keyed by scripCode)
-  quantScores: Map<string, QuantScore>
+  // QuantScores (keyed by scripCode -> timeframe -> score for MTF support)
+  quantScores: Map<string, Map<string, QuantScore>>
   updateQuantScore: (score: QuantScore) => void
   bulkUpdateQuantScores: (scores: QuantScore[]) => void
 
@@ -199,16 +199,29 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     }
   }),
 
-  // QuantScores
+  // QuantScores - Multi-Timeframe support (scripCode -> timeframe -> score)
   quantScores: new Map(),
   updateQuantScore: (score) => set((state) => {
     const newScores = new Map(state.quantScores)
-    newScores.set(score.scripCode, score)
+    const timeframe = score.timeframe || '1m'
+    const scripCode = score.scripCode || score.familyId
+
+    // Get or create the timeframe map for this scripCode
+    const tfScores = new Map(newScores.get(scripCode) || new Map())
+    tfScores.set(timeframe, score)
+    newScores.set(scripCode, tfScores)
+
     return { quantScores: newScores }
   }),
   bulkUpdateQuantScores: (scores) => set((state) => {
     const newScores = new Map(state.quantScores)
-    scores.forEach(score => newScores.set(score.scripCode, score))
+    scores.forEach(score => {
+      const timeframe = score.timeframe || '1m'
+      const scripCode = score.scripCode || score.familyId
+      const tfScores = new Map(newScores.get(scripCode) || new Map())
+      tfScores.set(timeframe, score)
+      newScores.set(scripCode, tfScores)
+    })
     return { quantScores: newScores }
   }),
 

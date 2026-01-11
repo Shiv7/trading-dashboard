@@ -41,8 +41,21 @@ export default function QuantScoresPage() {
     const scoreMap = new Map<string, QuantScore>()
     // First add all API scores
     apiScores.forEach(s => scoreMap.set(s.scripCode, s))
-    // Then override with any real-time WebSocket updates
-    wsQuantScores.forEach((s, key) => scoreMap.set(key, s))
+    // Then override with any real-time WebSocket updates (nested map: scripCode -> timeframe -> score)
+    wsQuantScores.forEach((tfMap: Map<string, QuantScore>, scripCode: string) => {
+      // Get the latest score by timestamp from all timeframes
+      let latestScore: QuantScore | undefined
+      let latestTime = 0
+      tfMap.forEach((score: QuantScore) => {
+        if (score.timestamp > latestTime) {
+          latestTime = score.timestamp
+          latestScore = score
+        }
+      })
+      if (latestScore) {
+        scoreMap.set(scripCode, latestScore)
+      }
+    })
     return Array.from(scoreMap.values())
   }, [apiScores, wsQuantScores])
 
