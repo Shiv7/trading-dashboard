@@ -128,6 +128,7 @@ public class QuantScoreDTO {
         private double avgVPIN;          // Volume-synchronized probability
         private double avgDepthImbalance;
         private double avgKyleLambda;    // Price impact
+        private double avgSpread;        // Average bid-ask spread
         private double aggressiveBuyRatio;
         private double aggressiveSellRatio;
         private String flowDirection;    // BUYING/SELLING/BALANCED

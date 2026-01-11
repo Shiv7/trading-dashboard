@@ -85,37 +85,62 @@ public class FamilyScoreConsumer {
         String symbol = root.path("symbol").asText(familyId);
         long timestamp = root.path("windowEndMillis").asLong(root.path("timestamp").asLong(System.currentTimeMillis()));
         String timeframe = root.path("triggerTimeframe").asText("1m");
-        
+
         // Get breakdown scores
-        JsonNode breakdown = root.path("breakdown");
-        
+        JsonNode breakdownNode = root.path("breakdown");
+
+        // MTIS is the overall score
+        double mtis = root.path("mtis").asDouble(0);
+        String mtisLabel = root.path("mtisLabel").asText("NEUTRAL");
+        String mtisTrend = root.path("mtisTrend").asText("FLAT");
+
         FamilyScoreDTO.FamilyScoreDTOBuilder builder = FamilyScoreDTO.builder()
                 .scripCode(familyId)
                 .companyName(symbol)
                 .timeframe(timeframe)
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
+                .humanReadableTime(root.path("humanReadableTime").asText(""))
+                .triggerTimeframe(timeframe)
+                // MTIS Score fields
+                .mtis(mtis)
+                .mtisLabel(mtisLabel)
+                .mtisTrend(mtisTrend)
+                .previousMtis(root.path("previousMtis").asDouble(0))
+                .mtisChange(root.path("mtisChange").asDouble(0))
+                .rawMtis(root.path("rawMtis").asDouble(0))
+                // Modifiers
+                .sessionModifier(root.path("sessionModifier").asDouble(1.0))
+                .cprModifier(root.path("cprModifier").asDouble(1.0))
+                .expiryModifier(root.path("expiryModifier").asDouble(1.0))
                 // Use actual OHLC from family-score (now available!)
                 .open(root.path("open").asDouble(root.path("spotPrice").asDouble(0)))
                 .high(root.path("high").asDouble(root.path("spotPrice").asDouble(0)))
                 .low(root.path("low").asDouble(root.path("spotPrice").asDouble(0)))
                 .close(root.path("spotPrice").asDouble(0))
                 .volume(root.path("volume").asLong(0))
-                .vwap(root.path("spotPrice").asDouble(0));
-
-        // MTIS is the overall score
-        double mtis = root.path("mtis").asDouble(0);
-        String mtisLabel = root.path("mtisLabel").asText("NEUTRAL");
-        String mtisTrend = root.path("mtisTrend").asText("FLAT");
+                .vwap(root.path("spotPrice").asDouble(0))
+                // Flags
+                .hasDivergence(root.path("hasDivergence").asBoolean())
+                .hasExhaustion(root.path("hasExhaustion").asBoolean())
+                .actionable(root.path("actionable").asBoolean())
+                .fudkiiIgnition(root.path("fudkiiIgnition").asBoolean())
+                .cprWidth(root.path("cprWidth").asText("NORMAL"))
+                .expiryDay(root.path("expiryDay").asBoolean())
+                .sessionPhase(root.path("sessionPhase").asText("UNKNOWN"))
+                .summary(root.path("summary").asText(""));
         
         // Breakdown scores
-        double priceScore = breakdown.path("priceScore").asDouble(0);
-        double ipuScore = breakdown.path("ipuScore").asDouble(0);
-        double foAlignmentScore = breakdown.path("foAlignmentScore").asDouble(0);
-        double microstructureScore = breakdown.path("microstructureScore").asDouble(0);
-        double orderbookScore = breakdown.path("orderbookScore").asDouble(0);
-        double mtfRegimeScore = breakdown.path("mtfRegimeScore").asDouble(0);
-        double patternBonus = breakdown.path("patternBonus").asDouble(0);
-        double levelRetestBonus = breakdown.path("levelRetestBonus").asDouble(0);
+        double priceScore = breakdownNode.path("priceScore").asDouble(0);
+        double ipuScore = breakdownNode.path("ipuScore").asDouble(0);
+        double foAlignmentScore = breakdownNode.path("foAlignmentScore").asDouble(0);
+        double microstructureScore = breakdownNode.path("microstructureScore").asDouble(0);
+        double orderbookScore = breakdownNode.path("orderbookScore").asDouble(0);
+        double mtfRegimeScore = breakdownNode.path("mtfRegimeScore").asDouble(0);
+        double patternBonus = breakdownNode.path("patternBonus").asDouble(0);
+        double levelRetestBonus = breakdownNode.path("levelRetestBonus").asDouble(0);
+        double fudkiiBonus = breakdownNode.path("fudkiiBonus").asDouble(0);
+        double relativeStrengthBonus = breakdownNode.path("relativeStrengthBonus").asDouble(0);
+        double mtisMomentumBonus = breakdownNode.path("mtisMomentumBonus").asDouble(0);
         
         // VCP scores - use root level vcpScore which is the actual VCP combined score
         double vcpScore = root.path("vcpScore").asDouble(0);
@@ -129,7 +154,7 @@ public class FamilyScoreConsumer {
         double ipuFinal = root.path("ipuFinalScore").asDouble(0);
         builder.ipuFinalScore(ipuFinal)
                .ipuInstProxy(microstructureScore / 10.0)  // Normalize
-               .ipuMomentum(breakdown.path("mtisMomentumBonus").asDouble(0) / 10.0)
+               .ipuMomentum(mtisMomentumBonus / 10.0)
                .ipuExhaustion(root.path("hasExhaustion").asBoolean() ? 1.0 : 0.0)
                .ipuUrgency(ipuFinal > 0.5 ? 1.0 : (ipuFinal > 0.3 ? 0.5 : 0.0))
                .ipuDirectionalConviction(ipuFinal * (priceScore > 0 ? 1 : -1))
@@ -197,8 +222,8 @@ public class FamilyScoreConsumer {
         details.put("mtfRegimeScore", mtfRegimeScore);
         details.put("patternBonus", patternBonus);
         details.put("levelRetestBonus", levelRetestBonus);
-        details.put("relativeStrengthBonus", breakdown.path("relativeStrengthBonus").asDouble(0));
-        details.put("mtisMomentumBonus", breakdown.path("mtisMomentumBonus").asDouble(0));
+        details.put("relativeStrengthBonus", relativeStrengthBonus);
+        details.put("mtisMomentumBonus", mtisMomentumBonus);
         
         // Root level scores for easy access
         details.put("vcpScore", vcpScore);
@@ -209,7 +234,7 @@ public class FamilyScoreConsumer {
         details.put("indexRegimeLabel", regimeLabel);
         
         // Score explanation - contributors array
-        List<Map<String, Object>> contributors = new ArrayList<>();
+        List<Map<String, Object>> contributorsList = new ArrayList<>();
         JsonNode contributorsNode = root.path("contributors");
         if (contributorsNode.isArray()) {
             for (JsonNode c : contributorsNode) {
@@ -219,13 +244,13 @@ public class FamilyScoreConsumer {
                 contrib.put("reason", c.path("reason").asText());
                 contrib.put("dataSource", c.path("dataSource").asText());
                 contrib.put("rawValue", c.path("rawValue").asText());
-                contributors.add(contrib);
+                contributorsList.add(contrib);
             }
         }
-        details.put("contributors", contributors);
-        
+        details.put("contributors", contributorsList);
+
         // Warnings array
-        List<Map<String, Object>> warnings = new ArrayList<>();
+        List<Map<String, Object>> warningsList = new ArrayList<>();
         JsonNode warningsNode = root.path("warnings");
         if (warningsNode.isArray()) {
             for (JsonNode w : warningsNode) {
@@ -233,12 +258,52 @@ public class FamilyScoreConsumer {
                 warning.put("type", w.path("type").asText());
                 warning.put("severity", w.path("severity").asText());
                 warning.put("message", w.path("message").asText());
-                warnings.add(warning);
+                warningsList.add(warning);
             }
         }
-        details.put("warnings", warnings);
-        
+        details.put("warnings", warningsList);
+
         builder.moduleDetails(details);
+
+        // Build structured breakdown object
+        FamilyScoreDTO.ScoreBreakdown scoreBreakdown = FamilyScoreDTO.ScoreBreakdown.builder()
+                .priceScore(priceScore)
+                .foAlignmentScore(foAlignmentScore)
+                .ipuScore(ipuScore)
+                .fudkiiBonus(fudkiiBonus)
+                .microstructureScore(microstructureScore)
+                .orderbookScore(orderbookScore)
+                .mtfRegimeScore(mtfRegimeScore)
+                .patternBonus(patternBonus)
+                .levelRetestBonus(levelRetestBonus)
+                .relativeStrengthBonus(relativeStrengthBonus)
+                .mtisMomentumBonus(mtisMomentumBonus)
+                .build();
+        builder.breakdown(scoreBreakdown);
+
+        // Build structured warnings list
+        List<FamilyScoreDTO.Warning> warningsDTO = new ArrayList<>();
+        for (Map<String, Object> w : warningsList) {
+            warningsDTO.add(FamilyScoreDTO.Warning.builder()
+                    .type((String) w.get("type"))
+                    .severity((String) w.get("severity"))
+                    .message((String) w.get("message"))
+                    .build());
+        }
+        builder.warnings(warningsDTO);
+
+        // Build structured contributors list
+        List<FamilyScoreDTO.ScoreContributor> contributorsDTO = new ArrayList<>();
+        for (Map<String, Object> c : contributorsList) {
+            contributorsDTO.add(FamilyScoreDTO.ScoreContributor.builder()
+                    .category((String) c.get("category"))
+                    .points(((Number) c.getOrDefault("points", 0.0)).doubleValue())
+                    .reason((String) c.get("reason"))
+                    .dataSource((String) c.get("dataSource"))
+                    .rawValue((String) c.get("rawValue"))
+                    .build());
+        }
+        builder.contributors(contributorsDTO);
 
         return builder.build();
     }

@@ -185,11 +185,12 @@ export default function OptionsPanel({ quantScore }: OptionsPanelProps) {
             <span>IV Surface</span>
             <div className="flex items-center gap-2">
               <span className={`text-xs px-2 py-0.5 rounded ${
-                ivSummary.ivSignal === 'HIGH' ? 'bg-red-500/20 text-red-400' :
-                ivSummary.ivSignal === 'LOW' ? 'bg-emerald-500/20 text-emerald-400' :
-                'bg-amber-500/20 text-amber-400'
+                ivSummary.ivSignal === 'BUY_VOL' ? 'bg-emerald-500/20 text-emerald-400' :
+                ivSummary.ivSignal === 'SELL_VOL' ? 'bg-red-500/20 text-red-400' :
+                ivSummary.ivSignal === 'CRUSH_WARNING' ? 'bg-yellow-500/20 text-yellow-400' :
+                'bg-slate-500/20 text-slate-400'
               }`}>
-                {ivSummary.ivSignal || 'MODERATE'}
+                {ivSummary.ivSignal?.replace(/_/g, ' ') || 'NEUTRAL'}
               </span>
               {ivSummary.ivCrushRisk && (
                 <span className="text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">

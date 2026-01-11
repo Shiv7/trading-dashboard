@@ -46,6 +46,23 @@ export interface FamilyScore {
   companyName: string;
   timeframe: string;
   timestamp: string;
+  humanReadableTime?: string;
+  triggerTimeframe?: string;
+
+  // MTIS Score (the main score)
+  mtis: number;               // -100 to +100
+  mtisLabel: string;          // "STRONG_BULLISH", "BEARISH", etc.
+  mtisTrend: string;          // "RISING", "FALLING", "STABLE"
+  previousMtis?: number;
+  mtisChange?: number;
+  rawMtis?: number;
+
+  // Modifiers
+  sessionModifier?: number;
+  cprModifier?: number;
+  expiryModifier?: number;
+
+  // Price data
   open: number;
   high: number;
   low: number;
@@ -92,12 +109,69 @@ export interface FamilyScore {
   statsGatePassed: boolean;
   statsGateReason: string;
 
-  // Overall
+  // Overall / Legacy
   overallScore: number;
   direction: string;
   signalEmitted: boolean;
 
+  // Flags
+  hasDivergence?: boolean;
+  hasExhaustion?: boolean;
+  actionable?: boolean;
+  fudkiiIgnition?: boolean;
+  cprWidth?: string;
+  expiryDay?: boolean;
+  sessionPhase?: string;
+
+  // Warnings
+  warnings?: FamilyScoreWarning[];
+
+  // Contributors
+  contributors?: FamilyScoreContributor[];
+  summary?: string;
+
+  // Breakdown
+  breakdown?: FamilyScoreBreakdown;
+
   moduleDetails?: Record<string, unknown>;
+}
+
+export interface FamilyScoreWarning {
+  type: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  message: string;
+}
+
+export interface FamilyScoreContributor {
+  category: string;
+  points: number;
+  reason: string;
+  dataSource?: string;
+  rawValue?: string;
+}
+
+export interface FamilyScoreBreakdown {
+  priceScore: number;
+  foAlignmentScore: number;
+  ipuScore: number;
+  fudkiiBonus: number;
+  microstructureScore: number;
+  orderbookScore: number;
+  mtfRegimeScore: number;
+  patternBonus: number;
+  levelRetestBonus: number;
+  relativeStrengthBonus: number;
+  mtisMomentumBonus: number;
+  tfScores?: Record<string, TFScoreDetail>;
+}
+
+export interface TFScoreDetail {
+  timeframe: string;
+  score: number;
+  weight: number;
+  weightedScore: number;
+  lastUpdated: number;
+  stale: boolean;
 }
 
 // Signal types
@@ -369,6 +443,9 @@ export interface MicrostructureSummary {
   avgVPIN: number;
   avgDepthImbalance: number;
   avgKyleLambda: number;
+  avgSpread: number;
+  aggressiveBuyRatio: number;
+  aggressiveSellRatio: number;
   flowDirection: string;
   flowStrength: number;
 }

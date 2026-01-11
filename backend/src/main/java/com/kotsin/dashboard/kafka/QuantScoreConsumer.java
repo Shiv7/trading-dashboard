@@ -239,6 +239,7 @@ public class QuantScoreConsumer {
                 .avgVPIN(node.path("avgVPIN").asDouble(0))
                 .avgDepthImbalance(node.path("avgDepthImbalance").asDouble(0))
                 .avgKyleLambda(node.path("avgKyleLambda").asDouble(0))
+                .avgSpread(node.path("avgSpread").asDouble(0))
                 .aggressiveBuyRatio(node.path("aggressiveBuyRatio").asDouble(0))
                 .aggressiveSellRatio(node.path("aggressiveSellRatio").asDouble(0))
                 .flowDirection(node.path("flowDirection").asText("BALANCED"))

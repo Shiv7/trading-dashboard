@@ -29,6 +29,10 @@ import { ActiveSetupsPanel } from '../components/Intelligence/ActiveSetupsPanel'
 const getOfiRegime = (flowDirection?: string): 'STRONG_POSITIVE' | 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'STRONG_NEGATIVE' => {
   if (!flowDirection) return 'NEUTRAL'
   switch (flowDirection) {
+    case 'BUYING': return 'POSITIVE'
+    case 'SELLING': return 'NEGATIVE'
+    case 'BALANCED': return 'NEUTRAL'
+    // Legacy values
     case 'STRONG_BULLISH': return 'STRONG_POSITIVE'
     case 'BULLISH': return 'POSITIVE'
     case 'BEARISH': return 'NEGATIVE'
@@ -299,25 +303,18 @@ export default function StockDetailPage() {
           <MicrostructurePanel
             data={{
               ofi: displayQuantScore?.microstructureSummary?.avgOFI || 0,
-              ofiZScore: 0, // TODO: Add to backend
+              ofiZScore: 0, // Z-score calculation would require historical data
               ofiRegime: getOfiRegime(displayQuantScore?.microstructureSummary?.flowDirection),
-              vpin: displayQuantScore?.microstructureSummary?.avgVPIN || 0.4,
+              vpin: displayQuantScore?.microstructureSummary?.avgVPIN || 0,
               vpinRegime: getVpinRegime(displayQuantScore?.microstructureSummary?.avgVPIN),
-              kyleLambda: displayQuantScore?.microstructureSummary?.avgKyleLambda || 0.00005,
-              lambdaZScore: 0, // TODO: Add to backend
+              kyleLambda: displayQuantScore?.microstructureSummary?.avgKyleLambda || 0,
+              lambdaZScore: 0, // Z-score calculation would require historical data
               depthImbalance: displayQuantScore?.microstructureSummary?.avgDepthImbalance || 0,
-              buyPressure: displayQuantScore?.microstructureSummary?.flowStrength
-                ? (displayQuantScore.microstructureSummary.flowDirection === 'BULLISH'
-                  ? 50 + displayQuantScore.microstructureSummary.flowStrength * 50
-                  : 50 - displayQuantScore.microstructureSummary.flowStrength * 50)
-                : 50,
-              sellPressure: displayQuantScore?.microstructureSummary?.flowStrength
-                ? (displayQuantScore.microstructureSummary.flowDirection === 'BEARISH'
-                  ? 50 + displayQuantScore.microstructureSummary.flowStrength * 50
-                  : 50 - displayQuantScore.microstructureSummary.flowStrength * 50)
-                : 50,
-              spread: 0.5, // TODO: Add to backend
-              spreadZScore: 0 // TODO: Add to backend
+              // Use actual aggressive buy/sell ratios from QuantScore
+              buyPressure: (displayQuantScore?.microstructureSummary?.aggressiveBuyRatio || 0.5) * 100,
+              sellPressure: (displayQuantScore?.microstructureSummary?.aggressiveSellRatio || 0.5) * 100,
+              spread: displayQuantScore?.microstructureSummary?.avgSpread || 0,
+              spreadZScore: 0 // Z-score calculation would require historical data
             }}
           />
 
