@@ -37,7 +37,8 @@ export const ActiveSetupsPanel: React.FC<ActiveSetupsPanelProps> = ({ setups, cl
         return '↔️'
     }
 
-    const formatSetupType = (type: string) => {
+    const formatSetupType = (type: string | undefined) => {
+        if (!type) return 'Unknown Setup'
         return type.replace(/_/g, ' ').toLowerCase()
             .split(' ')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
