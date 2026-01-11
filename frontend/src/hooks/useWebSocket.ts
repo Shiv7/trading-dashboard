@@ -8,7 +8,11 @@ const WS_URL = 'http://13.203.60.173:8085/ws'
 export function useWebSocket() {
   const clientRef = useRef<Client | null>(null)
   const [connected, setConnected] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [parseErrors, setParseErrors] = useState<string[]>([])
+  const reconnectAttempts = useRef(0)
+  const maxReconnectAttempts = 10
 
   const {
     updateWallet,
@@ -35,7 +39,17 @@ export function useWebSocket() {
       onConnect: () => {
         console.log('WebSocket connected')
         setConnected(true)
+        setReconnecting(false)
         setError(null)
+        setParseErrors([])
+        reconnectAttempts.current = 0
+
+        // Helper to handle parse errors with error boundary
+        const handleParseError = (topic: string, e: unknown) => {
+          const errorMsg = `Failed to parse ${topic}: ${e instanceof Error ? e.message : 'Unknown error'}`
+          console.error(errorMsg)
+          setParseErrors(prev => [...prev.slice(-9), errorMsg]) // Keep last 10 errors
+        }
 
         // Subscribe to wallet updates
         client.subscribe('/topic/wallet', (message: IMessage) => {
@@ -43,7 +57,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateWallet(data)
           } catch (e) {
-            console.error('Error parsing wallet message:', e)
+            handleParseError('wallet', e)
           }
         })
 
@@ -53,7 +67,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateScore(data)
           } catch (e) {
-            console.error('Error parsing score message:', e)
+            handleParseError('scores', e)
           }
         })
 
@@ -63,7 +77,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             addSignal(data)
           } catch (e) {
-            console.error('Error parsing signal message:', e)
+            handleParseError('signals', e)
           }
         })
 
@@ -73,7 +87,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateTrade(data)
           } catch (e) {
-            console.error('Error parsing trade message:', e)
+            handleParseError('trades', e)
           }
         })
 
@@ -83,7 +97,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateRegime(data)
           } catch (e) {
-            console.error('Error parsing regime message:', e)
+            handleParseError('regime', e)
           }
         })
 
@@ -93,7 +107,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             addNotification(data)
           } catch (e) {
-            console.error('Error parsing notification:', e)
+            handleParseError('notifications', e)
           }
         })
 
@@ -103,7 +117,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateMasterArch(data)
           } catch (e) {
-            console.error('Error parsing master-arch message:', e)
+            handleParseError('master-arch', e)
           }
         })
 
@@ -113,7 +127,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateACL(data)
           } catch (e) {
-            console.error('Error parsing ACL message:', e)
+            handleParseError('acl', e)
           }
         })
 
@@ -123,7 +137,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateFUDKII(data)
           } catch (e) {
-            console.error('Error parsing FUDKII message:', e)
+            handleParseError('fudkii', e)
           }
         })
 
@@ -133,7 +147,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateQuantScore(data)
           } catch (e) {
-            console.error('Error parsing QuantScore message:', e)
+            handleParseError('quant-scores', e)
           }
         })
       },
@@ -142,16 +156,27 @@ export function useWebSocket() {
         console.error('STOMP error:', frame.headers['message'])
         setError(frame.headers['message'] || 'Connection error')
         setConnected(false)
+        setReconnecting(true)
+        reconnectAttempts.current++
       },
 
       onWebSocketClose: () => {
         console.log('WebSocket closed')
         setConnected(false)
+        if (reconnectAttempts.current < maxReconnectAttempts) {
+          setReconnecting(true)
+          reconnectAttempts.current++
+          console.log(`Reconnecting... attempt ${reconnectAttempts.current}/${maxReconnectAttempts}`)
+        } else {
+          setReconnecting(false)
+          setError('Connection lost. Maximum reconnection attempts reached.')
+        }
       },
 
       onDisconnect: () => {
         console.log('STOMP disconnected')
         setConnected(false)
+        setReconnecting(true)
       },
     })
 
@@ -211,5 +236,28 @@ export function useWebSocket() {
     return () => disconnect()
   }, [connect, disconnect])
 
-  return { connected, error, subscribeToStock, subscribeToIPU, subscribeToVCP, reconnect: connect }
+  // Helper to clear parse errors
+  const clearParseErrors = useCallback(() => {
+    setParseErrors([])
+  }, [])
+
+  // Helper to manually reset reconnection state
+  const resetReconnection = useCallback(() => {
+    reconnectAttempts.current = 0
+    setReconnecting(false)
+    setError(null)
+  }, [])
+
+  return {
+    connected,
+    reconnecting,
+    error,
+    parseErrors,
+    subscribeToStock,
+    subscribeToIPU,
+    subscribeToVCP,
+    reconnect: connect,
+    clearParseErrors,
+    resetReconnection
+  }
 }
