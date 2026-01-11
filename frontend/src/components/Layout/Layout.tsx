@@ -1,6 +1,7 @@
 import { ReactNode, useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useWebSocket } from '../../hooks/useWebSocket'
+import { useInitialState } from '../../hooks/useInitialState'
 import { useDashboardStore } from '../../store/dashboardStore'
 import { useAuth } from '../../context/AuthContext'
 import NotificationPanel from './NotificationPanel'
@@ -15,6 +16,8 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const { connected, reconnect } = useWebSocket()
+  // Load cached state on mount - initialLoading/error used for console logging
+  useInitialState()
   const { regime } = useDashboardStore()
   const { user, logout } = useAuth()
   const navigate = useNavigate()

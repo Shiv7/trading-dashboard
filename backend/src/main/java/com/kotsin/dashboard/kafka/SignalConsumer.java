@@ -271,5 +271,15 @@ public class SignalConsumer {
     public Map<String, SignalDTO> getSignalsForStock(String scripCode) {
         return signalsByStock.getOrDefault(scripCode, Map.of());
     }
+
+    /**
+     * Get recent signals (most recent first)
+     */
+    public java.util.List<SignalDTO> getRecentSignals(int limit) {
+        return signalCache.values().stream()
+                .sorted((a, b) -> b.getTimestamp().compareTo(a.getTimestamp()))
+                .limit(limit)
+                .collect(java.util.stream.Collectors.toList());
+    }
 }
 

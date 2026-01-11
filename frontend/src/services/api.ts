@@ -240,6 +240,27 @@ export const riskApi = {
   }>('/risk/summary'),
 }
 
+// Initial State API - for loading cached data on page refresh
+export const initialStateApi = {
+  getInitialState: () => fetchJson<{
+    scores: FamilyScore[]
+    quantScores: QuantScore[]
+    narratives: Record<string, unknown>
+    intelligence: Record<string, unknown>
+    signals: Signal[]
+    aclStates: Record<string, unknown>
+    activeIgnitions: unknown[]
+    timestamp: number
+    dataAvailable: boolean
+  }>('/state/initial'),
+
+  getMinimalState: () => fetchJson<{
+    scores: FamilyScore[]
+    quantScores: QuantScore[]
+    timestamp: number
+  }>('/state/initial/minimal'),
+}
+
 // Alerts API
 export const alertsApi = {
   getAlerts: (limit = 50, type?: string, severity?: string, unreadOnly?: boolean) => {
