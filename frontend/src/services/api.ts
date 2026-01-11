@@ -6,8 +6,8 @@ import type {
   AlertHistory, AlertStats, AlertSummary
 } from '../types'
 
-// Use environment variable or fallback to default
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085/api'
+// Hardcoded production API URL
+const API_BASE = 'http://13.203.60.173:8085/api'
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(`${API_BASE}${url}`)
