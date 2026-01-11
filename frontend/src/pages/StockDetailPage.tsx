@@ -379,7 +379,7 @@ export default function StockDetailPage() {
           />
 
           {/* Options Panel - using WebSocket QuantScore with API fallback */}
-          <OptionsPanel quantScore={displayQuantScore} />
+          <OptionsPanel quantScore={displayQuantScore} familyScore={displayScore} />
 
           {/* Signal History - merged WebSocket + API signals */}
           <SignalHistory signals={displaySignals} />

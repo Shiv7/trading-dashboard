@@ -248,24 +248,36 @@ public class QuantScoreConsumer {
     }
 
     private QuantScoreDTO.OptionsFlowSummary parseOptionsFlowSummary(JsonNode node) {
+        // Handle null values properly - asText() returns "null" for explicit null in JSON
+        String oiBuildupType = node.path("oiBuildupType").asText(null);
+        String futuresBuildup = node.path("futuresBuildup").asText(null);
+
+        // Convert "null" string to actual null
+        if ("null".equals(oiBuildupType) || oiBuildupType != null && oiBuildupType.isEmpty()) {
+            oiBuildupType = null;
+        }
+        if ("null".equals(futuresBuildup) || futuresBuildup != null && futuresBuildup.isEmpty()) {
+            futuresBuildup = null;
+        }
+
         return QuantScoreDTO.OptionsFlowSummary.builder()
                 .pcr(node.path("pcr").asDouble(1))
                 .pcrChange(node.path("pcrChange").asDouble(0))
                 .pcrSignal(node.path("pcrSignal").asText("NEUTRAL"))
-                .oiBuildupType(node.path("oiBuildupType").asText())
+                .oiBuildupType(oiBuildupType)
                 .oiMomentum(node.path("oiMomentum").asDouble(0))
-                .futuresBuildup(node.path("futuresBuildup").asText())
+                .futuresBuildup(futuresBuildup)
                 .spotFuturePremium(node.path("spotFuturePremium").asDouble(0))
                 .build();
     }
 
     private QuantScoreDTO.PriceActionSummary parsePriceActionSummary(JsonNode node) {
         return QuantScoreDTO.PriceActionSummary.builder()
-                .candleSequencePattern(node.path("candleSequencePattern").asText())
-                .sequenceType(node.path("sequenceType").asText())
+                .candleSequencePattern(getNullableText(node, "candleSequencePattern"))
+                .sequenceType(getNullableText(node, "sequenceType"))
                 .reversalIndex(node.path("reversalIndex").asDouble(0))
                 .momentumSlope(node.path("momentumSlope").asDouble(0))
-                .wyckoffPhase(node.path("wyckoffPhase").asText())
+                .wyckoffPhase(getNullableText(node, "wyckoffPhase"))
                 .wyckoffStrength(node.path("wyckoffStrength").asDouble(0))
                 .pcrDivergence(node.path("pcrDivergence").asBoolean(false))
                 .oiDivergence(node.path("oiDivergence").asBoolean(false))
@@ -278,10 +290,10 @@ public class QuantScoreConsumer {
                 .vah(node.path("vah").asDouble(0))
                 .val(node.path("val").asDouble(0))
                 .pocMigration(node.path("pocMigration").asDouble(0))
-                .pocTrend(node.path("pocTrend").asText())
+                .pocTrend(getNullableText(node, "pocTrend"))
                 .valueAreaExpanding(node.path("valueAreaExpanding").asBoolean(false))
                 .valueAreaContracting(node.path("valueAreaContracting").asBoolean(false))
-                .valueAreaShift(node.path("valueAreaShift").asText())
+                .valueAreaShift(getNullableText(node, "valueAreaShift"))
                 .build();
     }
 
@@ -297,5 +309,20 @@ public class QuantScoreConsumer {
                 .completenessScore(node.path("completenessScore").asDouble(0))
                 .qualityLevel(node.path("qualityLevel").asText("MINIMAL"))
                 .build();
+    }
+
+    /**
+     * Helper to get nullable text - handles both missing fields and "null" string
+     */
+    private String getNullableText(JsonNode node, String field) {
+        JsonNode fieldNode = node.path(field);
+        if (fieldNode.isMissingNode() || fieldNode.isNull()) {
+            return null;
+        }
+        String value = fieldNode.asText();
+        if ("null".equals(value) || value.isEmpty()) {
+            return null;
+        }
+        return value;
     }
 }

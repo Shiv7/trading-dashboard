@@ -1,10 +1,11 @@
-import type { QuantScore } from '../../types'
+import type { QuantScore, FamilyScore } from '../../types'
 
 interface OptionsPanelProps {
   quantScore: QuantScore | null
+  familyScore?: FamilyScore | null
 }
 
-export default function OptionsPanel({ quantScore }: OptionsPanelProps) {
+export default function OptionsPanel({ quantScore, familyScore }: OptionsPanelProps) {
   if (!quantScore) {
     return (
       <div className="card">
@@ -258,10 +259,10 @@ export default function OptionsPanel({ quantScore }: OptionsPanelProps) {
             <div className="bg-slate-700/30 rounded-lg p-3">
               <div className="text-xs text-slate-400 mb-1">Put/Call Ratio</div>
               <div className={`text-xl font-bold ${
-                (optionsFlowSummary.pcr || 0) > 1.2 ? 'text-red-400' :
-                (optionsFlowSummary.pcr || 0) < 0.8 ? 'text-emerald-400' : 'text-white'
+                (optionsFlowSummary.pcr || familyScore?.pcr || 0) > 1.2 ? 'text-red-400' :
+                (optionsFlowSummary.pcr || familyScore?.pcr || 0) < 0.8 ? 'text-emerald-400' : 'text-white'
               }`}>
-                {formatNumber(optionsFlowSummary.pcr)}
+                {formatNumber(optionsFlowSummary.pcr || familyScore?.pcr)}
               </div>
               <div className={`text-xs ${
                 (optionsFlowSummary.pcrChange || 0) > 0 ? 'text-red-400' :
@@ -271,24 +272,24 @@ export default function OptionsPanel({ quantScore }: OptionsPanelProps) {
               </div>
             </div>
             <div className="bg-slate-700/30 rounded-lg p-3">
-              <div className="text-xs text-slate-400 mb-1">OI Buildup</div>
-              <div className={`text-lg font-bold ${getDirectionColor(optionsFlowSummary.oiBuildupType)}`}>
-                {optionsFlowSummary.oiBuildupType?.replace(/_/g, ' ') || '-'}
+              <div className="text-xs text-slate-400 mb-1">OI Signal</div>
+              <div className={`text-lg font-bold ${getDirectionColor(optionsFlowSummary.oiBuildupType || familyScore?.oiSignal)}`}>
+                {(optionsFlowSummary.oiBuildupType || familyScore?.oiSignal)?.replace(/_/g, ' ') || '-'}
               </div>
             </div>
             <div className="bg-slate-700/30 rounded-lg p-3">
               <div className="text-xs text-slate-400 mb-1">Futures</div>
-              <div className={`text-lg font-bold ${getDirectionColor(optionsFlowSummary.futuresBuildup)}`}>
-                {optionsFlowSummary.futuresBuildup?.replace(/_/g, ' ') || '-'}
+              <div className={`text-lg font-bold ${getDirectionColor(optionsFlowSummary.futuresBuildup || familyScore?.futuresBuildup)}`}>
+                {(optionsFlowSummary.futuresBuildup || familyScore?.futuresBuildup)?.replace(/_/g, ' ') || '-'}
               </div>
             </div>
             <div className="bg-slate-700/30 rounded-lg p-3">
               <div className="text-xs text-slate-400 mb-1">Spot-Fut Premium</div>
               <div className={`text-xl font-bold ${
-                (optionsFlowSummary.spotFuturePremium || 0) > 0.5 ? 'text-emerald-400' :
-                (optionsFlowSummary.spotFuturePremium || 0) < -0.5 ? 'text-red-400' : 'text-white'
+                (optionsFlowSummary.spotFuturePremium || familyScore?.spotFuturePremium || 0) > 0.5 ? 'text-emerald-400' :
+                (optionsFlowSummary.spotFuturePremium || familyScore?.spotFuturePremium || 0) < -0.5 ? 'text-red-400' : 'text-white'
               }`}>
-                {formatNumber(optionsFlowSummary.spotFuturePremium)}%
+                {formatNumber(optionsFlowSummary.spotFuturePremium || familyScore?.spotFuturePremium)}%
               </div>
             </div>
           </div>
