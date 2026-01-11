@@ -312,15 +312,45 @@ public class ScoreExplainerService {
             LocalDateTime timestamp = null;
             if (timestampObj instanceof Long) {
                 timestamp = LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli((Long) timestampObj), 
+                    Instant.ofEpochMilli((Long) timestampObj),
+                    ZoneId.of("Asia/Kolkata")
+                );
+            } else if (timestampObj instanceof Date) {
+                timestamp = LocalDateTime.ofInstant(
+                    ((Date) timestampObj).toInstant(),
                     ZoneId.of("Asia/Kolkata")
                 );
             }
+
+            // Get OHLC data - try different possible field names
+            double open = getDouble(doc, "open");
+            if (open == 0) open = getDouble(doc, "entryPrice");
+            if (open == 0) open = getDouble(doc, "spotPrice");
+
+            double high = getDouble(doc, "high");
+            double low = getDouble(doc, "low");
+            double close = getDouble(doc, "close");
+            if (close == 0) close = getDouble(doc, "spotPrice");
+            if (close == 0) close = getDouble(doc, "entryPrice");
+
+            // If no high/low, use open/close as fallback
+            if (high == 0 && close > 0) high = Math.max(open, close) * 1.001;
+            if (low == 0 && close > 0) low = Math.min(open, close) * 0.999;
+
+            long volume = getLong(doc, "volume");
 
             return FamilyScoreDTO.builder()
                     .scripCode(doc.getString("scripCode"))
                     .companyName(doc.getString("companyName"))
                     .timestamp(timestamp)
+                    // OHLC data for charts
+                    .open(open)
+                    .high(high)
+                    .low(low)
+                    .close(close)
+                    .volume(volume)
+                    .vwap(close) // Use close as vwap fallback
+                    // Score data
                     .vcpCombinedScore(getDouble(doc, "vcpCombined"))
                     .vcpRunway(getDouble(doc, "vcpRunway"))
                     .ipuFinalScore(getDouble(doc, "ipuFinalScore"))
@@ -331,8 +361,9 @@ public class ScoreExplainerService {
                     .signalEmitted(Boolean.TRUE.equals(doc.getBoolean("signalEmitted")))
                     .overallScore(getDouble(doc, "overallScore"))
                     .build();
-                    
+
         } catch (Exception e) {
+            log.debug("Error parsing score from history: {}", e.getMessage());
             return null;
         }
     }
@@ -340,6 +371,11 @@ public class ScoreExplainerService {
     private double getDouble(Document doc, String key) {
         Object val = doc.get(key);
         return val instanceof Number ? ((Number) val).doubleValue() : 0;
+    }
+
+    private long getLong(Document doc, String key) {
+        Object val = doc.get(key);
+        return val instanceof Number ? ((Number) val).longValue() : 0L;
     }
 }
 
