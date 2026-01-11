@@ -213,6 +213,45 @@ public class WebSocketSessionManager {
         messagingTemplate.convertAndSend("/topic/alerts", payload);
     }
 
+    // ======================== MARKET INTELLIGENCE BROADCASTS ========================
+
+    /**
+     * Broadcast market narrative for a specific family
+     */
+    public void broadcastMarketNarrative(String familyId, Object payload) {
+        log.debug("Broadcasting market narrative for {}", familyId);
+        messagingTemplate.convertAndSend("/topic/narrative/" + familyId, payload);
+        messagingTemplate.convertAndSend("/topic/narrative", payload);
+    }
+
+    /**
+     * Broadcast full market intelligence for a specific family
+     */
+    public void broadcastMarketIntelligence(String familyId, Object payload) {
+        log.debug("Broadcasting market intelligence for {}", familyId);
+        messagingTemplate.convertAndSend("/topic/intelligence/" + familyId, payload);
+        messagingTemplate.convertAndSend("/topic/intelligence", payload);
+    }
+
+    /**
+     * Broadcast active setups for a specific family
+     */
+    public void broadcastActiveSetups(String familyId, Object payload) {
+        log.info("Broadcasting {} active setups for {}",
+            payload instanceof java.util.Collection ? ((java.util.Collection<?>) payload).size() : "N/A", familyId);
+        messagingTemplate.convertAndSend("/topic/setups/" + familyId, payload);
+        messagingTemplate.convertAndSend("/topic/setups", payload);
+    }
+
+    /**
+     * Broadcast opportunity forecast for a specific family
+     */
+    public void broadcastOpportunityForecast(String familyId, Object payload) {
+        log.debug("Broadcasting opportunity forecast for {}", familyId);
+        messagingTemplate.convertAndSend("/topic/forecast/" + familyId, payload);
+        messagingTemplate.convertAndSend("/topic/forecast", payload);
+    }
+
     /**
      * Register a subscription for a scripCode
      */

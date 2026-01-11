@@ -1,6 +1,60 @@
 import { create } from 'zustand'
 import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData, QuantScore } from '../types'
 
+// Market Intelligence types
+export interface MarketNarrative {
+  familyId: string
+  headline: string
+  oneLiner: string
+  posture: string
+  controlSide: string
+  events: unknown[]
+  timestamp?: number
+}
+
+export interface MarketIntelligence {
+  familyId: string
+  headline: string
+  oneLiner: string
+  posture: string
+  controlSide: string
+  isActionableMoment: boolean
+  hasReadySetups: boolean
+  hasHighConfidencePredictions: boolean
+  overallConfidence: number
+  recommendation?: {
+    action: string
+    direction: string
+    confidence: number
+    rationale: string
+  }
+  generatedAt?: string
+}
+
+export interface ActiveSetup {
+  setupId: string
+  familyId: string
+  setupType: string
+  direction: string
+  confidence: number
+  entryPrice?: number
+  stopLoss?: number
+  target?: number
+  status: string
+}
+
+export interface OpportunityForecast {
+  familyId: string
+  predictions: {
+    type: string
+    probability: number
+    targetPrice?: number
+    timeframe: string
+    rationale: string
+  }[]
+  generatedAt?: string
+}
+
 interface DashboardState {
   // Trading Mode
   tradingMode: 'DEMO' | 'LIVE'
@@ -48,6 +102,16 @@ interface DashboardState {
   quantScores: Map<string, QuantScore>
   updateQuantScore: (score: QuantScore) => void
   bulkUpdateQuantScores: (scores: QuantScore[]) => void
+
+  // Market Intelligence (keyed by familyId)
+  narratives: Map<string, MarketNarrative>
+  updateNarrative: (narrative: MarketNarrative) => void
+  intelligence: Map<string, MarketIntelligence>
+  updateIntelligence: (intel: MarketIntelligence) => void
+  activeSetups: Map<string, ActiveSetup[]>
+  updateActiveSetups: (familyId: string, setups: ActiveSetup[]) => void
+  forecasts: Map<string, OpportunityForecast>
+  updateForecast: (forecast: OpportunityForecast) => void
 
   // UI state
   selectedStock: string | null
@@ -146,6 +210,32 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     const newScores = new Map(state.quantScores)
     scores.forEach(score => newScores.set(score.scripCode, score))
     return { quantScores: newScores }
+  }),
+
+  // Market Intelligence
+  narratives: new Map(),
+  updateNarrative: (narrative) => set((state) => {
+    const newNarratives = new Map(state.narratives)
+    newNarratives.set(narrative.familyId, narrative)
+    return { narratives: newNarratives }
+  }),
+  intelligence: new Map(),
+  updateIntelligence: (intel) => set((state) => {
+    const newIntelligence = new Map(state.intelligence)
+    newIntelligence.set(intel.familyId, intel)
+    return { intelligence: newIntelligence }
+  }),
+  activeSetups: new Map(),
+  updateActiveSetups: (familyId, setups) => set((state) => {
+    const newSetups = new Map(state.activeSetups)
+    newSetups.set(familyId, setups)
+    return { activeSetups: newSetups }
+  }),
+  forecasts: new Map(),
+  updateForecast: (forecast) => set((state) => {
+    const newForecasts = new Map(state.forecasts)
+    newForecasts.set(forecast.familyId, forecast)
+    return { forecasts: newForecasts }
   }),
 
   // UI state

@@ -24,7 +24,11 @@ export function useWebSocket() {
     updateMasterArch,
     updateACL,
     updateFUDKII,
-    updateQuantScore
+    updateQuantScore,
+    updateNarrative,
+    updateIntelligence,
+    updateActiveSetups,
+    updateForecast
   } = useDashboardStore()
 
   const connect = useCallback(() => {
@@ -150,6 +154,54 @@ export function useWebSocket() {
             handleParseError('quant-scores', e)
           }
         })
+
+        // ======================== MARKET INTELLIGENCE SUBSCRIPTIONS ========================
+
+        // Subscribe to market narratives
+        client.subscribe('/topic/narrative', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateNarrative(data)
+          } catch (e) {
+            handleParseError('narrative', e)
+          }
+        })
+
+        // Subscribe to market intelligence
+        client.subscribe('/topic/intelligence', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateIntelligence(data)
+          } catch (e) {
+            handleParseError('intelligence', e)
+          }
+        })
+
+        // Subscribe to active setups
+        client.subscribe('/topic/setups', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            // Setups come as an array, extract familyId from first element
+            if (Array.isArray(data) && data.length > 0) {
+              const familyId = data[0].familyId || data[0].scripCode
+              if (familyId) {
+                updateActiveSetups(familyId, data)
+              }
+            }
+          } catch (e) {
+            handleParseError('setups', e)
+          }
+        })
+
+        // Subscribe to opportunity forecasts
+        client.subscribe('/topic/forecast', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            updateForecast(data)
+          } catch (e) {
+            handleParseError('forecast', e)
+          }
+        })
       },
 
       onStompError: (frame) => {
@@ -182,7 +234,7 @@ export function useWebSocket() {
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {
