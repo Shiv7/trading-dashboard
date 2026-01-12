@@ -63,30 +63,30 @@ export default function PerformancePage() {
       {/* Key Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
         <div className="card text-center">
-          <div className="text-3xl font-bold text-white">{metrics.totalTrades}</div>
+          <div className="text-3xl font-bold text-white">{metrics.totalTrades ?? 0}</div>
           <div className="text-sm text-slate-400">Total Trades</div>
         </div>
         <div className="card text-center">
-          <div className={`text-3xl font-bold ${metrics.winRate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {(metrics.winRate * 100).toFixed(1)}%
+          <div className={`text-3xl font-bold ${(metrics.winRate ?? 0) >= 0.5 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {((metrics.winRate ?? 0) * 100).toFixed(1)}%
           </div>
           <div className="text-sm text-slate-400">Win Rate</div>
         </div>
         <div className="card text-center">
-          <div className={`text-3xl font-bold ${metrics.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {metrics.totalPnl >= 0 ? '+' : ''}₹{(metrics.totalPnl / 1000).toFixed(1)}K
+          <div className={`text-3xl font-bold ${(metrics.totalPnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {(metrics.totalPnl ?? 0) >= 0 ? '+' : ''}₹{((metrics.totalPnl ?? 0) / 1000).toFixed(1)}K
           </div>
           <div className="text-sm text-slate-400">Total P&L</div>
         </div>
         <div className="card text-center">
-          <div className={`text-3xl font-bold ${metrics.avgRMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {metrics.avgRMultiple >= 0 ? '+' : ''}{metrics.avgRMultiple.toFixed(2)}R
+          <div className={`text-3xl font-bold ${(metrics.avgRMultiple ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {(metrics.avgRMultiple ?? 0) >= 0 ? '+' : ''}{(metrics.avgRMultiple ?? 0).toFixed(2)}R
           </div>
           <div className="text-sm text-slate-400">Avg R-Multiple</div>
         </div>
         <div className="card text-center">
-          <div className={`text-3xl font-bold ${metrics.profitFactor >= 1 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {metrics.profitFactor.toFixed(2)}
+          <div className={`text-3xl font-bold ${(metrics.profitFactor ?? 0) >= 1 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {(metrics.profitFactor ?? 0).toFixed(2)}
           </div>
           <div className="text-sm text-slate-400">Profit Factor</div>
         </div>
@@ -111,12 +111,12 @@ export default function PerformancePage() {
           <div className="h-4 rounded-full bg-slate-700 overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400"
-              style={{ width: `${metrics.winRate * 100}%` }}
+              style={{ width: `${(metrics.winRate ?? 0) * 100}%` }}
             />
           </div>
           <div className="flex justify-between mt-2 text-sm text-slate-400">
-            <span>{(metrics.winRate * 100).toFixed(1)}% wins</span>
-            <span>{((1 - metrics.winRate) * 100).toFixed(1)}% losses</span>
+            <span>{((metrics.winRate ?? 0) * 100).toFixed(1)}% wins</span>
+            <span>{((1 - (metrics.winRate ?? 0)) * 100).toFixed(1)}% losses</span>
           </div>
         </div>
 
@@ -128,24 +128,24 @@ export default function PerformancePage() {
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Max Drawdown</span>
                 <span className="text-red-400 font-bold">
-                  -₹{Math.abs(metrics.drawdown.maxDrawdown).toFixed(0)}
+                  -₹{Math.abs(metrics.drawdown.maxDrawdown ?? 0).toFixed(0)}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Max Drawdown %</span>
                 <span className="text-red-400 font-bold">
-                  -{metrics.drawdown.maxDrawdownPercent.toFixed(1)}%
+                  -{(metrics.drawdown.maxDrawdownPercent ?? 0).toFixed(1)}%
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Current Drawdown</span>
-                <span className={`font-bold ${metrics.drawdown.currentDrawdown < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                  {metrics.drawdown.currentDrawdown >= 0 ? '+' : ''}₹{metrics.drawdown.currentDrawdown.toFixed(0)}
+                <span className={`font-bold ${(metrics.drawdown.currentDrawdown ?? 0) < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {(metrics.drawdown.currentDrawdown ?? 0) >= 0 ? '+' : ''}₹{(metrics.drawdown.currentDrawdown ?? 0).toFixed(0)}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Recovery Period</span>
-                <span className="text-white">{metrics.drawdown.recoveryPeriod} trades</span>
+                <span className="text-white">{metrics.drawdown.recoveryPeriod ?? 0} trades</span>
               </div>
             </div>
           )}
@@ -177,7 +177,7 @@ export default function PerformancePage() {
             </div>
             <div className="bg-slate-700/50 rounded-lg p-4 text-center">
               <div className="text-2xl font-bold text-white">
-                {metrics.streaks.avgWinStreak.toFixed(1)} / {metrics.streaks.avgLossStreak.toFixed(1)}
+                {(metrics.streaks.avgWinStreak ?? 0).toFixed(1)} / {(metrics.streaks.avgLossStreak ?? 0).toFixed(1)}
               </div>
               <div className="text-sm text-slate-400">Avg Win/Loss Streak</div>
             </div>
@@ -223,16 +223,16 @@ export default function PerformancePage() {
                   <td className="py-2 text-white">
                     {'date' in row ? row.date : 'weekStart' in row ? row.weekStart : (row as { month: string }).month}
                   </td>
-                  <td className="text-right py-2 text-white">{row.trades}</td>
-                  <td className="text-right py-2 text-emerald-400">{row.wins}</td>
-                  <td className="text-right py-2 text-red-400">{row.losses}</td>
+                  <td className="text-right py-2 text-white">{row.trades ?? 0}</td>
+                  <td className="text-right py-2 text-emerald-400">{row.wins ?? 0}</td>
+                  <td className="text-right py-2 text-red-400">{row.losses ?? 0}</td>
                   <td className="text-right py-2">
-                    <span className={row.winRate >= 0.5 ? 'text-emerald-400' : 'text-red-400'}>
-                      {(row.winRate * 100).toFixed(0)}%
+                    <span className={(row.winRate ?? 0) >= 0.5 ? 'text-emerald-400' : 'text-red-400'}>
+                      {((row.winRate ?? 0) * 100).toFixed(0)}%
                     </span>
                   </td>
-                  <td className={`text-right py-2 font-medium ${row.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {row.pnl >= 0 ? '+' : ''}₹{row.pnl.toFixed(0)}
+                  <td className={`text-right py-2 font-medium ${(row.pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {(row.pnl ?? 0) >= 0 ? '+' : ''}₹{(row.pnl ?? 0).toFixed(0)}
                   </td>
                 </tr>
               ))}
@@ -250,18 +250,18 @@ export default function PerformancePage() {
               <div key={source} className="bg-slate-700/50 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-medium text-white">{source}</span>
-                  <span className={`text-sm ${stats.winRate >= 0.5 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {(stats.winRate * 100).toFixed(0)}% win
+                  <span className={`text-sm ${(stats.winRate ?? 0) >= 0.5 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {((stats.winRate ?? 0) * 100).toFixed(0)}% win
                   </span>
                 </div>
                 <div className="text-sm text-slate-400">
-                  {stats.trades} trades | {stats.wins}W / {stats.losses}L
+                  {stats.trades ?? 0} trades | {stats.wins ?? 0}W / {stats.losses ?? 0}L
                 </div>
-                <div className={`text-lg font-bold mt-2 ${stats.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {stats.totalPnl >= 0 ? '+' : ''}₹{stats.totalPnl.toFixed(0)}
+                <div className={`text-lg font-bold mt-2 ${(stats.totalPnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {(stats.totalPnl ?? 0) >= 0 ? '+' : ''}₹{(stats.totalPnl ?? 0).toFixed(0)}
                 </div>
                 <div className="text-xs text-slate-500">
-                  Avg R: {stats.avgRMultiple >= 0 ? '+' : ''}{stats.avgRMultiple.toFixed(2)}R
+                  Avg R: {(stats.avgRMultiple ?? 0) >= 0 ? '+' : ''}{(stats.avgRMultiple ?? 0).toFixed(2)}R
                 </div>
               </div>
             ))}
