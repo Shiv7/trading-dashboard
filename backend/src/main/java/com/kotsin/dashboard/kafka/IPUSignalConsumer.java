@@ -49,8 +49,8 @@ public class IPUSignalConsumer {
             }
 
             IPUSignalDTO dto = parseIPUSignal(root);
-            log.info("📊 IPU Signal: {} (IPU={:.2f}, direction={}, xFactor={})", 
-                scripCode, dto.getIpuFinalScore(), dto.getIpuDirection(), dto.getHasXFactor());
+            log.info("IPU Signal: {} (IPU={}, direction={}, xFactor={})",
+                scripCode, String.format("%.2f", dto.getIpuFinalScore()), dto.getIpuDirection(), dto.getHasXFactor());
             
             // Cache latest
             latestIPUSignals.put(scripCode, dto);

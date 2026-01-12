@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useDashboardStore, MarketNarrative, MarketIntelligence } from '../store/dashboardStore'
 import { initialStateApi } from '../services/api'
 
@@ -14,6 +14,7 @@ export function useInitialState() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [dataLoaded, setDataLoaded] = useState(false)
+  const loadedRef = useRef(false)
 
   const {
     updateScore,
@@ -25,6 +26,12 @@ export function useInitialState() {
   } = useDashboardStore()
 
   const loadInitialState = useCallback(async () => {
+    // Prevent double loading
+    if (loadedRef.current) {
+      return
+    }
+    loadedRef.current = true
+
     setLoading(true)
     setError(null)
 
@@ -97,9 +104,15 @@ export function useInitialState() {
     } finally {
       setLoading(false)
     }
-  }, [updateScore, updateQuantScore, bulkUpdateQuantScores, addSignal, updateNarrative, updateIntelligence])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
+    loadInitialState()
+  }, [loadInitialState])
+
+  const refresh = useCallback(() => {
+    loadedRef.current = false
     loadInitialState()
   }, [loadInitialState])
 
@@ -107,7 +120,7 @@ export function useInitialState() {
     loading,
     error,
     dataLoaded,
-    refresh: loadInitialState,
+    refresh,
   }
 }
 

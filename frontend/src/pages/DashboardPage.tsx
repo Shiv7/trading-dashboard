@@ -140,8 +140,8 @@ export default function DashboardPage() {
 
             {/* Opportunities Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
-              {displayScores.slice(0, 20).map(score => (
-                <OpportunityCard key={score.scripCode} score={score} />
+              {displayScores.slice(0, 20).map((score, index) => (
+                <OpportunityCard key={`${score.scripCode}-${index}`} score={score} />
               ))}
               {displayScores.length === 0 && (
                 <div className="col-span-2 text-center py-12 text-slate-500">
@@ -381,10 +381,10 @@ function OpportunityCard({ score }: { score: FamilyScore }) {
           </div>
         </div>
         <div className="text-right">
-          <div className={`text-lg font-bold ${score.overallScore >= 7 ? 'text-emerald-400' :
-              score.overallScore >= 5 ? 'text-amber-400' : 'text-slate-400'
+          <div className={`text-lg font-bold ${(score.overallScore ?? 0) >= 7 ? 'text-emerald-400' :
+              (score.overallScore ?? 0) >= 5 ? 'text-amber-400' : 'text-slate-400'
             }`}>
-            {score.overallScore.toFixed(1)}
+            {(score.overallScore ?? 0).toFixed(1)}
           </div>
           <div className="text-xs text-slate-400">Score</div>
         </div>
@@ -392,8 +392,8 @@ function OpportunityCard({ score }: { score: FamilyScore }) {
 
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
-          <span className="text-slate-400">VCP: <span className="text-white">{(score.vcpCombinedScore * 100).toFixed(0)}%</span></span>
-          <span className="text-slate-400">IPU: <span className="text-white">{(score.ipuFinalScore * 100).toFixed(0)}%</span></span>
+          <span className="text-slate-400">VCP: <span className="text-white">{((score.vcpCombinedScore ?? 0) * 100).toFixed(0)}%</span></span>
+          <span className="text-slate-400">IPU: <span className="text-white">{((score.ipuFinalScore ?? 0) * 100).toFixed(0)}%</span></span>
           {score.ipuXfactor && <span className="text-yellow-400">⚡</span>}
         </div>
         <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${score.securityAligned

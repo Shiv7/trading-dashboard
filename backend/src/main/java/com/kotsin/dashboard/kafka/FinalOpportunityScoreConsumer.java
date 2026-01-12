@@ -68,12 +68,12 @@ public class FinalOpportunityScoreConsumer {
             
             // Log based on decision
             if (dto.isActionable()) {
-                log.info("🎯 MASTER ARCH SIGNAL | {} ({}) | decision={} | score={:.3f} | conf={:.2f} | lots={} | hedge={}",
+                log.info("MASTER ARCH SIGNAL | {} ({}) | decision={} | score={} | conf={} | lots={} | hedge={}",
                         dto.getCompanyName(),
                         scripCode,
                         dto.getDecision(),
-                        dto.getFinalScore(),
-                        dto.getDirectionConfidence(),
+                        String.format("%.3f", dto.getFinalScore()),
+                        String.format("%.2f", dto.getDirectionConfidence()),
                         dto.getRecommendedLots(),
                         dto.isHedgeRecommended() ? "YES" : "NO");
                 
@@ -92,10 +92,10 @@ public class FinalOpportunityScoreConsumer {
                                 dto.getDirectionConfidence() * 100,
                                 dto.getRecommendedLots()));
             } else {
-                log.debug("[MASTER ARCH] {} | {} | score={:.3f}",
+                log.debug("[MASTER ARCH] {} | {} | score={}",
                         dto.getCompanyName(),
                         dto.getDecision(),
-                        dto.getFinalScore());
+                        String.format("%.3f", dto.getFinalScore()));
             }
 
             // Broadcast to WebSocket (all scores, not just actionable)

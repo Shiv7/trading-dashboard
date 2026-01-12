@@ -157,9 +157,9 @@ public class ProfitLossConsumer {
             trade.setCurrentPnl(profitLoss);
         }
 
-        String emoji = profitLoss >= 0 ? "💰" : "💸";
-        log.info("{} [P&L] TRADE_EXIT: {} @ ₹{} | P&L: ₹{:.2f} | Reason: {}",
-                emoji, companyName, exitPrice, profitLoss, exitReason);
+        String emoji = profitLoss >= 0 ? "+" : "-";
+        log.info("[P&L] TRADE_EXIT: {} {} @ {} | P&L: {} | Reason: {}",
+                emoji, companyName, String.format("%.2f", exitPrice), String.format("%.2f", profitLoss), exitReason);
 
         // Broadcast to WebSocket
         broadcastTradeEvent("EXIT", trade, profitLoss);
@@ -184,8 +184,8 @@ public class ProfitLossConsumer {
         double oldRR = root.path("oldRiskReward").asDouble(0);
         double newRR = root.path("newRiskReward").asDouble(0);
 
-        log.info("🔄 [P&L] TRADE_REPLACEMENT: {} (R:R {:.2f}) → {} (R:R {:.2f})",
-                oldScripCode, oldRR, newScripCode, newRR);
+        log.info("[P&L] TRADE_REPLACEMENT: {} (R:R {}) -> {} (R:R {})",
+                oldScripCode, String.format("%.2f", oldRR), newScripCode, String.format("%.2f", newRR));
 
         // Remove old trade
         activeTrades.remove(oldScripCode);
@@ -203,8 +203,8 @@ public class ProfitLossConsumer {
         double totalProfitLoss = root.path("totalProfitLoss").asDouble(0);
         double roi = root.path("roi").asDouble(0);
 
-        log.info("📊 [P&L] PORTFOLIO_UPDATE: Capital=₹{:.2f}, P&L=₹{:.2f}, ROI={:.2f}%",
-                currentCapital, totalProfitLoss, roi);
+        log.info("[P&L] PORTFOLIO_UPDATE: Capital={}, P&L={}, ROI={}%",
+                String.format("%.2f", currentCapital), String.format("%.2f", totalProfitLoss), String.format("%.2f", roi));
 
         // Update real-time totals
         realtimePnl.set(totalProfitLoss);

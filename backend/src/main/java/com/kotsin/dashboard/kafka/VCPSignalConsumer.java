@@ -52,8 +52,8 @@ public class VCPSignalConsumer {
             }
 
             VCPSignalDTO dto = parseVCPSignal(root);
-            log.info("📈 VCP Signal: {} (score={:.1f}, clusters={}, runway={:.2f})", 
-                scripCode, dto.getVcpCombinedScore(), dto.getTotalClusters(), dto.getRunwayScore());
+            log.info("VCP Signal: {} (score={}, clusters={}, runway={})",
+                scripCode, String.format("%.1f", dto.getVcpCombinedScore()), dto.getTotalClusters(), String.format("%.2f", dto.getRunwayScore()));
             
             // Cache latest
             latestVCPSignals.put(scripCode, dto);

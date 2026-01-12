@@ -85,8 +85,8 @@ public class MarketIntelligenceConsumer {
             boolean hasSetups = root.path("hasReadySetups").asBoolean(false);
             double confidence = root.path("overallConfidence").asDouble(0);
 
-            log.info("Received market-intelligence for {} | {} | {} | actionable={} | hasSetups={} | conf={:.1f}%",
-                familyId, headline, posture, isActionable, hasSetups, confidence * 100);
+            log.info("Received market-intelligence for {} | {} | {} | actionable={} | hasSetups={} | conf={}%",
+                familyId, headline, posture, isActionable, hasSetups, String.format("%.1f", confidence * 100));
 
             // Cache and broadcast
             latestIntelligence.put(familyId, root);

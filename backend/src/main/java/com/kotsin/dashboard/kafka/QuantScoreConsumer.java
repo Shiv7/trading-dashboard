@@ -45,8 +45,8 @@ public class QuantScoreConsumer {
 
             QuantScoreDTO dto = parseQuantScore(root);
 
-            log.info("Received quant-score for {} (score={:.1f}, label={}, actionable={})",
-                familyId, dto.getQuantScore(), dto.getQuantLabel(), dto.isActionable());
+            log.info("Received quant-score for {} (score={}, timeframe={}, label={}, actionable={})",
+                familyId, String.format("%.1f", dto.getQuantScore()), dto.getTimeframe(), dto.getQuantLabel(), dto.isActionable());
 
             // Cache latest score
             latestScores.put(familyId, dto);
