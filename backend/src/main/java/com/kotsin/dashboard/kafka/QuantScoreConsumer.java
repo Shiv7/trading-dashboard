@@ -13,11 +13,16 @@ import org.springframework.stereotype.Component;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.Collections;
 
 /**
  * Kafka consumer for quant-scores topic.
  * Receives QuantScore from StreamingCandle and broadcasts to WebSocket clients.
  * Maintains sorted cache for REST API endpoints.
+ *
+ * FIX: Changed cache structure to support multi-timeframe data.
+ * BEFORE: Map<familyId, score> - timeframes would overwrite each other!
+ * AFTER: Map<familyId, Map<timeframe, score>> - each timeframe preserved separately
  */
 @Component
 @Slf4j
@@ -29,8 +34,13 @@ public class QuantScoreConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    // Cache for latest quant scores
-    private final Map<String, QuantScoreDTO> latestScores = new ConcurrentHashMap<>();
+    // FIX: Multi-timeframe cache structure: familyId -> (timeframe -> score)
+    // BEFORE: Map<String, QuantScoreDTO> latestScores - WRONG! Timeframes overwrite each other
+    // AFTER: Nested map preserves all timeframe data separately
+    private final Map<String, Map<String, QuantScoreDTO>> latestScores = new ConcurrentHashMap<>();
+
+    // Legacy flat cache for backward-compatible API (returns latest timeframe only)
+    private final Map<String, QuantScoreDTO> latestScoreFlat = new ConcurrentHashMap<>();
 
     @KafkaListener(topics = "quant-scores", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onQuantScore(String payload) {
@@ -44,14 +54,21 @@ public class QuantScoreConsumer {
             }
 
             QuantScoreDTO dto = parseQuantScore(root);
+            String timeframe = dto.getTimeframe() != null ? dto.getTimeframe() : "1m";
 
             log.info("Received quant-score for {} (score={}, timeframe={}, label={}, actionable={})",
-                familyId, String.format("%.1f", dto.getQuantScore()), dto.getTimeframe(), dto.getQuantLabel(), dto.isActionable());
+                familyId, String.format("%.1f", dto.getQuantScore()), timeframe, dto.getQuantLabel(), dto.isActionable());
 
-            // Cache latest score
-            latestScores.put(familyId, dto);
+            // FIX: Cache score by familyId AND timeframe (not just familyId)
+            // BEFORE: latestScores.put(familyId, dto) - WRONG! Overwrites across timeframes
+            // AFTER: Nested map preserves each timeframe separately
+            latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
+                    .put(timeframe, dto);
 
-            // Broadcast to WebSocket
+            // Also update flat cache for backward-compatible API
+            latestScoreFlat.put(familyId, dto);
+
+            // Broadcast to WebSocket (frontend handles timeframe via nested Map in Zustand store)
             sessionManager.broadcastQuantScore(familyId, dto);
 
         } catch (Exception e) {
@@ -60,17 +77,43 @@ public class QuantScoreConsumer {
     }
 
     /**
-     * Get latest quant score for a scripCode
+     * Get latest quant score for a scripCode (returns most recent timeframe)
      */
     public QuantScoreDTO getLatestScore(String scripCode) {
-        return latestScores.get(scripCode);
+        return latestScoreFlat.get(scripCode);
     }
 
     /**
-     * Get all quant scores sorted by score descending
+     * FIX: Get quant score for a specific scripCode and timeframe
+     */
+    public QuantScoreDTO getScore(String scripCode, String timeframe) {
+        Map<String, QuantScoreDTO> tfScores = latestScores.get(scripCode);
+        if (tfScores == null) return null;
+        return tfScores.get(timeframe);
+    }
+
+    /**
+     * FIX: Get all timeframe scores for a specific scripCode
+     */
+    public Map<String, QuantScoreDTO> getAllTimeframeScores(String scripCode) {
+        return latestScores.getOrDefault(scripCode, Collections.emptyMap());
+    }
+
+    /**
+     * Get all quant scores sorted by score descending (uses latest timeframe per scripCode)
      */
     public List<QuantScoreDTO> getAllScoresSorted() {
+        return latestScoreFlat.values().stream()
+                .sorted((a, b) -> Double.compare(b.getQuantScore(), a.getQuantScore()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * FIX: Get all scores for all timeframes, flattened and sorted
+     */
+    public List<QuantScoreDTO> getAllScoresAllTimeframes() {
         return latestScores.values().stream()
+                .flatMap(tfMap -> tfMap.values().stream())
                 .sorted((a, b) -> Double.compare(b.getQuantScore(), a.getQuantScore()))
                 .collect(Collectors.toList());
     }
@@ -79,7 +122,7 @@ public class QuantScoreConsumer {
      * Get top N actionable scores
      */
     public List<QuantScoreDTO> getTopActionableScores(int limit) {
-        return latestScores.values().stream()
+        return latestScoreFlat.values().stream()
                 .filter(QuantScoreDTO::isActionable)
                 .sorted((a, b) -> Double.compare(b.getQuantScore(), a.getQuantScore()))
                 .limit(limit)
@@ -90,10 +133,21 @@ public class QuantScoreConsumer {
      * Get scores filtered by direction
      */
     public List<QuantScoreDTO> getScoresByDirection(String direction) {
-        return latestScores.values().stream()
+        return latestScoreFlat.values().stream()
                 .filter(s -> direction.equalsIgnoreCase(s.getDirection()))
                 .sorted((a, b) -> Double.compare(b.getQuantScore(), a.getQuantScore()))
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * FIX: Get count of scores per timeframe for monitoring
+     */
+    public Map<String, Long> getScoreCountByTimeframe() {
+        return latestScores.values().stream()
+                .flatMap(tfMap -> tfMap.values().stream())
+                .collect(Collectors.groupingBy(
+                        s -> s.getTimeframe() != null ? s.getTimeframe() : "unknown",
+                        Collectors.counting()));
     }
 
     private QuantScoreDTO parseQuantScore(JsonNode root) {
