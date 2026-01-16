@@ -7,7 +7,7 @@ import type {
 } from '../types'
 
 // Hardcoded production API URL
-const API_BASE = 'http://13.203.60.173:8085/api'
+const API_BASE = 'http://3.110.228.120:8085/api'
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(`${API_BASE}${url}`)

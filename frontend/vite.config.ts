@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     port: 3001,
     host: '0.0.0.0',
+    allowedHosts: ['sinkot.in', 'localhost', '127.0.0.1', '3.110.228.120'],
     proxy: {
       '/api': {
         target: 'http://localhost:8085',

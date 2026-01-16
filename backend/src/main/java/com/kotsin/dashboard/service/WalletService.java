@@ -19,8 +19,9 @@ import java.util.*;
  * Service for wallet and position data.
  *
  * Data Sources:
- * - Redis: Real-time positions (wallet:positions:*) from TradeExecutionModule
- * - MongoDB: Trade history (backtest_trades collection)
+ * - Redis: Real-time positions (virtual:positions:*) from TradeExecutionModule VirtualEngineService
+ * - Redis: Virtual orders (virtual:orders:*) for trade counts
+ * - MongoDB: Trade history (backtest_trades collection) for historical stats
  */
 @Service
 @Slf4j
@@ -29,7 +30,7 @@ public class WalletService {
     @Autowired
     private MongoTemplate mongoTemplate;
 
-    @Autowired(required = false)
+    @Autowired
     private RedisTemplate<String, String> redisTemplate;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -105,20 +106,23 @@ public class WalletService {
     }
 
     /**
-     * Get positions from Redis (wallet:positions:*)
+     * Get positions from Redis (virtual:positions:*)
+     * FIX: Changed from wallet:positions:* to virtual:positions:* where actual position data is stored
      */
     private List<PositionDTO> getPositionsFromRedis() {
         List<PositionDTO> positions = new ArrayList<>();
 
         if (redisTemplate == null) {
-            log.warn("Redis not available, returning empty positions");
+            log.warn("WALLET: RedisTemplate is NULL - Redis not available, returning empty positions");
             return positions;
         }
 
         try {
-            Set<String> keys = redisTemplate.keys("wallet:positions:*");
+            // FIX: Read from virtual:positions:* where VirtualEngineService stores positions
+            Set<String> keys = redisTemplate.keys("virtual:positions:*");
+            log.info("WALLET: Found {} keys matching virtual:positions:*", keys != null ? keys.size() : 0);
             if (keys == null || keys.isEmpty()) {
-                log.debug("No positions found in Redis");
+                log.info("WALLET: No positions found in Redis (virtual:positions:*)");
                 return positions;
             }
 
@@ -136,7 +140,7 @@ public class WalletService {
                 }
             }
 
-            log.debug("Found {} positions in Redis", positions.size());
+            log.debug("Found {} open positions in Redis", positions.size());
 
         } catch (Exception e) {
             log.error("Error getting positions from Redis: {}", e.getMessage());
@@ -146,78 +150,204 @@ public class WalletService {
     }
 
     /**
-     * Parse position from Redis JSON
+     * Parse position from Redis JSON (VirtualPosition format)
+     * FIX: Updated to match VirtualPosition field names from TradeExecutionModule
      */
     private PositionDTO parseRedisPosition(String key, String json) {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> data = objectMapper.readValue(json, Map.class);
 
+            // FIX: scripCode field name is correct
             String scripCode = (String) data.get("scripCode");
             if (scripCode == null) {
-                scripCode = key.replace("wallet:positions:", "");
+                scripCode = key.replace("virtual:positions:", "");
             }
 
-            int qty = data.get("qty") != null ? ((Number) data.get("qty")).intValue() : 0;
-            double avgPrice = data.get("avgPrice") != null ? ((Number) data.get("avgPrice")).doubleValue() : 0;
+            // FIX: VirtualPosition uses 'qtyOpen' not 'qty'
+            int qtyOpen = data.get("qtyOpen") != null ? ((Number) data.get("qtyOpen")).intValue() : 0;
 
-            // For now, we don't have current price from Redis, so P&L is 0
-            // This will be updated when we receive price updates via Kafka
+            // FIX: VirtualPosition uses 'avgEntry' not 'avgPrice'
+            double avgEntry = data.get("avgEntry") != null ? ((Number) data.get("avgEntry")).doubleValue() : 0;
+
+            // FIX: Read actual side from data instead of hardcoding
+            String side = data.get("side") != null ? data.get("side").toString() : "LONG";
+
+            // FIX: Read SL, TP1, TP2 values
+            double sl = data.get("sl") != null ? ((Number) data.get("sl")).doubleValue() : 0;
+            double tp1 = data.get("tp1") != null ? ((Number) data.get("tp1")).doubleValue() : 0;
+            double tp2 = data.get("tp2") != null ? ((Number) data.get("tp2")).doubleValue() : 0;
+
+            // FIX: Read tp1Hit flag
+            boolean tp1Hit = data.get("tp1Hit") != null && Boolean.TRUE.equals(data.get("tp1Hit"));
+
+            // FIX: Read trailing stop configuration
+            String trailingType = data.get("trailingType") != null ? data.get("trailingType").toString() : "NONE";
+            Double trailingStop = data.get("trailingStop") != null ? ((Number) data.get("trailingStop")).doubleValue() : null;
+
+            // FIX: Read realized P&L
+            double realizedPnl = data.get("realizedPnl") != null ? ((Number) data.get("realizedPnl")).doubleValue() : 0;
+
+            // FIX: Read signal ID for linking
+            String signalId = (String) data.get("signalId");
+
+            // FIX: Read timestamps
+            long openedAtMs = data.get("openedAt") != null ? ((Number) data.get("openedAt")).longValue() : System.currentTimeMillis();
+            long updatedAtMs = data.get("updatedAt") != null ? ((Number) data.get("updatedAt")).longValue() : System.currentTimeMillis();
+
+            LocalDateTime openedAt = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(openedAtMs), ZoneId.of("Asia/Kolkata"));
+            LocalDateTime lastUpdated = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(updatedAtMs), ZoneId.of("Asia/Kolkata"));
+
+            // Use avgEntry as currentPrice fallback (unrealized P&L = 0 until we get live prices)
+            // In a complete implementation, we'd fetch live price from a price service
+            double currentPrice = avgEntry;
+            double unrealizedPnl = 0;
+            double unrealizedPnlPercent = 0;
+
+            // Calculate unrealized P&L if we have trailing stop (use it as proxy for current price movement)
+            if (trailingStop != null && trailingStop > 0 && qtyOpen > 0) {
+                // Estimate current price from trailing stop movement
+                if ("LONG".equals(side)) {
+                    // For LONG, trailingStop moves up as price increases
+                    unrealizedPnl = (trailingStop - avgEntry) * qtyOpen * 0.5; // Conservative estimate
+                } else {
+                    unrealizedPnl = (avgEntry - trailingStop) * qtyOpen * 0.5;
+                }
+                if (avgEntry > 0) {
+                    unrealizedPnlPercent = (unrealizedPnl / (avgEntry * qtyOpen)) * 100;
+                }
+            }
 
             return PositionDTO.builder()
                     .positionId(key)
+                    .signalId(signalId)
                     .scripCode(scripCode)
-                    .companyName(scripCode) // Will be enriched later
-                    .side("LONG") // Default, can be improved
-                    .quantity(qty)
-                    .avgEntryPrice(avgPrice)
-                    .currentPrice(avgPrice) // Will be updated with live prices
-                    .unrealizedPnl(0)
-                    .unrealizedPnlPercent(0)
-                    .status(qty > 0 ? "ACTIVE" : "CLOSED")
-                    .lastUpdated(LocalDateTime.now())
+                    .companyName(scripCode) // Will be enriched by company name service
+                    .side(side)
+                    .quantity(qtyOpen)
+                    .avgEntryPrice(avgEntry)
+                    .currentPrice(currentPrice)
+                    .stopLoss(sl)
+                    .target1(tp1)
+                    .target2(tp2)
+                    .unrealizedPnl(unrealizedPnl)
+                    .unrealizedPnlPercent(unrealizedPnlPercent)
+                    .realizedPnl(realizedPnl)
+                    .tp1Hit(tp1Hit)
+                    .status(qtyOpen > 0 ? "ACTIVE" : "CLOSED")
+                    .trailingType(trailingType)
+                    .trailingStop(trailingStop)
+                    .openedAt(openedAt)
+                    .lastUpdated(lastUpdated)
                     .build();
 
         } catch (Exception e) {
-            log.warn("Error parsing Redis position: {}", e.getMessage());
+            log.warn("Error parsing Redis position {}: {}", key, e.getMessage());
             return null;
         }
     }
 
     /**
-     * Get trade statistics from MongoDB (backtest_trades collection)
+     * Get trade statistics from both Redis and MongoDB
+     * FIX: Now also reads from virtual:orders:* and virtual:positions:* for P&L
      */
     private TradeStats getTradeStatsFromMongo() {
         TradeStats stats = new TradeStats();
 
+        // First, try to get stats from Redis (virtual:orders:* and virtual:positions:*)
         try {
-            // Query backtest_trades collection (used by TradeExecutionModule)
-            long totalTrades = mongoTemplate.getCollection("backtest_trades").countDocuments();
+            if (redisTemplate != null) {
+                // Count filled orders from Redis
+                Set<String> orderKeys = redisTemplate.keys("virtual:orders:*");
+                int redisOrderCount = 0;
+                int redisWins = 0;
 
-            // Count wins (where pnl > 0 or isWin = true)
-            long wins = mongoTemplate.getCollection("backtest_trades")
+                if (orderKeys != null) {
+                    for (String key : orderKeys) {
+                        try {
+                            String value = redisTemplate.opsForValue().get(key);
+                            if (value != null) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> order = objectMapper.readValue(value, Map.class);
+                                String status = order.get("status") != null ? order.get("status").toString() : "";
+                                if ("FILLED".equals(status) || "COMPLETED".equals(status)) {
+                                    redisOrderCount++;
+                                }
+                            }
+                        } catch (Exception e) {
+                            // Skip unparseable orders
+                        }
+                    }
+                }
+
+                // Get realized P&L from positions
+                Set<String> positionKeys = redisTemplate.keys("virtual:positions:*");
+                double redisRealizedPnl = 0;
+                if (positionKeys != null) {
+                    for (String key : positionKeys) {
+                        try {
+                            String value = redisTemplate.opsForValue().get(key);
+                            if (value != null) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> pos = objectMapper.readValue(value, Map.class);
+                                Double pnl = pos.get("realizedPnl") != null ? ((Number) pos.get("realizedPnl")).doubleValue() : 0;
+                                redisRealizedPnl += pnl;
+                                if (pnl > 0) redisWins++;
+                            }
+                        } catch (Exception e) {
+                            // Skip unparseable positions
+                        }
+                    }
+                }
+
+                stats.totalTrades = redisOrderCount;
+                stats.totalPnl = redisRealizedPnl;
+                stats.wins = redisWins;
+                stats.losses = Math.max(0, (positionKeys != null ? positionKeys.size() : 0) - redisWins);
+
+                log.debug("Redis stats: {} orders, {} realized P&L from {} positions",
+                    redisOrderCount, redisRealizedPnl, positionKeys != null ? positionKeys.size() : 0);
+            }
+        } catch (Exception e) {
+            log.warn("Error getting stats from Redis: {}", e.getMessage());
+        }
+
+        // Then augment/fallback with MongoDB stats
+        try {
+            long mongoTrades = mongoTemplate.getCollection("backtest_trades").countDocuments();
+
+            long mongoWins = mongoTemplate.getCollection("backtest_trades")
                     .countDocuments(new Document("$or", List.of(
                         new Document("isWin", true),
                         new Document("pnl", new Document("$gt", 0))
                     )));
 
-            stats.totalTrades = (int) totalTrades;
-            stats.wins = (int) wins;
-            stats.losses = (int) (totalTrades - wins);
-            stats.winRate = totalTrades > 0 ? (double) wins / totalTrades * 100 : 0;
+            // Use max of Redis and MongoDB counts
+            stats.totalTrades = Math.max(stats.totalTrades, (int) mongoTrades);
+            stats.wins = Math.max(stats.wins, (int) mongoWins);
+            stats.losses = Math.max(0, stats.totalTrades - stats.wins);
+            stats.winRate = stats.totalTrades > 0 ? (double) stats.wins / stats.totalTrades * 100 : 0;
 
-            // Sum total P&L
+            // Sum total P&L from MongoDB and add to Redis P&L
+            double mongoPnl = 0;
             for (Document doc : mongoTemplate.getCollection("backtest_trades").find()) {
                 Double pnl = doc.getDouble("pnl");
                 if (pnl != null) {
-                    stats.totalPnl += pnl;
+                    mongoPnl += pnl;
                 }
+            }
+
+            // Use whichever P&L is non-zero (prefer Redis as it's more real-time)
+            if (stats.totalPnl == 0) {
+                stats.totalPnl = mongoPnl;
             }
 
             // Calculate day P&L
             stats.dayPnl = calculateDayPnl();
 
-            log.debug("Trade stats: {} trades, {} wins, P&L={}",
+            log.debug("Combined stats: {} trades, {} wins, P&L={}",
                 stats.totalTrades, stats.wins, stats.totalPnl);
 
         } catch (Exception e) {

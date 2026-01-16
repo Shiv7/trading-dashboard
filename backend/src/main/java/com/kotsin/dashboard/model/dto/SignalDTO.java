@@ -138,6 +138,112 @@ public class SignalDTO {
     /** Is at confluence zone */
     private Boolean atConfluenceZone;
 
+    // ========== SESSION CONTEXT (Context-Aware Enhancement) ==========
+
+    /** Position in session range (0-100) */
+    private Double sessionPosition;
+
+    /** Session position description (AT_SESSION_LOW, MIDDLE, AT_SESSION_HIGH) */
+    private String sessionPositionDesc;
+
+    /** V-bottom detected (reversal signal) */
+    private Boolean vBottomDetected;
+
+    /** V-top detected (distribution signal) */
+    private Boolean vTopDetected;
+
+    /** Failed breakout count (resistance holding) */
+    private Integer failedBreakoutCount;
+
+    /** Failed breakdown count (support holding) */
+    private Integer failedBreakdownCount;
+
+    // ========== FAMILY CONTEXT (Multi-Instrument Analysis) ==========
+
+    /** Family bias (BULLISH, BEARISH, WEAK_BULLISH, WEAK_BEARISH, NEUTRAL) */
+    private String familyBias;
+
+    /** Bullish alignment percentage (0-100) */
+    private Double bullishAlignment;
+
+    /** Bearish alignment percentage (0-100) */
+    private Double bearishAlignment;
+
+    /** Is family fully aligned (equity + future + options all agree) */
+    private Boolean fullyAligned;
+
+    /** Has divergence detected (options vs price) */
+    private Boolean hasDivergence;
+
+    /** Divergence details */
+    private java.util.List<String> divergences;
+
+    /** Short squeeze setup detected */
+    private Boolean shortSqueezeSetup;
+
+    /** Long squeeze setup detected */
+    private Boolean longSqueezeSetup;
+
+    /** Family context interpretation (human readable) */
+    private String familyInterpretation;
+
+    // ========== EVENT TRACKING (Adaptive Learning) ==========
+
+    /** Detected events that triggered this signal */
+    private java.util.List<String> detectedEvents;
+
+    /** Number of events detected */
+    private Integer eventCount;
+
+    /** Matched events from pattern/setup */
+    private java.util.List<String> matchedEvents;
+
+    /** Confirmed events count (from outcome tracking) */
+    private Integer confirmedEvents;
+
+    /** Failed events count */
+    private Integer failedEvents;
+
+    /** Event confirmation rate (0-100) */
+    private Double eventConfirmationRate;
+
+    // ========== ADAPTIVE MODIFIERS ==========
+
+    /** Combined confidence modifier applied */
+    private Double combinedModifier;
+
+    /** Modifier breakdown explanation */
+    private String modifierBreakdown;
+
+    /** Original confidence before modifiers */
+    private Double originalConfidence;
+
+    // ========== TECHNICAL CONTEXT ==========
+
+    /** SuperTrend direction at signal */
+    private String superTrendDirection;
+
+    /** SuperTrend just flipped */
+    private Boolean superTrendFlip;
+
+    /** Bollinger Band %B position */
+    private Double bbPercentB;
+
+    /** BB squeeze detected */
+    private Boolean bbSqueeze;
+
+    /** Nearest support level */
+    private Double nearestSupport;
+
+    /** Nearest resistance level */
+    private Double nearestResistance;
+
+    /** Daily pivot level */
+    private Double dailyPivot;
+
+    /** Max pain level (options) */
+    private Double maxPainLevel;
+
     // ========== Helper Methods ==========
     
     public String getSignalSourceDisplay() {
@@ -162,6 +268,77 @@ public class SignalDTO {
             case "CURATED" -> "Curated Signal";
             default -> signalSource;
         };
+    }
+
+    /**
+     * Get session position as display text
+     */
+    public String getSessionPositionDisplay() {
+        if (sessionPosition == null) return "Unknown";
+        if (sessionPosition <= 10) return "At Session Low (" + String.format("%.0f", sessionPosition) + "%)";
+        if (sessionPosition <= 30) return "Near Support (" + String.format("%.0f", sessionPosition) + "%)";
+        if (sessionPosition >= 90) return "At Session High (" + String.format("%.0f", sessionPosition) + "%)";
+        if (sessionPosition >= 70) return "Near Resistance (" + String.format("%.0f", sessionPosition) + "%)";
+        return "Mid-Range (" + String.format("%.0f", sessionPosition) + "%)";
+    }
+
+    /**
+     * Get family bias with emoji indicator
+     */
+    public String getFamilyBiasDisplay() {
+        if (familyBias == null) return "⚪ Unknown";
+        return switch (familyBias) {
+            case "BULLISH" -> "🟢 Bullish";
+            case "WEAK_BULLISH" -> "🟡 Weak Bullish";
+            case "BEARISH" -> "🔴 Bearish";
+            case "WEAK_BEARISH" -> "🟠 Weak Bearish";
+            case "NEUTRAL" -> "⚪ Neutral";
+            default -> "⚪ " + familyBias;
+        };
+    }
+
+    /**
+     * Check if signal has strong context support
+     */
+    public boolean hasStrongContext() {
+        return Boolean.TRUE.equals(fullyAligned) &&
+               eventConfirmationRate != null && eventConfirmationRate >= 60 &&
+               combinedModifier != null && combinedModifier >= 1.0;
+    }
+
+    /**
+     * Get context quality score (0-100)
+     */
+    public int getContextQualityScore() {
+        int score = 0;
+
+        // Family alignment (max 30)
+        if (Boolean.TRUE.equals(fullyAligned)) score += 30;
+        else if (bullishAlignment != null && bullishAlignment >= 60) score += 20;
+        else if (bearishAlignment != null && bearishAlignment >= 60) score += 20;
+
+        // Event confirmation (max 30)
+        if (eventConfirmationRate != null) {
+            score += (int) (eventConfirmationRate * 0.3);
+        }
+
+        // Session position (max 20)
+        if (sessionPosition != null) {
+            // Reward extreme positions for reversals, middle for continuation
+            if ("REVERSAL".equals(category)) {
+                if (sessionPosition <= 15 || sessionPosition >= 85) score += 20;
+            } else {
+                if (sessionPosition >= 30 && sessionPosition <= 70) score += 20;
+            }
+        }
+
+        // V-pattern detection (max 10)
+        if (Boolean.TRUE.equals(vBottomDetected) || Boolean.TRUE.equals(vTopDetected)) score += 10;
+
+        // Technical confluence (max 10)
+        if (Boolean.TRUE.equals(atConfluenceZone)) score += 10;
+
+        return Math.min(100, score);
     }
 }
 

@@ -3,7 +3,7 @@ import { Client, IMessage } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
 import { useDashboardStore } from '../store/dashboardStore'
 
-const WS_URL = 'http://13.203.60.173:8085/ws'
+const WS_URL = 'http://3.110.228.120:8085/ws'
 
 export function useWebSocket() {
   const clientRef = useRef<Client | null>(null)
