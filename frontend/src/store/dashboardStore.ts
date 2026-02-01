@@ -165,16 +165,27 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   })),
   clearNotifications: () => set({ notifications: [] }),
 
-  // Master Architecture signals (keep last 20)
+  // FIX BUG #18: Master Architecture signals - now keyed by signalId AND scripCode
+  // Keep multiple signals per scripCode (e.g., BUY at 10:00, SELL at 10:05)
   masterArchSignals: [],
   updateMasterArch: (signal) => set((state) => {
-    const existingIndex = state.masterArchSignals.findIndex(s => s.scripCode === signal.scripCode)
+    // Create a unique key combining scripCode and timestamp to allow multiple signals per stock
+    const signalKey = `${signal.scripCode}-${signal.timestamp}`
+
+    // Check if this exact signal already exists
+    const existingIndex = state.masterArchSignals.findIndex(s =>
+      s.scripCode === signal.scripCode && s.timestamp === signal.timestamp
+    )
+
     if (existingIndex >= 0) {
+      // Update existing signal
       const newSignals = [...state.masterArchSignals]
       newSignals[existingIndex] = signal
       return { masterArchSignals: newSignals }
     }
-    return { masterArchSignals: [signal, ...state.masterArchSignals].slice(0, 20) }
+
+    // Add new signal, keeping last 50 (increased from 20)
+    return { masterArchSignals: [signal, ...state.masterArchSignals].slice(0, 50) }
   }),
 
   // ACL data (latest for index)

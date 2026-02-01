@@ -5,9 +5,21 @@ import type {
   RiskMetrics, RiskScore, RiskAlert,
   AlertHistory, AlertStats, AlertSummary
 } from '../types'
+import type {
+  TechnicalIndicatorDTO,
+  UnifiedCandleDTO,
+  VcpStateDTO,
+  IpuStateDTO,
+  PivotStateDTO,
+  StrategyStateDTO
+} from '../types/indicators'
 
 // Hardcoded production API URL
-const API_BASE = 'http://3.110.228.120:8085/api'
+const API_BASE = 'http://3.111.242.49:8085/api'
+
+// Technical indicators API - now served from main backend (was port 8081)
+// Using the same backend to avoid dependency on external streaming candle service
+const STREAMING_API_BASE = 'http://3.111.242.49:8085/api'
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(`${API_BASE}${url}`)
@@ -65,10 +77,14 @@ export const tradesApi = {
 // QuantScores API (Institutional-Grade Scoring)
 export const quantScoresApi = {
   getAllScores: (limit = 100) => fetchJson<QuantScore[]>(`/quant-scores?limit=${limit}`),
+  getAllScoresAllTimeframes: (limit = 500) => fetchJson<QuantScore[]>(`/quant-scores/all-timeframes?limit=${limit}`),
   getActionableScores: (limit = 20) => fetchJson<QuantScore[]>(`/quant-scores/actionable?limit=${limit}`),
   getScoresByDirection: (direction: string) => fetchJson<QuantScore[]>(`/quant-scores/direction/${direction}`),
   getScore: (scripCode: string) => fetchJson<QuantScore>(`/quant-scores/${scripCode}`),
+  // FIX: Get all timeframe scores for a scripCode (for MTF display)
+  getScoreAllTimeframes: (scripCode: string) => fetchJson<Record<string, QuantScore>>(`/quant-scores/${scripCode}/timeframes`),
   getStats: () => fetchJson<QuantScoreStats>('/quant-scores/stats'),
+  getTimeframeStats: () => fetchJson<Record<string, number>>('/quant-scores/stats/timeframes'),
   getBreakdownSummary: () => fetchJson<Record<string, number>>('/quant-scores/breakdown-summary'),
 }
 
@@ -293,4 +309,133 @@ export const alertsApi = {
     postJson<AlertHistory>('/alerts', alert),
 }
 
+// Technical Indicators API (Bollinger Bands, VWAP, SuperTrend)
+// Uses streamingcandle service on port 8081
+async function fetchStreamingJson<T>(url: string): Promise<T> {
+  const response = await fetch(`${STREAMING_API_BASE}${url}`)
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+async function postStreamingJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(`${STREAMING_API_BASE}${url}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || `HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+export const technicalIndicatorsApi = {
+  getIndicators: (scripCode: string, timeframe: string = '5m') =>
+    fetchStreamingJson<TechnicalIndicatorDTO>(`/technical-indicators/${scripCode}?timeframe=${timeframe}`),
+
+  getIndicatorHistory: (scripCode: string, timeframe: string = '5m', limit: number = 100) =>
+    fetchStreamingJson<TechnicalIndicatorDTO[]>(`/technical-indicators/${scripCode}/history?timeframe=${timeframe}&limit=${limit}`),
+
+  getBatchIndicators: (scripCodes: string[], timeframe: string = '5m') =>
+    postStreamingJson<Record<string, TechnicalIndicatorDTO>>(`/technical-indicators/batch?timeframe=${timeframe}`, scripCodes),
+
+  getAvailableScrips: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/technical-indicators/available?timeframe=${timeframe}`),
+
+  getCacheStats: () =>
+    fetchStreamingJson<{ indicatorCacheSize: number; historyCacheSize: number; byTimeframe: Record<string, number> }>('/technical-indicators/stats'),
+
+  // ===== NEW SPECIALIZED ENDPOINTS (StreamingCandle v2.0) =====
+
+  getMovingAverages: (scripCode: string, timeframe: string = '5m') =>
+    fetchStreamingJson<Record<string, unknown>>(`/technical-indicators/${scripCode}/moving-averages?timeframe=${timeframe}`),
+
+  getMomentumIndicators: (scripCode: string, timeframe: string = '5m') =>
+    fetchStreamingJson<Record<string, unknown>>(`/technical-indicators/${scripCode}/momentum?timeframe=${timeframe}`),
+
+  getTrendIndicators: (scripCode: string, timeframe: string = '5m') =>
+    fetchStreamingJson<Record<string, unknown>>(`/technical-indicators/${scripCode}/trend?timeframe=${timeframe}`),
+
+  getPivotPoints: (scripCode: string, timeframe: string = '5m') =>
+    fetchStreamingJson<Record<string, unknown>>(`/technical-indicators/${scripCode}/pivots?timeframe=${timeframe}`),
+
+  getCompositeSignal: (scripCode: string, timeframe: string = '5m') =>
+    fetchStreamingJson<{ scripCode: string; timeframe: string; signal: string }>(`/technical-indicators/${scripCode}/signal?timeframe=${timeframe}`),
+
+  // Screening endpoints
+  getBullishSetups: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/technical-indicators/screen/bullish?timeframe=${timeframe}`),
+
+  getBearishSetups: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/technical-indicators/screen/bearish?timeframe=${timeframe}`),
+
+  getTrendingSymbols: (timeframe: string = '5m', minAdx: number = 25) =>
+    fetchStreamingJson<string[]>(`/technical-indicators/screen/trending?timeframe=${timeframe}&minAdx=${minAdx}`),
+
+  getHighVolumeSymbols: (timeframe: string = '5m', minRatio: number = 1.5) =>
+    fetchStreamingJson<string[]>(`/technical-indicators/screen/high-volume?timeframe=${timeframe}&minRatio=${minRatio}`),
+}
+
+// ===== UNIFIED CANDLES API (Merged Tick + Orderbook + OI) =====
+export const unifiedCandlesApi = {
+  getLatestCandle: (symbol: string, timeframe: string = '5m') =>
+    fetchStreamingJson<UnifiedCandleDTO>(`/candles/${symbol}?timeframe=${timeframe}`),
+
+  getCandleHistory: (symbol: string, timeframe: string = '5m', limit: number = 100) =>
+    fetchStreamingJson<UnifiedCandleDTO[]>(`/candles/${symbol}/history?timeframe=${timeframe}&limit=${limit}`),
+
+  getBatchCandles: (symbols: string[], timeframe: string = '5m') =>
+    postStreamingJson<Record<string, UnifiedCandleDTO>>(`/candles/batch?timeframe=${timeframe}`, symbols),
+
+  getAvailableSymbols: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/candles/available?timeframe=${timeframe}`),
+
+  hasData: (symbol: string, timeframe: string = '5m') =>
+    fetchStreamingJson<{ symbol: string; timeframe: string; exists: boolean }>(`/candles/${symbol}/exists?timeframe=${timeframe}`),
+
+  getStats: () =>
+    fetchStreamingJson<Record<string, unknown>>('/candles/stats'),
+}
+
+// ===== STRATEGY ANALYSIS API (VCP, IPU, Pivot from Redis) =====
+export const strategyAnalysisApi = {
+  // Individual symbol endpoints
+  getFullState: (symbol: string, timeframe: string = '5m') =>
+    fetchStreamingJson<StrategyStateDTO>(`/strategy-analysis/${symbol}?timeframe=${timeframe}`),
+
+  getVcpState: (symbol: string, timeframe: string = '5m') =>
+    fetchStreamingJson<VcpStateDTO>(`/strategy-analysis/${symbol}/vcp?timeframe=${timeframe}`),
+
+  getIpuState: (symbol: string, timeframe: string = '5m') =>
+    fetchStreamingJson<IpuStateDTO>(`/strategy-analysis/${symbol}/ipu?timeframe=${timeframe}`),
+
+  getPivotState: (symbol: string, timeframe: string = '5m') =>
+    fetchStreamingJson<PivotStateDTO>(`/strategy-analysis/${symbol}/pivot?timeframe=${timeframe}`),
+
+  // Screening endpoints
+  getActionableSetups: (timeframe: string = '5m', limit: number = 20) =>
+    fetchStreamingJson<StrategyStateDTO[]>(`/strategy-analysis/actionable?timeframe=${timeframe}&limit=${limit}`),
+
+  getHighIpuSymbols: (timeframe: string = '5m', minScore: number = 0.7) =>
+    fetchStreamingJson<string[]>(`/strategy-analysis/high-ipu?timeframe=${timeframe}&minScore=${minScore}`),
+
+  getActiveVcpSymbols: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/strategy-analysis/active-vcp?timeframe=${timeframe}`),
+
+  getBullishVcpSymbols: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/strategy-analysis/bullish-vcp?timeframe=${timeframe}`),
+
+  getUptrendSymbols: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/strategy-analysis/uptrend?timeframe=${timeframe}`),
+
+  // Metadata
+  getAvailableSymbols: (timeframe: string = '5m') =>
+    fetchStreamingJson<string[]>(`/strategy-analysis/available?timeframe=${timeframe}`),
+
+  getStateCounts: (timeframe: string = '5m') =>
+    fetchStreamingJson<Record<string, number>>(`/strategy-analysis/counts?timeframe=${timeframe}`),
+}
 

@@ -15,6 +15,7 @@ import QuantScoresPage from './pages/QuantScoresPage'
 import PerformancePage from './pages/PerformancePage'
 import PatternsPage from './pages/PatternsPage'
 import RiskPage from './pages/RiskPage'
+import StrategyTransparencyPage from './pages/StrategyTransparencyPage'
 
 function App() {
   return (
@@ -122,6 +123,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <RiskPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/strategy"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <StrategyTransparencyPage />
               </Layout>
             </ProtectedRoute>
           }

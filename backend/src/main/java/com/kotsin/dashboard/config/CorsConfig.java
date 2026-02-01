@@ -24,8 +24,8 @@ public class CorsConfig {
         config.setAllowedOriginPatterns(List.of(
             "http://localhost:*",
             "http://127.0.0.1:*",
-            "http://3.110.228.120:*",
-            "https://3.110.228.120:*"
+            "http://3.111.242.49:*",
+            "https://3.111.242.49:*"
         ));
         
         // Allow common HTTP methods

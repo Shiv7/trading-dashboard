@@ -10,6 +10,12 @@ const formatNumber = (n: number | undefined, decimals = 2): string => {
   return n.toFixed(decimals)
 }
 
+// Format PCR with context: 0 is valid (extreme bullish), undefined shows dash
+const formatPcr = (pcr: number | undefined): string => {
+  if (pcr === undefined || pcr === null || isNaN(pcr)) return '-'
+  return pcr.toFixed(2)
+}
+
 export function MTFOptionsFlowPanel({ scores }: MTFOptionsFlowPanelProps) {
   // Create map for quick lookup
   const scoreMap = new Map<string, QuantScore>()
@@ -17,8 +23,11 @@ export function MTFOptionsFlowPanel({ scores }: MTFOptionsFlowPanelProps) {
     if (s.timeframe) scoreMap.set(s.timeframe, s)
   })
 
+  // FIX: Handle PCR = 0 as valid extreme bullish (not "no data")
+  // PCR = 0 means no put OI, which is extremely bullish
   const getPcrColor = (pcr: number | undefined) => {
-    if (!pcr) return 'text-slate-400'
+    if (pcr === undefined || pcr === null || isNaN(pcr)) return 'text-slate-400'
+    if (pcr === 0) return 'text-emerald-400'  // Extreme bullish - no puts
     if (pcr > 1.3) return 'text-red-400'  // Extreme fear/bearish
     if (pcr > 1.0) return 'text-red-400/80'
     if (pcr < 0.7) return 'text-emerald-400'  // Extreme greed/bullish
@@ -86,8 +95,9 @@ export function MTFOptionsFlowPanel({ scores }: MTFOptionsFlowPanelProps) {
       const pcr = s.optionsFlowSummary?.pcr
       const futures = s.optionsFlowSummary?.futuresBuildup
 
-      if (pcr && pcr < 0.9) bullishOptions++
-      if (pcr && pcr > 1.1) bearishOptions++
+      // FIX: PCR = 0 is valid and extremely bullish (no put OI)
+      if (pcr !== undefined && pcr !== null && pcr < 0.9) bullishOptions++
+      if (pcr !== undefined && pcr !== null && pcr > 1.1) bearishOptions++
       if (futures === 'LONG_BUILDUP') bullishFutures++
       if (futures === 'SHORT_BUILDUP') bearishFutures++
     })
@@ -145,8 +155,8 @@ export function MTFOptionsFlowPanel({ scores }: MTFOptionsFlowPanelProps) {
               const s = scoreMap.get(tf)
               const pcr = s?.optionsFlowSummary?.pcr
               return (
-                <td key={tf} className={`text-center py-1.5 px-1 ${getPcrColor(pcr)}`}>
-                  {formatNumber(pcr)}
+                <td key={tf} className={`text-center py-1.5 px-1 ${getPcrColor(pcr)}`} title={pcr === 0 ? 'Extreme Bullish - No Put OI' : undefined}>
+                  {formatPcr(pcr)}
                 </td>
               )
             })}
@@ -201,7 +211,7 @@ export function MTFOptionsFlowPanel({ scores }: MTFOptionsFlowPanelProps) {
             <td className="text-center py-1.5 px-1 text-slate-500">-</td>
           </tr>
           {/* Spot-Future Premium */}
-          <tr>
+          <tr className="border-b border-slate-700/30">
             <td className="py-1.5 px-1 text-slate-300">Premium</td>
             {TIMEFRAMES.map(tf => {
               const s = scoreMap.get(tf)
@@ -209,6 +219,46 @@ export function MTFOptionsFlowPanel({ scores }: MTFOptionsFlowPanelProps) {
               return (
                 <td key={tf} className={`text-center py-1.5 px-1 ${getPremiumColor(premium)}`}>
                   {premium !== undefined ? (premium > 0 ? '+' : '') + formatNumber(premium) + '%' : '-'}
+                </td>
+              )
+            })}
+            <td className="text-center py-1.5 px-1 text-slate-500">-</td>
+          </tr>
+          {/* Call OI */}
+          <tr className="border-b border-slate-700/30">
+            <td className="py-1.5 px-1 text-slate-300">Call OI</td>
+            {TIMEFRAMES.map(tf => {
+              const s = scoreMap.get(tf)
+              const oi = s?.optionsFlowSummary?.totalCallOI
+              const change = s?.optionsFlowSummary?.totalCallOIChange
+              return (
+                <td key={tf} className="text-center py-1.5 px-1 text-emerald-400/80">
+                  {oi !== undefined && oi !== null ? (oi / 1000).toFixed(0) + 'K' : '-'}
+                  {change !== undefined && change !== null && change !== 0 && (
+                    <span className={`text-[9px] ml-0.5 ${change > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {change > 0 ? '↑' : '↓'}
+                    </span>
+                  )}
+                </td>
+              )
+            })}
+            <td className="text-center py-1.5 px-1 text-slate-500">-</td>
+          </tr>
+          {/* Put OI */}
+          <tr>
+            <td className="py-1.5 px-1 text-slate-300">Put OI</td>
+            {TIMEFRAMES.map(tf => {
+              const s = scoreMap.get(tf)
+              const oi = s?.optionsFlowSummary?.totalPutOI
+              const change = s?.optionsFlowSummary?.totalPutOIChange
+              return (
+                <td key={tf} className="text-center py-1.5 px-1 text-red-400/80">
+                  {oi !== undefined && oi !== null ? (oi / 1000).toFixed(0) + 'K' : '-'}
+                  {change !== undefined && change !== null && change !== 0 && (
+                    <span className={`text-[9px] ml-0.5 ${change > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {change > 0 ? '↑' : '↓'}
+                    </span>
+                  )}
                 </td>
               )
             })}

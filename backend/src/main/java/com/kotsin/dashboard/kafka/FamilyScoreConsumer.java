@@ -6,8 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.FamilyScoreDTO;
 import com.kotsin.dashboard.service.ScoreExplainerService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -18,12 +20,16 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Kafka consumer for family-score topic.
  * This topic contains the enriched MTIS scores with breakdowns.
  * Broadcasts score updates to WebSocket clients.
+ *
+ * IMPORTANT: On startup, loads cached scores from Redis to survive restarts.
+ * Redis key pattern: family:score:{familyId}
  */
 @Component
 @Slf4j
@@ -32,12 +38,60 @@ public class FamilyScoreConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final ScoreExplainerService scoreExplainerService;
-    
+    private final RedisTemplate<String, String> redisTemplate;
+
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-    
+
     // Cache for latest scores (for REST API fallback)
     private final Map<String, FamilyScoreDTO> latestScores = new ConcurrentHashMap<>();
+
+    // Redis key prefix (must match streaming candle service)
+    private static final String REDIS_KEY_PREFIX = "family:score:";
+
+    /**
+     * Load cached scores from Redis on startup.
+     * This ensures dashboard is not empty after backend restart.
+     */
+    @PostConstruct
+    public void loadFromRedis() {
+        try {
+            Set<String> keys = redisTemplate.keys(REDIS_KEY_PREFIX + "*");
+            if (keys == null || keys.isEmpty()) {
+                log.info("[FAMILY_SCORE] No cached scores in Redis on startup");
+                return;
+            }
+
+            // Filter out history keys
+            int loaded = 0;
+            for (String key : keys) {
+                if (key.contains(":history:")) {
+                    continue;
+                }
+
+                try {
+                    String json = redisTemplate.opsForValue().get(key);
+                    if (json != null && !json.isEmpty()) {
+                        JsonNode root = objectMapper.readTree(json);
+                        String familyId = root.path("familyId").asText();
+
+                        if (familyId != null && !familyId.isEmpty()) {
+                            FamilyScoreDTO dto = parseFamilyScoreFromRedis(root);
+                            latestScores.put(familyId, dto);
+                            scoreExplainerService.updateScore(familyId, dto);
+                            loaded++;
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("[FAMILY_SCORE] Error parsing cached score from {}: {}", key, e.getMessage());
+                }
+            }
+
+            log.info("[FAMILY_SCORE] Loaded {} scores from Redis on startup", loaded);
+        } catch (Exception e) {
+            log.error("[FAMILY_SCORE] Error loading scores from Redis: {}", e.getMessage());
+        }
+    }
 
     @KafkaListener(topics = "family-score", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onFamilyScore(String payload) {
@@ -181,6 +235,14 @@ public class FamilyScoreConsumer {
                .pcr(pcr)
                .spotFuturePremium(isCommodity ? null : premium)  // N/A for commodities
                .futuresBuildup(isCommodity ? "COMMODITY" : futuresBuildup);
+
+        // FIX: Add raw OI data for transparency (if available in family-score)
+        builder.totalCallOI(root.path("totalCallOI").isNull() ? null : root.path("totalCallOI").asLong())
+               .totalPutOI(root.path("totalPutOI").isNull() ? null : root.path("totalPutOI").asLong())
+               .totalCallOIChange(root.path("totalCallOIChange").isNull() ? null : root.path("totalCallOIChange").asLong())
+               .totalPutOIChange(root.path("totalPutOIChange").isNull() ? null : root.path("totalPutOIChange").asLong())
+               .callOiBuildingUp(root.path("callOiBuildingUp").asBoolean(false))
+               .putOiUnwinding(root.path("putOiUnwinding").asBoolean(false));
 
         // Gate status from actionability
         boolean actionable = root.path("actionable").asBoolean();
@@ -354,6 +416,16 @@ public class FamilyScoreConsumer {
             return "BEARISH";
         }
         return "NEUTRAL";
+    }
+
+    /**
+     * Parse FamilyScore from Redis JSON (same format as streaming candle stores it).
+     * This is called on startup to load cached scores.
+     */
+    private FamilyScoreDTO parseFamilyScoreFromRedis(JsonNode root) {
+        // Redis stores the same format as Kafka family-score topic
+        // So we can reuse the parseFamilyScore method
+        return parseFamilyScore(root);
     }
 }
 

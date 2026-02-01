@@ -77,6 +77,14 @@ public class FamilyScoreDTO {
     private Double spotFuturePremium;
     private String futuresBuildup;
 
+    // Raw OI data - FIX: Add missing OI totals for transparency
+    private Long totalCallOI;
+    private Long totalPutOI;
+    private Long totalCallOIChange;
+    private Long totalPutOIChange;
+    private Boolean callOiBuildingUp;
+    private Boolean putOiUnwinding;
+
     // Gate Status
     private boolean hardGatePassed;
     private String hardGateReason;

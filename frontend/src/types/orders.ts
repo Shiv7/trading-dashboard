@@ -47,11 +47,16 @@ export interface VirtualOrder {
     filledPrice?: number
 }
 
+// FIX BUG #8: Position side should be LONG/SHORT not BUY/SELL
+export type PositionSide = 'LONG' | 'SHORT'
+
 export interface VirtualPosition {
     scripCode: string
-    side: OrderSide
+    side: PositionSide // FIX: Changed from OrderSide to PositionSide
     qty: number
+    qtyOpen?: number // FIX: Add alternate field name used by backend
     avgPrice: number
+    avgEntry?: number // FIX: Add alternate field name used by backend
     currentPrice: number
     sl?: number
     tp1?: number
@@ -65,9 +70,11 @@ export interface VirtualPosition {
     trailingStop?: number
     unrealizedPnl: number
     unrealizedPnlPct: number
+    unrealizedPnlPercent?: number // FIX: Add alternate field name
     realizedPnl: number
     openedAt: number
     updatedAt: number
+    signalId?: string // FIX: Add missing field
 }
 
 export interface OrderResponse {

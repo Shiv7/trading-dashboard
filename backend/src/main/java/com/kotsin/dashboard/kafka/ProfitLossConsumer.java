@@ -47,8 +47,13 @@ public class ProfitLossConsumer {
     private final AtomicReference<Integer> totalTrades = new AtomicReference<>(0);
     private final AtomicReference<Integer> dayTrades = new AtomicReference<>(0);
     
-    // Trade tracking by scripCode
+    // FIX BUG #14, #20: Trade tracking by tradeId (not scripCode!)
+    // BEFORE: Map<scripCode, TradeInfo> - only one trade per stock allowed!
+    // AFTER: Map<tradeId, TradeInfo> - allows multiple trades on same stock
     private final Map<String, TradeInfo> activeTrades = new ConcurrentHashMap<>();
+
+    // Secondary index: scripCode -> List<tradeId> for quick lookup
+    private final Map<String, java.util.List<String>> tradesByScripCode = new ConcurrentHashMap<>();
 
     @lombok.Data
     @lombok.Builder
@@ -120,12 +125,19 @@ public class ProfitLossConsumer {
                 .currentPnl(0)
                 .build();
 
-        activeTrades.put(scripCode, trade);
+        // FIX BUG #14, #20: Use tradeId as key, not scripCode
+        // This allows multiple simultaneous trades on the same stock
+        activeTrades.put(tradeId, trade);
+
+        // Maintain secondary index for quick lookup by scripCode
+        tradesByScripCode.computeIfAbsent(scripCode, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                .add(tradeId);
+
         dayTrades.updateAndGet(v -> v + 1);
         totalTrades.updateAndGet(v -> v + 1);
 
-        log.info("📈 [P&L] TRADE_ENTRY: {} {} @ ₹{} (size={})", 
-                signalType, companyName, entryPrice, positionSize);
+        log.info("📈 [P&L] TRADE_ENTRY: {} {} @ ₹{} (size={}, tradeId={})",
+                signalType, companyName, entryPrice, positionSize, tradeId);
 
         // Broadcast to WebSocket
         broadcastTradeEvent("ENTRY", trade, 0);
@@ -137,8 +149,10 @@ public class ProfitLossConsumer {
 
     /**
      * Handle trade exit with P&L
+     * FIX BUG #14, #20: Use tradeId for trade lookup/removal, not scripCode
      */
     private void handleTradeExit(JsonNode root) {
+        String tradeId = root.path("tradeId").asText();
         String scripCode = root.path("scripCode").asText();
         String companyName = root.path("companyName").asText(scripCode);
         double entryPrice = root.path("entryPrice").asDouble(0);
@@ -151,8 +165,31 @@ public class ProfitLossConsumer {
         realtimePnl.updateAndGet(v -> v + profitLoss);
         dayPnl.updateAndGet(v -> v + profitLoss);
 
-        // Remove from active trades
-        TradeInfo trade = activeTrades.remove(scripCode);
+        // FIX BUG #14, #20: Remove from active trades using tradeId
+        TradeInfo trade = null;
+        if (tradeId != null && !tradeId.isEmpty()) {
+            trade = activeTrades.remove(tradeId);
+            // Also update secondary index
+            java.util.List<String> scripTrades = tradesByScripCode.get(scripCode);
+            if (scripTrades != null) {
+                scripTrades.remove(tradeId);
+                if (scripTrades.isEmpty()) {
+                    tradesByScripCode.remove(scripCode);
+                }
+            }
+        } else {
+            // Fallback: If no tradeId, find by scripCode from secondary index (legacy support)
+            java.util.List<String> scripTrades = tradesByScripCode.get(scripCode);
+            if (scripTrades != null && !scripTrades.isEmpty()) {
+                // Remove the oldest trade for this scripCode
+                String oldestTradeId = scripTrades.remove(0);
+                trade = activeTrades.remove(oldestTradeId);
+                if (scripTrades.isEmpty()) {
+                    tradesByScripCode.remove(scripCode);
+                }
+                log.warn("[P&L] TRADE_EXIT without tradeId, used fallback for {}", scripCode);
+            }
+        }
         if (trade != null) {
             trade.setCurrentPnl(profitLoss);
         }
@@ -177,8 +214,10 @@ public class ProfitLossConsumer {
 
     /**
      * Handle trade replacement
+     * FIX BUG #14, #20: Use tradeId for removal, not scripCode
      */
     private void handleTradeReplacement(JsonNode root) {
+        String oldTradeId = root.path("oldTradeId").asText();
         String oldScripCode = root.path("oldScripCode").asText();
         String newScripCode = root.path("newScripCode").asText();
         double oldRR = root.path("oldRiskReward").asDouble(0);
@@ -187,8 +226,29 @@ public class ProfitLossConsumer {
         log.info("[P&L] TRADE_REPLACEMENT: {} (R:R {}) -> {} (R:R {})",
                 oldScripCode, String.format("%.2f", oldRR), newScripCode, String.format("%.2f", newRR));
 
-        // Remove old trade
-        activeTrades.remove(oldScripCode);
+        // FIX BUG #14, #20: Remove old trade using tradeId
+        if (oldTradeId != null && !oldTradeId.isEmpty()) {
+            activeTrades.remove(oldTradeId);
+            // Update secondary index
+            java.util.List<String> scripTrades = tradesByScripCode.get(oldScripCode);
+            if (scripTrades != null) {
+                scripTrades.remove(oldTradeId);
+                if (scripTrades.isEmpty()) {
+                    tradesByScripCode.remove(oldScripCode);
+                }
+            }
+        } else {
+            // Fallback: Remove oldest trade for this scripCode (legacy support)
+            java.util.List<String> scripTrades = tradesByScripCode.get(oldScripCode);
+            if (scripTrades != null && !scripTrades.isEmpty()) {
+                String tradeIdToRemove = scripTrades.remove(0);
+                activeTrades.remove(tradeIdToRemove);
+                if (scripTrades.isEmpty()) {
+                    tradesByScripCode.remove(oldScripCode);
+                }
+                log.warn("[P&L] TRADE_REPLACEMENT without oldTradeId, used fallback for {}", oldScripCode);
+            }
+        }
 
         // Broadcast notification
         sessionManager.broadcastNotification("TRADE_REPLACEMENT",

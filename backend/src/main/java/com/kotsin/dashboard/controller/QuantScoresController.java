@@ -24,12 +24,31 @@ public class QuantScoresController {
     private final QuantScoreConsumer quantScoreConsumer;
 
     /**
-     * Get all quant scores sorted by score descending
+     * Get all quant scores sorted by score descending.
+     * By default returns latest score per scripCode.
+     * Use allTimeframes=true to get scores for all timeframes.
      */
     @GetMapping
     public ResponseEntity<List<QuantScoreDTO>> getAllScores(
-            @RequestParam(defaultValue = "100") int limit) {
-        List<QuantScoreDTO> scores = quantScoreConsumer.getAllScoresSorted();
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(defaultValue = "false") boolean allTimeframes) {
+        List<QuantScoreDTO> scores = allTimeframes
+                ? quantScoreConsumer.getAllScoresAllTimeframes()
+                : quantScoreConsumer.getAllScoresSorted();
+        if (scores.size() > limit) {
+            scores = scores.subList(0, limit);
+        }
+        return ResponseEntity.ok(scores);
+    }
+
+    /**
+     * Get all quant scores for ALL timeframes (for MTF dashboard display).
+     * Returns all 8 timeframes per instrument.
+     */
+    @GetMapping("/all-timeframes")
+    public ResponseEntity<List<QuantScoreDTO>> getAllScoresAllTimeframes(
+            @RequestParam(defaultValue = "500") int limit) {
+        List<QuantScoreDTO> scores = quantScoreConsumer.getAllScoresAllTimeframes();
         if (scores.size() > limit) {
             scores = scores.subList(0, limit);
         }
@@ -55,7 +74,7 @@ public class QuantScoresController {
     }
 
     /**
-     * Get score for a specific scripCode
+     * Get latest score for a specific scripCode
      */
     @GetMapping("/{scripCode}")
     public ResponseEntity<QuantScoreDTO> getScore(@PathVariable String scripCode) {
@@ -64,6 +83,42 @@ public class QuantScoresController {
             return ResponseEntity.notFound().build();
         }
         return ResponseEntity.ok(score);
+    }
+
+    /**
+     * Get ALL timeframe scores for a specific scripCode.
+     * Returns map of timeframe -> QuantScoreDTO (up to 8 entries).
+     */
+    @GetMapping("/{scripCode}/timeframes")
+    public ResponseEntity<Map<String, QuantScoreDTO>> getScoreAllTimeframes(
+            @PathVariable String scripCode) {
+        Map<String, QuantScoreDTO> scores = quantScoreConsumer.getAllTimeframeScores(scripCode);
+        if (scores == null || scores.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(scores);
+    }
+
+    /**
+     * Get score for a specific scripCode and timeframe
+     */
+    @GetMapping("/{scripCode}/timeframe/{timeframe}")
+    public ResponseEntity<QuantScoreDTO> getScoreForTimeframe(
+            @PathVariable String scripCode,
+            @PathVariable String timeframe) {
+        QuantScoreDTO score = quantScoreConsumer.getScore(scripCode, timeframe);
+        if (score == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(score);
+    }
+
+    /**
+     * Get count of scores per timeframe (diagnostic endpoint)
+     */
+    @GetMapping("/stats/timeframes")
+    public ResponseEntity<Map<String, Long>> getTimeframeStats() {
+        return ResponseEntity.ok(quantScoreConsumer.getScoreCountByTimeframe());
     }
 
     /**

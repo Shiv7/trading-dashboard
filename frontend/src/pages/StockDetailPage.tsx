@@ -4,10 +4,13 @@ import { scoresApi, signalsApi, indicatorsApi, quantScoresApi, walletApi } from 
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useTimeframeScores } from '../hooks/useTimeframeScores'
+import { useIndicators } from '../hooks/useIndicators'
 import type { FamilyScore, Signal, IPUSignal, VCPSignal, QuantScore, Wallet } from '../types'
 import { IPUPanel } from '../components/Indicators/IPUPanel'
 import { VCPClusters } from '../components/Indicators/VCPClusters'
+import { TechnicalIndicatorsPanel } from '../components/Indicators/TechnicalIndicatorsPanel'
 import PriceChart from '../components/Charts/PriceChart'
+import { IndicatorControls, type IndicatorToggles } from '../components/Charts/IndicatorControls'
 import OptionsPanel from '../components/Options/OptionsPanel'
 import {
   TradingModeToggle,
@@ -67,6 +70,15 @@ export default function StockDetailPage() {
   const [vcpSignal, setVcpSignal] = useState<VCPSignal | null>(null)
   const [quantScore, setQuantScore] = useState<QuantScore | null>(null)
 
+  // Technical Indicators (BB, VWAP, SuperTrend)
+  const [indicatorTimeframe, setIndicatorTimeframe] = useState<string>('5m')
+  const { indicators: techIndicators, history: indicatorHistory, loading: indicatorsLoading } = useIndicators(scripCode, indicatorTimeframe)
+  const [indicatorToggles, setIndicatorToggles] = useState<IndicatorToggles>({
+    bollingerBands: true,
+    vwap: true,
+    superTrend: true,
+  })
+
   // Store - integrate WebSocket data
   const wsScores = useDashboardStore((s) => s.scores)
   const wsWallet = useDashboardStore((s) => s.wallet)
@@ -82,6 +94,9 @@ export default function StockDetailPage() {
   // WebSocket
   const { subscribeToStock, subscribeToIPU, subscribeToVCP } = useWebSocket()
 
+  // Get bulk update function from store
+  const bulkUpdateQuantScores = useDashboardStore((s) => s.bulkUpdateQuantScores)
+
   // Load data
   useEffect(() => {
     if (!scripCode) return
@@ -89,7 +104,7 @@ export default function StockDetailPage() {
     async function loadData() {
       setLoading(true)
       try {
-        const [scoreData, signalsData, historyData, ipuData, vcpData, quantData, walletData] = await Promise.all([
+        const [scoreData, signalsData, historyData, ipuData, vcpData, quantData, walletData, allTfScores] = await Promise.all([
           scoresApi.getScore(scripCode!).catch(() => null),
           signalsApi.getSignalsForStock(scripCode!, 50).catch(() => []),
           scoresApi.getScoreHistory(scripCode!, 100).catch(() => []),
@@ -97,6 +112,8 @@ export default function StockDetailPage() {
           indicatorsApi.getVCPSignal(scripCode!).catch(() => null),
           quantScoresApi.getScore(scripCode!).catch(() => null),
           walletApi.getWallet().catch(() => null),
+          // FIX: Fetch ALL timeframe scores for MTF display
+          quantScoresApi.getScoreAllTimeframes(scripCode!).catch(() => null),
         ])
         setScore(scoreData)
         setSignals(signalsData)
@@ -105,6 +122,15 @@ export default function StockDetailPage() {
         setVcpSignal(vcpData)
         setQuantScore(quantData)
         setWallet(walletData)
+
+        // FIX: Populate store with all timeframe scores for MTF components
+        if (allTfScores && typeof allTfScores === 'object') {
+          const scoresArray = Object.values(allTfScores) as QuantScore[]
+          if (scoresArray.length > 0) {
+            bulkUpdateQuantScores(scoresArray)
+            console.log(`[MTF] Loaded ${scoresArray.length} timeframe scores for ${scripCode}`)
+          }
+        }
       } catch (error) {
         console.error('Error loading stock data:', error)
       } finally {
@@ -123,7 +149,7 @@ export default function StockDetailPage() {
       if (unsubIPU) unsubIPU.unsubscribe()
       if (unsubVCP) unsubVCP.unsubscribe()
     }
-  }, [scripCode, subscribeToStock, subscribeToIPU, subscribeToVCP])
+  }, [scripCode, subscribeToStock, subscribeToIPU, subscribeToVCP, bulkUpdateQuantScores])
 
   // Use WebSocket data if available, fallback to API data
   const displayScore = (scripCode && wsScores.get(scripCode)) || score
@@ -337,6 +363,15 @@ export default function StockDetailPage() {
             </div>
           )}
 
+          {/* Technical Indicators Panel (BB, VWAP, SuperTrend) */}
+          <TechnicalIndicatorsPanel
+            indicators={techIndicators}
+            currentPrice={displayScore.close || 0}
+            loading={indicatorsLoading}
+            timeframe={indicatorTimeframe}
+            onTimeframeChange={setIndicatorTimeframe}
+          />
+
           {/* Microstructure Panel - using QuantScore data */}
           <MicrostructurePanel
             data={{
@@ -400,8 +435,22 @@ export default function StockDetailPage() {
                 <span>Vol: <span className="text-white">{(displayScore.volume / 1000).toFixed(0)}K</span></span>
               </div>
             </div>
+            {/* Indicator Toggle Controls */}
+            <div className="mb-3">
+              <IndicatorControls
+                toggles={indicatorToggles}
+                onToggle={(key) => setIndicatorToggles(prev => ({ ...prev, [key]: !prev[key] }))}
+                disabled={indicatorsLoading}
+              />
+            </div>
             {scoreHistory.length > 0 ? (
-              <PriceChart data={scoreHistory} height={280} showVolume />
+              <PriceChart
+                data={scoreHistory}
+                height={280}
+                showVolume
+                indicatorHistory={indicatorHistory}
+                indicatorToggles={indicatorToggles}
+              />
             ) : (
               <div className="h-64 flex items-center justify-center bg-slate-700/30 rounded-lg">
                 <span className="text-slate-500">Chart data loading...</span>

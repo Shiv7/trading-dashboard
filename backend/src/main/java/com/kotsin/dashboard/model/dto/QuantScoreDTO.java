@@ -147,6 +147,12 @@ public class QuantScoreDTO {
         private double oiMomentum;
         private String futuresBuildup;
         private double spotFuturePremium;
+
+        // FIX: Add raw OI data for transparency
+        private Long totalCallOI;
+        private Long totalPutOI;
+        private Long totalCallOIChange;
+        private Long totalPutOIChange;
     }
 
     @Data

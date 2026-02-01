@@ -206,11 +206,111 @@ public class WebSocketSessionManager {
     }
 
     /**
+     * Broadcast technical indicator update for a specific stock
+     * (Bollinger Bands, VWAP, SuperTrend)
+     */
+    public void broadcastTechnicalIndicators(String scripCode, Object payload) {
+        log.debug("Broadcasting technical indicators for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/technical-indicators/" + scripCode, payload);
+    }
+
+    /**
      * Broadcast alert
      */
     public void broadcastAlert(Object payload) {
         log.info("Broadcasting alert");
         messagingTemplate.convertAndSend("/topic/alerts", payload);
+    }
+
+    // ======================== UNIFIED CANDLE & STRATEGY BROADCASTS ========================
+
+    /**
+     * Broadcast unified candle update for a specific symbol.
+     * Merged Tick + Orderbook + OI data.
+     */
+    public void broadcastUnifiedCandle(String symbol, String timeframe, Object payload) {
+        log.debug("Broadcasting unified candle for {}:{}", symbol, timeframe);
+        messagingTemplate.convertAndSend("/topic/candles/" + symbol + "/" + timeframe, payload);
+        messagingTemplate.convertAndSend("/topic/candles/" + symbol, payload);
+    }
+
+    /**
+     * Broadcast unified candle batch update.
+     */
+    public void broadcastUnifiedCandleBatch(String timeframe, Object payload) {
+        log.debug("Broadcasting unified candle batch for timeframe={}", timeframe);
+        messagingTemplate.convertAndSend("/topic/candles/batch/" + timeframe, payload);
+    }
+
+    /**
+     * Broadcast Pivot (market structure) state update.
+     */
+    public void broadcastPivotState(String symbol, String timeframe, Object payload) {
+        log.debug("Broadcasting pivot state for {}:{}", symbol, timeframe);
+        messagingTemplate.convertAndSend("/topic/pivot/" + symbol + "/" + timeframe, payload);
+        messagingTemplate.convertAndSend("/topic/pivot/" + symbol, payload);
+    }
+
+    /**
+     * Broadcast structure break (BOS) alert.
+     */
+    public void broadcastStructureBreak(String symbol, String breakType, Object payload) {
+        log.info("Broadcasting structure break for {}: {}", symbol, breakType);
+        messagingTemplate.convertAndSend("/topic/structure-break/" + symbol, payload);
+        messagingTemplate.convertAndSend("/topic/structure-break", payload);
+    }
+
+    /**
+     * Broadcast full strategy state (VCP + IPU + Pivot combined).
+     */
+    public void broadcastStrategyState(String symbol, String timeframe, Object payload) {
+        log.debug("Broadcasting strategy state for {}:{}", symbol, timeframe);
+        messagingTemplate.convertAndSend("/topic/strategy/" + symbol + "/" + timeframe, payload);
+        messagingTemplate.convertAndSend("/topic/strategy/" + symbol, payload);
+    }
+
+    /**
+     * Broadcast actionable setup alert.
+     * High-priority notification for setups ready to trade.
+     */
+    public void broadcastActionableSetup(String symbol, Object payload) {
+        log.info("Broadcasting actionable setup for {}", symbol);
+        messagingTemplate.convertAndSend("/topic/actionable/" + symbol, payload);
+        messagingTemplate.convertAndSend("/topic/actionable", payload);
+    }
+
+    /**
+     * Broadcast IPU exhaustion/reversal warning.
+     */
+    public void broadcastExhaustionWarning(String symbol, Object payload) {
+        log.info("Broadcasting exhaustion warning for {}", symbol);
+        messagingTemplate.convertAndSend("/topic/exhaustion/" + symbol, payload);
+        messagingTemplate.convertAndSend("/topic/exhaustion", payload);
+    }
+
+    /**
+     * Broadcast orderbook metrics update.
+     */
+    public void broadcastOrderbookMetrics(String symbol, Object payload) {
+        log.debug("Broadcasting orderbook metrics for {}", symbol);
+        messagingTemplate.convertAndSend("/topic/orderbook/" + symbol, payload);
+    }
+
+    /**
+     * Broadcast OI (Open Interest) update for derivatives.
+     */
+    public void broadcastOIUpdate(String symbol, Object payload) {
+        log.debug("Broadcasting OI update for {}", symbol);
+        messagingTemplate.convertAndSend("/topic/oi/" + symbol, payload);
+    }
+
+    /**
+     * Broadcast composite signal update (combined from all indicators).
+     */
+    public void broadcastCompositeSignal(String symbol, String signal, Double score, Object payload) {
+        log.info("Broadcasting composite signal for {}: {} (score={})", symbol, signal, score);
+        messagingTemplate.convertAndSend("/topic/composite/" + symbol, payload);
+        messagingTemplate.convertAndSend("/topic/composite", payload);
     }
 
     // ======================== MARKET INTELLIGENCE BROADCASTS ========================

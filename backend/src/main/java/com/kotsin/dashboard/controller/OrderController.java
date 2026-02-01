@@ -3,6 +3,7 @@ package com.kotsin.dashboard.controller;
 import com.kotsin.dashboard.model.dto.CreateOrderRequest;
 import com.kotsin.dashboard.model.dto.ModifyPositionRequest;
 import com.kotsin.dashboard.service.TradingModeService;
+import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,11 +12,13 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Proxy controller for order operations.
@@ -42,11 +45,40 @@ public class OrderController {
     /**
      * Create a new order.
      * Routes to virtual or live trading based on current mode.
+     *
+     * FIX BUG #7, #30: Added @Valid for request validation
      */
     @PostMapping
-    public ResponseEntity<?> createOrder(@RequestBody CreateOrderRequest request) {
+    public ResponseEntity<?> createOrder(
+            @Valid @RequestBody CreateOrderRequest request,
+            BindingResult bindingResult) {
+
         boolean isLive = tradingModeService.isLive();
         String modeLabel = isLive ? "LIVE" : "VIRTUAL";
+
+        // FIX BUG #7: Check for validation errors from @Valid annotations
+        if (bindingResult.hasErrors()) {
+            String errors = bindingResult.getFieldErrors().stream()
+                    .map(e -> e.getField() + ": " + e.getDefaultMessage())
+                    .collect(Collectors.joining("; "));
+            log.warn("[{}] Order validation failed: {}", modeLabel, errors);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Order validation failed",
+                    "message", errors,
+                    "tradingMode", modeLabel
+            ));
+        }
+
+        // FIX BUG #3: Check SL/TP positions relative to entry
+        String slTpError = request.validateSlTpPositions();
+        if (slTpError != null) {
+            log.warn("[{}] SL/TP validation failed: {}", modeLabel, slTpError);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Invalid SL/TP positions",
+                    "message", slTpError,
+                    "tradingMode", modeLabel
+            ));
+        }
 
         log.info("[{}] Creating order: scripCode={}, side={}, qty={}",
                 modeLabel, request.getScripCode(), request.getSide(), request.getQty());

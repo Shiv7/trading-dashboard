@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { ordersApi } from '../../services/api'
 import type { CreateOrderRequest, OrderSide, OrderType, TrailingType } from '../../types'
 
@@ -10,6 +10,12 @@ interface TradeModalProps {
     currentPrice?: number
     direction?: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
     quantScore?: number
+}
+
+// FIX BUG #3: Order validation types
+interface ValidationError {
+    field: string
+    message: string
 }
 
 export default function TradeModal({
@@ -35,6 +41,9 @@ export default function TradeModal({
     const [trailingValue, setTrailingValue] = useState(1)
     const [submitting, setSubmitting] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    // FIX BUG #5: Add confirmation step
+    const [showConfirmation, setShowConfirmation] = useState(false)
+    const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
 
     // Reset scripCode when modal opens with a new initialScripCode
     useEffect(() => {
@@ -66,47 +75,171 @@ export default function TradeModal({
         }
     }, [isOpen, currentPrice, direction])
 
+    // FIX BUG #3: Validate SL/TP before submission - prevent inverted orders
+    const validateOrder = useCallback((): ValidationError[] => {
+        const errors: ValidationError[] = []
+        const entry = orderType === 'LIMIT' ? limitPrice : currentPrice
+
+        if (!scripCode.trim()) {
+            errors.push({ field: 'scripCode', message: 'Scrip code is required' })
+        }
+
+        if (qty < 1) {
+            errors.push({ field: 'qty', message: 'Quantity must be at least 1' })
+        }
+
+        if (entry <= 0) {
+            errors.push({ field: 'entry', message: 'Entry price must be positive' })
+        }
+
+        // FIX BUG #3: Validate SL/TP positions based on side
+        if (sl > 0 && entry > 0) {
+            if (side === 'BUY') {
+                // For BUY orders: SL must be BELOW entry
+                if (sl >= entry) {
+                    errors.push({
+                        field: 'sl',
+                        message: `BUY order: Stop Loss (${sl.toFixed(2)}) must be BELOW entry (${entry.toFixed(2)})`
+                    })
+                }
+            } else {
+                // For SELL orders: SL must be ABOVE entry
+                if (sl <= entry) {
+                    errors.push({
+                        field: 'sl',
+                        message: `SELL order: Stop Loss (${sl.toFixed(2)}) must be ABOVE entry (${entry.toFixed(2)})`
+                    })
+                }
+            }
+        }
+
+        if (tp1 > 0 && entry > 0) {
+            if (side === 'BUY') {
+                // For BUY orders: TP must be ABOVE entry
+                if (tp1 <= entry) {
+                    errors.push({
+                        field: 'tp1',
+                        message: `BUY order: Target 1 (${tp1.toFixed(2)}) must be ABOVE entry (${entry.toFixed(2)})`
+                    })
+                }
+            } else {
+                // For SELL orders: TP must be BELOW entry
+                if (tp1 >= entry) {
+                    errors.push({
+                        field: 'tp1',
+                        message: `SELL order: Target 1 (${tp1.toFixed(2)}) must be BELOW entry (${entry.toFixed(2)})`
+                    })
+                }
+            }
+        }
+
+        // Validate TP2 if set
+        if (tp2 > 0 && tp1 > 0) {
+            if (side === 'BUY' && tp2 <= tp1) {
+                errors.push({ field: 'tp2', message: 'BUY order: Target 2 must be above Target 1' })
+            }
+            if (side === 'SELL' && tp2 >= tp1) {
+                errors.push({ field: 'tp2', message: 'SELL order: Target 2 must be below Target 1' })
+            }
+        }
+
+        return errors
+    }, [scripCode, qty, orderType, limitPrice, currentPrice, side, sl, tp1, tp2])
+
+    // FIX BUG #14: Round price to 2 decimals
+    const roundPrice = (price: number): number => {
+        return Math.round(price * 100) / 100
+    }
+
     const handleSubmit = async () => {
+        // FIX BUG #3: Validate before submission
+        const errors = validateOrder()
+        if (errors.length > 0) {
+            setValidationErrors(errors)
+            setError(errors[0].message)
+            return
+        }
+        setValidationErrors([])
+
+        // FIX BUG #5: Show confirmation step first
+        if (!showConfirmation) {
+            setShowConfirmation(true)
+            return
+        }
+
         setSubmitting(true)
         setError(null)
 
+        // FIX BUG #14: Round all prices to 2 decimals
         const order: CreateOrderRequest = {
-            scripCode,
+            scripCode: scripCode.trim().toUpperCase(),
             side,
             type: orderType,
             qty,
-            limitPrice: orderType === 'LIMIT' ? limitPrice : undefined,
-            currentPrice: currentPrice > 0 ? currentPrice : undefined,  // FIX: Send currentPrice for MARKET orders
-            sl: sl > 0 ? sl : undefined,
-            tp1: tp1 > 0 ? tp1 : undefined,
-            tp2: tp2 > 0 ? tp2 : undefined,
-            tp1ClosePercent,
+            limitPrice: orderType === 'LIMIT' ? roundPrice(limitPrice) : undefined,
+            currentPrice: currentPrice > 0 ? roundPrice(currentPrice) : undefined,
+            sl: sl > 0 ? roundPrice(sl) : undefined,
+            tp1: tp1 > 0 ? roundPrice(tp1) : undefined,
+            tp2: tp2 > 0 ? roundPrice(tp2) : undefined,
+            tp1ClosePercent: Math.min(100, Math.max(0, tp1ClosePercent)), // Clamp to 0-100
             trailingType: trailingType !== 'NONE' ? trailingType : undefined,
             trailingValue: trailingType !== 'NONE' ? trailingValue : undefined,
         }
 
         try {
-            await ordersApi.createOrder(order)
-            onClose()
+            // FIX BUG #5: Verify order was created successfully
+            const response = await ordersApi.createOrder(order)
+
+            // Check if response indicates success
+            if (response && (response.order || response.position || !response.error)) {
+                // Order placed successfully - show brief success before closing
+                setError(null)
+                setShowConfirmation(false)
+
+                // Small delay to show success state
+                setTimeout(() => {
+                    onClose()
+                }, 300)
+            } else {
+                // Response indicates failure
+                throw new Error(response?.error || 'Order creation failed - no confirmation received')
+            }
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to create order')
+            // FIX BUG #10: Show detailed error from backend
+            const errorMessage = err instanceof Error ? err.message : 'Failed to create order'
+            setError(errorMessage)
+            setShowConfirmation(false) // Reset confirmation on error
         } finally {
             setSubmitting(false)
         }
     }
 
+    // Reset confirmation when modal closes or order details change
+    useEffect(() => {
+        setShowConfirmation(false)
+        setValidationErrors([])
+    }, [isOpen, side, qty, sl, tp1, tp2, orderType, limitPrice])
+
     // Calculate risk/reward
     const entryPrice = orderType === 'LIMIT' ? limitPrice : currentPrice
     const slDistance = Math.abs(entryPrice - sl)
     const tp1Distance = Math.abs(tp1 - entryPrice)
-    const riskReward = sl > 0 && tp1 > 0 ? (tp1Distance / slDistance) : 0
+
+    // FIX BUG #4: Prevent division by zero - check slDistance > 0
+    const riskReward = sl > 0 && tp1 > 0 && slDistance > 0.01 // Small epsilon to avoid near-zero
+        ? (tp1Distance / slDistance)
+        : 0
     const riskAmount = slDistance * qty
     const potentialProfit = tp1Distance * qty
 
-    // SL/TP percentage from entry
+    // FIX BUG #4: Safe percentage calculations
     const slPercent = entryPrice > 0 ? ((sl - entryPrice) / entryPrice * 100) : 0
     const tp1Percent = entryPrice > 0 ? ((tp1 - entryPrice) / entryPrice * 100) : 0
     const tp2Percent = entryPrice > 0 ? ((tp2 - entryPrice) / entryPrice * 100) : 0
+
+    // FIX: Check if SL/TP are valid for current side
+    const isSlValid = sl <= 0 || (side === 'BUY' ? sl < entryPrice : sl > entryPrice)
+    const isTp1Valid = tp1 <= 0 || (side === 'BUY' ? tp1 > entryPrice : tp1 < entryPrice)
 
     if (!isOpen) return null
 
@@ -148,10 +281,33 @@ export default function TradeModal({
 
                 {/* Body */}
                 <div className="p-4 space-y-4">
+                    {/* FIX BUG #5: Confirmation step */}
+                    {showConfirmation && (
+                        <div className="bg-amber-500/20 border border-amber-500/50 text-amber-400 px-3 py-2 rounded-lg text-sm">
+                            <div className="font-bold mb-1">⚠️ Confirm Order</div>
+                            <div>
+                                {side} {qty} shares of {scripCode} at {orderType === 'LIMIT' ? `₹${limitPrice.toFixed(2)}` : 'MARKET'}
+                            </div>
+                            <div className="mt-1 text-xs">
+                                SL: ₹{sl > 0 ? sl.toFixed(2) : 'None'} | TP1: ₹{tp1 > 0 ? tp1.toFixed(2) : 'None'}
+                            </div>
+                            <div className="mt-2 text-xs text-amber-300">
+                                Click "Confirm {side}" again to place order
+                            </div>
+                        </div>
+                    )}
+
                     {/* Error display */}
                     {error && (
                         <div className="bg-red-500/20 border border-red-500/50 text-red-400 px-3 py-2 rounded-lg text-sm">
-                            {error}
+                            <div className="font-bold">❌ {error}</div>
+                            {validationErrors.length > 1 && (
+                                <ul className="mt-1 text-xs list-disc list-inside">
+                                    {validationErrors.slice(1).map((e, i) => (
+                                        <li key={i}>{e.message}</li>
+                                    ))}
+                                </ul>
+                            )}
                         </div>
                     )}
 
@@ -239,19 +395,23 @@ export default function TradeModal({
                         </div>
                     </div>
 
-                    {/* SL / TP Grid */}
+                    {/* SL / TP Grid - FIX BUG #3: Show validation errors visually */}
                     <div className="grid grid-cols-3 gap-2">
                         <div>
                             <label className="text-sm text-red-400 mb-1 block">Stop Loss</label>
                             <input
                                 type="number"
                                 value={sl}
-                                onChange={(e) => setSl(Number(e.target.value))}
-                                className="w-full bg-slate-700 border border-red-500/30 rounded-lg px-3 py-2 text-white focus:border-red-500 focus:outline-none"
+                                onChange={(e) => setSl(roundPrice(Number(e.target.value)))}
+                                className={`w-full bg-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none
+                                    ${!isSlValid && sl > 0
+                                        ? 'border-2 border-yellow-500 focus:border-yellow-500'
+                                        : 'border border-red-500/30 focus:border-red-500'
+                                    }`}
                                 step="0.05"
                             />
-                            <div className="text-xs text-red-400 mt-1">
-                                {slPercent >= 0 ? '+' : ''}{slPercent.toFixed(1)}%
+                            <div className={`text-xs mt-1 ${!isSlValid && sl > 0 ? 'text-yellow-400 font-bold' : 'text-red-400'}`}>
+                                {!isSlValid && sl > 0 ? '⚠️ INVALID' : `${slPercent >= 0 ? '+' : ''}${slPercent.toFixed(1)}%`}
                             </div>
                         </div>
                         <div>
@@ -259,12 +419,16 @@ export default function TradeModal({
                             <input
                                 type="number"
                                 value={tp1}
-                                onChange={(e) => setTp1(Number(e.target.value))}
-                                className="w-full bg-slate-700 border border-emerald-500/30 rounded-lg px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                                onChange={(e) => setTp1(roundPrice(Number(e.target.value)))}
+                                className={`w-full bg-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none
+                                    ${!isTp1Valid && tp1 > 0
+                                        ? 'border-2 border-yellow-500 focus:border-yellow-500'
+                                        : 'border border-emerald-500/30 focus:border-emerald-500'
+                                    }`}
                                 step="0.05"
                             />
-                            <div className="text-xs text-emerald-400 mt-1">
-                                {tp1Percent >= 0 ? '+' : ''}{tp1Percent.toFixed(1)}%
+                            <div className={`text-xs mt-1 ${!isTp1Valid && tp1 > 0 ? 'text-yellow-400 font-bold' : 'text-emerald-400'}`}>
+                                {!isTp1Valid && tp1 > 0 ? '⚠️ INVALID' : `${tp1Percent >= 0 ? '+' : ''}${tp1Percent.toFixed(1)}%`}
                             </div>
                         </div>
                         <div>
@@ -272,7 +436,7 @@ export default function TradeModal({
                             <input
                                 type="number"
                                 value={tp2}
-                                onChange={(e) => setTp2(Number(e.target.value))}
+                                onChange={(e) => setTp2(roundPrice(Number(e.target.value)))}
                                 className="w-full bg-slate-700 border border-blue-500/30 rounded-lg px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
                                 step="0.05"
                             />
@@ -337,27 +501,42 @@ export default function TradeModal({
 
                 {/* Risk/Reward Footer */}
                 <div className="border-t border-slate-700 px-4 py-3 bg-slate-800/50">
+                    {/* FIX BUG #3: Show warning if order is invalid */}
+                    {(!isSlValid || !isTp1Valid) && (sl > 0 || tp1 > 0) && (
+                        <div className="bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 px-2 py-1 rounded mb-2 text-xs">
+                            ⚠️ {side === 'BUY' ? 'BUY' : 'SELL'} order: SL must be {side === 'BUY' ? 'below' : 'above'} entry, TP must be {side === 'BUY' ? 'above' : 'below'} entry
+                        </div>
+                    )}
                     <div className="flex justify-between text-sm mb-3">
                         <div>
                             <span className="text-slate-400">Risk: </span>
-                            <span className="text-red-400 font-medium">₹{riskAmount.toFixed(2)}</span>
+                            <span className="text-red-400 font-medium">₹{isFinite(riskAmount) ? riskAmount.toFixed(2) : '0.00'}</span>
                         </div>
                         <div>
                             <span className="text-slate-400">R:R = </span>
-                            <span className={`font-bold ${riskReward >= 2 ? 'text-emerald-400' : riskReward >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-                                1:{riskReward.toFixed(1)}
+                            {/* FIX BUG #4: Handle NaN/Infinity in display */}
+                            <span className={`font-bold ${
+                                !isFinite(riskReward) || riskReward === 0 ? 'text-slate-400' :
+                                riskReward >= 2 ? 'text-emerald-400' :
+                                riskReward >= 1 ? 'text-yellow-400' : 'text-red-400'
+                            }`}>
+                                {isFinite(riskReward) && riskReward > 0 ? `1:${riskReward.toFixed(1)}` : 'N/A'}
                             </span>
                         </div>
                         <div>
                             <span className="text-slate-400">Reward: </span>
-                            <span className="text-emerald-400 font-medium">₹{potentialProfit.toFixed(2)}</span>
+                            <span className="text-emerald-400 font-medium">₹{isFinite(potentialProfit) ? potentialProfit.toFixed(2) : '0.00'}</span>
                         </div>
                     </div>
 
                     {/* Action Buttons */}
                     <div className="flex gap-3">
                         <button
-                            onClick={onClose}
+                            onClick={() => {
+                                setShowConfirmation(false)
+                                setError(null)
+                                onClose()
+                            }}
                             className="flex-1 py-3 rounded-lg font-medium bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors"
                             disabled={submitting}
                         >
@@ -365,13 +544,28 @@ export default function TradeModal({
                         </button>
                         <button
                             onClick={handleSubmit}
-                            disabled={submitting || qty < 1 || !scripCode.trim()}
-                            className={`flex-1 py-3 rounded-lg font-bold transition-all ${side === 'BUY'
-                                    ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-lg shadow-emerald-500/30'
-                                    : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-lg shadow-red-500/30'
+                            disabled={submitting || qty < 1 || !scripCode.trim() || (!isSlValid && sl > 0) || (!isTp1Valid && tp1 > 0)}
+                            className={`flex-1 py-3 rounded-lg font-bold transition-all ${
+                                showConfirmation
+                                    ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white shadow-lg shadow-amber-500/30 animate-pulse'
+                                    : side === 'BUY'
+                                        ? 'bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white shadow-lg shadow-emerald-500/30'
+                                        : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white shadow-lg shadow-red-500/30'
                                 } disabled:opacity-50 disabled:cursor-not-allowed`}
                         >
-                            {submitting ? 'Placing...' : `Confirm ${side}`}
+                            {submitting ? (
+                                <span className="flex items-center justify-center gap-2">
+                                    <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                    </svg>
+                                    Placing...
+                                </span>
+                            ) : showConfirmation ? (
+                                `🔒 CONFIRM ${side}`
+                            ) : (
+                                `${side === 'BUY' ? '🚀' : '📉'} ${side}`
+                            )}
                         </button>
                     </div>
                 </div>

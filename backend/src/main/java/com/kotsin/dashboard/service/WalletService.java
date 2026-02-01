@@ -35,19 +35,31 @@ public class WalletService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private WalletDTO cachedWallet;
-    private long lastRefreshTime = 0;
+    // FIX BUG #28: Add synchronization to prevent race conditions
+    private volatile WalletDTO cachedWallet;
+    private volatile long lastRefreshTime = 0;
     private static final long CACHE_TTL_MS = 5000; // 5 second cache
+    private final Object cacheLock = new Object();
 
     // Configuration
     private static final double INITIAL_CAPITAL = 100000.0;
 
     /**
      * Get current wallet state
+     * FIX BUG #28: Thread-safe cache access
      */
     public WalletDTO getWallet() {
-        if (cachedWallet == null || System.currentTimeMillis() - lastRefreshTime > CACHE_TTL_MS) {
-            refreshWallet();
+        // Fast path: check if cache is valid without locking
+        if (cachedWallet != null && System.currentTimeMillis() - lastRefreshTime <= CACHE_TTL_MS) {
+            return cachedWallet;
+        }
+
+        // Slow path: refresh with lock to prevent concurrent refreshes
+        synchronized (cacheLock) {
+            // Double-check after acquiring lock
+            if (cachedWallet == null || System.currentTimeMillis() - lastRefreshTime > CACHE_TTL_MS) {
+                refreshWallet();
+            }
         }
         return cachedWallet;
     }
@@ -200,23 +212,52 @@ public class WalletService {
             LocalDateTime lastUpdated = LocalDateTime.ofInstant(
                 Instant.ofEpochMilli(updatedAtMs), ZoneId.of("Asia/Kolkata"));
 
-            // Use avgEntry as currentPrice fallback (unrealized P&L = 0 until we get live prices)
-            // In a complete implementation, we'd fetch live price from a price service
-            double currentPrice = avgEntry;
+            // FIX BUG #2, #1: Get current price from Redis data or use trailing stop as proxy
+            // Read currentPrice from Redis if available
+            Double storedCurrentPrice = data.get("currentPrice") != null ?
+                ((Number) data.get("currentPrice")).doubleValue() : null;
+
+            // FIX: Normalize side - convert BUY/SELL to LONG/SHORT for consistent handling
+            String normalizedSide = normalizeSide(side);
+
+            double currentPrice;
             double unrealizedPnl = 0;
             double unrealizedPnlPercent = 0;
 
-            // Calculate unrealized P&L if we have trailing stop (use it as proxy for current price movement)
-            if (trailingStop != null && trailingStop > 0 && qtyOpen > 0) {
-                // Estimate current price from trailing stop movement
-                if ("LONG".equals(side)) {
-                    // For LONG, trailingStop moves up as price increases
-                    unrealizedPnl = (trailingStop - avgEntry) * qtyOpen * 0.5; // Conservative estimate
+            // Priority: 1) Stored currentPrice, 2) Trailing stop estimate, 3) Entry price (worst case)
+            if (storedCurrentPrice != null && storedCurrentPrice > 0) {
+                // Best case: we have actual current price from Redis
+                currentPrice = storedCurrentPrice;
+            } else if (trailingStop != null && trailingStop > 0) {
+                // Second best: estimate from trailing stop
+                // For LONG, trailing stop trails below price, so currentPrice >= trailingStop
+                // For SHORT, trailing stop trails above price, so currentPrice <= trailingStop
+                if ("LONG".equals(normalizedSide)) {
+                    // Estimate current price is slightly above trailing stop (assume 1% buffer)
+                    currentPrice = trailingStop * 1.01;
                 } else {
-                    unrealizedPnl = (avgEntry - trailingStop) * qtyOpen * 0.5;
+                    // For SHORT, estimate current price is slightly below trailing stop
+                    currentPrice = trailingStop * 0.99;
                 }
-                if (avgEntry > 0) {
-                    unrealizedPnlPercent = (unrealizedPnl / (avgEntry * qtyOpen)) * 100;
+            } else {
+                // Fallback: use entry price (P&L will be 0, but at least not wrong)
+                currentPrice = avgEntry;
+                log.debug("No live price for {} - using entry price as fallback", scripCode);
+            }
+
+            // FIX BUG #1: Calculate unrealized P&L WITHOUT the 0.5 multiplier
+            if (qtyOpen > 0 && avgEntry > 0) {
+                if ("LONG".equals(normalizedSide)) {
+                    // LONG profit = (currentPrice - entry) * quantity
+                    unrealizedPnl = (currentPrice - avgEntry) * qtyOpen;
+                } else {
+                    // SHORT profit = (entry - currentPrice) * quantity
+                    unrealizedPnl = (avgEntry - currentPrice) * qtyOpen;
+                }
+                // Calculate percentage based on position cost
+                unrealizedPnlPercent = ((currentPrice - avgEntry) / avgEntry) * 100;
+                if ("SHORT".equals(normalizedSide)) {
+                    unrealizedPnlPercent = -unrealizedPnlPercent; // Invert for shorts
                 }
             }
 
@@ -225,7 +266,7 @@ public class WalletService {
                     .signalId(signalId)
                     .scripCode(scripCode)
                     .companyName(scripCode) // Will be enriched by company name service
-                    .side(side)
+                    .side(normalizedSide) // FIX BUG #6: Use normalized side (LONG/SHORT)
                     .quantity(qtyOpen)
                     .avgEntryPrice(avgEntry)
                     .currentPrice(currentPrice)
@@ -282,9 +323,11 @@ public class WalletService {
                     }
                 }
 
-                // Get realized P&L from positions
+                // FIX BUG #7: Get realized P&L from positions
+                // Note: Only count wins from CLOSED positions with realized P&L, not open positions
                 Set<String> positionKeys = redisTemplate.keys("virtual:positions:*");
                 double redisRealizedPnl = 0;
+                int closedPositionCount = 0;
                 if (positionKeys != null) {
                     for (String key : positionKeys) {
                         try {
@@ -293,14 +336,32 @@ public class WalletService {
                                 @SuppressWarnings("unchecked")
                                 Map<String, Object> pos = objectMapper.readValue(value, Map.class);
                                 Double pnl = pos.get("realizedPnl") != null ? ((Number) pos.get("realizedPnl")).doubleValue() : 0;
-                                redisRealizedPnl += pnl;
-                                if (pnl > 0) redisWins++;
+                                int qtyOpen = pos.get("qtyOpen") != null ? ((Number) pos.get("qtyOpen")).intValue() : 0;
+                                String status = pos.get("status") != null ? pos.get("status").toString() : "";
+
+                                // Only add realized P&L (from closed or partial positions)
+                                if (pnl != 0) {
+                                    redisRealizedPnl += pnl;
+                                }
+
+                                // FIX: Only count as win/loss if position is CLOSED (qtyOpen = 0) or has realized P&L
+                                // Don't count unrealized gains as "wins"
+                                boolean isClosed = qtyOpen == 0 || "CLOSED".equals(status);
+                                if (isClosed && pnl > 0) {
+                                    redisWins++;
+                                    closedPositionCount++;
+                                } else if (isClosed && pnl < 0) {
+                                    closedPositionCount++;
+                                }
                             }
                         } catch (Exception e) {
                             // Skip unparseable positions
                         }
                     }
                 }
+
+                log.debug("Redis P&L: {} from {} closed positions ({} wins)",
+                    redisRealizedPnl, closedPositionCount, redisWins);
 
                 stats.totalTrades = redisOrderCount;
                 stats.totalPnl = redisRealizedPnl;
@@ -373,13 +434,24 @@ public class WalletService {
                 .toList();
     }
 
+    /**
+     * FIX BUG #19: Calculate margin using CURRENT price (mark-to-market), not entry price
+     * This gives accurate available margin for new trades.
+     */
     private double calculateMarginUsed(List<PositionDTO> positions) {
         return positions.stream()
                 .filter(p -> p.getQuantity() > 0)
-                .mapToDouble(p -> p.getAvgEntryPrice() * p.getQuantity())
+                .mapToDouble(p -> {
+                    // Use current price for mark-to-market margin calculation
+                    double price = p.getCurrentPrice() > 0 ? p.getCurrentPrice() : p.getAvgEntryPrice();
+                    return price * p.getQuantity();
+                })
                 .sum();
     }
 
+    /**
+     * FIX BUG #20: Calculate day P&L including both realized (closed today) and unrealized (opened today)
+     */
     private double calculateDayPnl() {
         try {
             LocalDateTime startOfDay = LocalDateTime.now()
@@ -387,16 +459,32 @@ public class WalletService {
             long startOfDayMs = startOfDay.atZone(ZoneId.of("Asia/Kolkata"))
                     .toInstant().toEpochMilli();
 
-            Document query = new Document("exitTime",
+            double dayPnl = 0;
+
+            // 1. Get realized P&L from trades closed today
+            Document closedTodayQuery = new Document("exitTime",
                 new Document("$gte", startOfDayMs));
 
-            double dayPnl = 0;
-            for (Document doc : mongoTemplate.getCollection("backtest_trades").find(query)) {
+            for (Document doc : mongoTemplate.getCollection("backtest_trades").find(closedTodayQuery)) {
                 Double pnl = doc.getDouble("pnl");
                 if (pnl != null) {
                     dayPnl += pnl;
                 }
             }
+
+            // 2. FIX: Add unrealized P&L from positions opened today
+            List<PositionDTO> positions = getPositionsFromRedis();
+            for (PositionDTO pos : positions) {
+                if (pos.getQuantity() > 0 && pos.getOpenedAt() != null) {
+                    // Check if position was opened today
+                    long posOpenedMs = pos.getOpenedAt().atZone(ZoneId.of("Asia/Kolkata"))
+                            .toInstant().toEpochMilli();
+                    if (posOpenedMs >= startOfDayMs) {
+                        dayPnl += pos.getUnrealizedPnl();
+                    }
+                }
+            }
+
             return dayPnl;
 
         } catch (Exception e) {
@@ -414,6 +502,25 @@ public class WalletService {
                 .positions(new ArrayList<>())
                 .lastUpdated(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * FIX BUG #6: Normalize side from BUY/SELL to LONG/SHORT
+     * This ensures consistent handling regardless of how the side was stored.
+     */
+    private String normalizeSide(String side) {
+        if (side == null) return "LONG";
+        switch (side.toUpperCase()) {
+            case "BUY":
+            case "LONG":
+                return "LONG";
+            case "SELL":
+            case "SHORT":
+                return "SHORT";
+            default:
+                log.warn("Unknown side '{}', defaulting to LONG", side);
+                return "LONG";
+        }
     }
 
     /**

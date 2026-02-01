@@ -2,8 +2,28 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Client, IMessage } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
 import { useDashboardStore } from '../store/dashboardStore'
+import { walletApi, scoresApi, quantScoresApi } from '../services/api'
 
-const WS_URL = 'http://3.110.228.120:8085/ws'
+const WS_URL = 'http://3.111.242.49:8085/ws'
+
+// FIX BUG #10: Data validation helper
+function isValidObject(data: unknown): data is Record<string, unknown> {
+  return data !== null && typeof data === 'object' && !Array.isArray(data)
+}
+
+// FIX BUG #10: Validate wallet data before updating store
+function isValidWallet(data: unknown): boolean {
+  if (!isValidObject(data)) return false
+  // Must have at least walletId or currentCapital to be valid
+  return 'walletId' in data || 'currentCapital' in data || 'positions' in data
+}
+
+// FIX BUG #10: Validate score data before updating store
+function isValidScore(data: unknown): boolean {
+  if (!isValidObject(data)) return false
+  // Must have scripCode to be valid
+  return 'scripCode' in data && typeof data.scripCode === 'string' && data.scripCode.length > 0
+}
 
 export function useWebSocket() {
   const clientRef = useRef<Client | null>(null)
@@ -13,6 +33,8 @@ export function useWebSocket() {
   const [parseErrors, setParseErrors] = useState<string[]>([])
   const reconnectAttempts = useRef(0)
   const maxReconnectAttempts = 10
+  // FIX BUG #12: Track if disconnect handler already fired
+  const disconnectHandled = useRef(false)
 
   const {
     updateWallet,
@@ -25,11 +47,42 @@ export function useWebSocket() {
     updateACL,
     updateFUDKII,
     updateQuantScore,
+    bulkUpdateQuantScores,
     updateNarrative,
     updateIntelligence,
     updateActiveSetups,
     updateForecast
   } = useDashboardStore()
+
+  // FIX BUG #11: Refresh data on reconnect to avoid stale data
+  const refreshDataOnReconnect = useCallback(async () => {
+    console.log('WebSocket reconnected - refreshing data...')
+    try {
+      // Fetch fresh wallet data
+      const walletData = await walletApi.getWallet().catch(() => null)
+      if (walletData && isValidWallet(walletData)) {
+        updateWallet(walletData)
+      }
+
+      // Fetch fresh scores
+      const scoresData = await scoresApi.getTopScores(100).catch(() => [])
+      scoresData.forEach(score => {
+        if (isValidScore(score)) {
+          updateScore(score)
+        }
+      })
+
+      // Fetch fresh quant scores
+      const quantScoresData = await quantScoresApi.getAllScores(100).catch(() => [])
+      if (quantScoresData.length > 0) {
+        bulkUpdateQuantScores(quantScoresData)
+      }
+
+      console.log('Data refresh complete after reconnect')
+    } catch (err) {
+      console.error('Error refreshing data on reconnect:', err)
+    }
+  }, [updateWallet, updateScore, bulkUpdateQuantScores])
 
   const connect = useCallback(() => {
     if (clientRef.current?.connected) return
@@ -46,6 +99,13 @@ export function useWebSocket() {
         setReconnecting(false)
         setError(null)
         setParseErrors([])
+        // FIX BUG #12: Reset disconnect flag
+        disconnectHandled.current = false
+
+        // FIX BUG #11: If this is a reconnection (not first connect), refresh data
+        if (reconnectAttempts.current > 0) {
+          refreshDataOnReconnect()
+        }
         reconnectAttempts.current = 0
 
         // Helper to handle parse errors with error boundary
@@ -55,21 +115,31 @@ export function useWebSocket() {
           setParseErrors(prev => [...prev.slice(-9), errorMsg]) // Keep last 10 errors
         }
 
-        // Subscribe to wallet updates
+        // FIX BUG #10: Subscribe to wallet updates with validation
         client.subscribe('/topic/wallet', (message: IMessage) => {
           try {
             const data = JSON.parse(message.body)
-            updateWallet(data)
+            // Validate data before updating store
+            if (isValidWallet(data)) {
+              updateWallet(data)
+            } else {
+              console.warn('Received invalid wallet data, skipping update:', data)
+            }
           } catch (e) {
             handleParseError('wallet', e)
           }
         })
 
-        // Subscribe to all scores
+        // FIX BUG #10: Subscribe to all scores with validation
         client.subscribe('/topic/scores', (message: IMessage) => {
           try {
             const data = JSON.parse(message.body)
-            updateScore(data)
+            // Validate data before updating store
+            if (isValidScore(data)) {
+              updateScore(data)
+            } else {
+              console.warn('Received invalid score data, skipping update:', data)
+            }
           } catch (e) {
             handleParseError('scores', e)
           }
@@ -145,11 +215,16 @@ export function useWebSocket() {
           }
         })
 
-        // Subscribe to QuantScore updates
+        // FIX BUG #10: Subscribe to QuantScore updates with validation
         client.subscribe('/topic/quant-scores', (message: IMessage) => {
           try {
             const data = JSON.parse(message.body)
-            updateQuantScore(data)
+            // Validate quant score - must have familyId or scripCode and quantScore
+            if (isValidObject(data) && ('familyId' in data || 'scripCode' in data)) {
+              updateQuantScore(data)
+            } else {
+              console.warn('Received invalid quant score data, skipping update')
+            }
           } catch (e) {
             handleParseError('quant-scores', e)
           }
@@ -177,15 +252,35 @@ export function useWebSocket() {
           }
         })
 
-        // Subscribe to active setups
+        // FIX BUG #32: Subscribe to active setups with proper familyId extraction
         client.subscribe('/topic/setups', (message: IMessage) => {
           try {
             const data = JSON.parse(message.body)
             // Setups come as an array, extract familyId from first element
             if (Array.isArray(data) && data.length > 0) {
-              const familyId = data[0].familyId || data[0].scripCode
-              if (familyId) {
+              // FIX: Use explicit checks for falsy values like "0", "", null, undefined
+              let familyId = data[0].familyId
+              if (!familyId || familyId === '0' || familyId === 'null' || familyId === 'undefined') {
+                familyId = data[0].scripCode
+              }
+              // Additional fallback: try to find any valid familyId in the array
+              if (!familyId || familyId === '0' || familyId === 'null' || familyId === 'undefined') {
+                for (const setup of data) {
+                  if (setup.familyId && setup.familyId !== '0' && setup.familyId !== 'null') {
+                    familyId = setup.familyId
+                    break
+                  }
+                  if (setup.scripCode && setup.scripCode !== '0' && setup.scripCode !== 'null') {
+                    familyId = setup.scripCode
+                    break
+                  }
+                }
+              }
+              // Only update if we have a valid familyId
+              if (familyId && familyId !== '0' && familyId !== 'null' && familyId !== 'undefined') {
                 updateActiveSetups(familyId, data)
+              } else {
+                console.warn('Received setups with no valid familyId, skipping:', data)
               }
             }
           } catch (e) {
@@ -208,33 +303,46 @@ export function useWebSocket() {
         console.error('STOMP error:', frame.headers['message'])
         setError(frame.headers['message'] || 'Connection error')
         setConnected(false)
-        setReconnecting(true)
-        reconnectAttempts.current++
+        // FIX BUG #12: Only handle once
+        if (!disconnectHandled.current) {
+          disconnectHandled.current = true
+          setReconnecting(true)
+          reconnectAttempts.current++
+        }
       },
 
+      // FIX BUG #12: Prevent double increment by using flag
       onWebSocketClose: () => {
         console.log('WebSocket closed')
         setConnected(false)
-        if (reconnectAttempts.current < maxReconnectAttempts) {
-          setReconnecting(true)
-          reconnectAttempts.current++
-          console.log(`Reconnecting... attempt ${reconnectAttempts.current}/${maxReconnectAttempts}`)
-        } else {
-          setReconnecting(false)
-          setError('Connection lost. Maximum reconnection attempts reached.')
+        // Only handle if not already handled
+        if (!disconnectHandled.current) {
+          disconnectHandled.current = true
+          if (reconnectAttempts.current < maxReconnectAttempts) {
+            setReconnecting(true)
+            reconnectAttempts.current++
+            console.log(`Reconnecting... attempt ${reconnectAttempts.current}/${maxReconnectAttempts}`)
+          } else {
+            setReconnecting(false)
+            setError('Connection lost. Maximum reconnection attempts reached.')
+          }
         }
       },
 
       onDisconnect: () => {
         console.log('STOMP disconnected')
         setConnected(false)
-        setReconnecting(true)
+        // FIX BUG #12: Don't increment here - let onWebSocketClose handle it
+        // This prevents double increment when both handlers fire
+        if (!disconnectHandled.current) {
+          setReconnecting(true)
+        }
       },
     })
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, refreshDataOnReconnect, bulkUpdateQuantScores])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {

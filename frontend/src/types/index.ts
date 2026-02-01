@@ -98,6 +98,13 @@ export interface FamilyScore {
   pcr?: number;
   spotFuturePremium?: number;
   futuresBuildup: string;
+  // Raw OI data for transparency
+  totalCallOI?: number;
+  totalPutOI?: number;
+  totalCallOIChange?: number;
+  totalPutOIChange?: number;
+  callOiBuildingUp?: boolean;
+  putOiUnwinding?: boolean;
 
   // Gates
   hardGatePassed: boolean;
@@ -457,6 +464,11 @@ export interface OptionsFlowSummary {
   oiBuildupType: string;
   futuresBuildup: string;
   spotFuturePremium: number;
+  // Raw OI data for transparency
+  totalCallOI?: number;
+  totalPutOI?: number;
+  totalCallOIChange?: number;
+  totalPutOIChange?: number;
 }
 
 export interface PriceActionSummary {

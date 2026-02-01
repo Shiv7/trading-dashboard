@@ -35,7 +35,7 @@ public class FamilyCandleConsumer {
         try {
             JsonNode root = objectMapper.readTree(payload);
             JsonNode equity = root.path("equity");
-            
+
             if (equity.isMissingNode() || equity.isNull()) {
                 log.trace("No equity node in message, skipping");
                 return;
@@ -49,7 +49,7 @@ public class FamilyCandleConsumer {
 
             FamilyScoreDTO dto = parseFamilyScore(root, equity);
             log.info("Received family candle for {} ({}), broadcasting...", scripCode, dto.getTimeframe());
-            
+
             // Broadcast to WebSocket
             sessionManager.broadcastScoreUpdate(scripCode, dto);
 
@@ -63,17 +63,33 @@ public class FamilyCandleConsumer {
         String timeframe = equity.path("timeframe").asText("1m");
         long timestamp = equity.path("windowEndMillis").asLong(System.currentTimeMillis());
 
+        // FIX BUG #21: Better null handling for OHLC - use NaN to indicate missing data
+        // instead of 0 which could be confused with actual price
+        double openPrice = equity.path("open").isNull() || equity.path("open").isMissingNode()
+                ? Double.NaN : equity.path("open").asDouble();
+        double highPrice = equity.path("high").isNull() || equity.path("high").isMissingNode()
+                ? Double.NaN : equity.path("high").asDouble();
+        double lowPrice = equity.path("low").isNull() || equity.path("low").isMissingNode()
+                ? Double.NaN : equity.path("low").asDouble();
+        double closePrice = equity.path("close").isNull() || equity.path("close").isMissingNode()
+                ? Double.NaN : equity.path("close").asDouble();
+
+        // Validate OHLC data - if any price is NaN or 0, log warning
+        if (Double.isNaN(closePrice) || closePrice <= 0) {
+            log.warn("[FAMILY_CANDLE] {} - Invalid/missing close price, candle data may be stale", scripCode);
+        }
+
         FamilyScoreDTO.FamilyScoreDTOBuilder builder = FamilyScoreDTO.builder()
                 .scripCode(scripCode)
                 .companyName(equity.path("companyName").asText(scripCode))
                 .timeframe(timeframe)
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
-                .open(equity.path("open").asDouble())
-                .high(equity.path("high").asDouble())
-                .low(equity.path("low").asDouble())
-                .close(equity.path("close").asDouble())
-                .volume(equity.path("volume").asLong())
-                .vwap(equity.path("vwap").asDouble());
+                .open(Double.isNaN(openPrice) ? 0 : openPrice)
+                .high(Double.isNaN(highPrice) ? 0 : highPrice)
+                .low(Double.isNaN(lowPrice) ? 0 : lowPrice)
+                .close(Double.isNaN(closePrice) ? 0 : closePrice)
+                .volume(equity.path("volume").asLong(0))
+                .vwap(equity.path("vwap").asDouble(0));
 
         // VCP Module scores (from family level or equity)
         builder.vcpCombinedScore(root.path("vcpCombinedScore").asDouble(0))
@@ -104,6 +120,14 @@ public class FamilyCandleConsumer {
                .spotFuturePremium(root.path("spotFuturePremium").isNull() ? null : root.path("spotFuturePremium").asDouble())
                .futuresBuildup(root.path("futuresBuildup").asText("NONE"));
 
+        // FIX: Add raw OI data for transparency
+        builder.totalCallOI(root.path("totalCallOI").isNull() ? null : root.path("totalCallOI").asLong())
+               .totalPutOI(root.path("totalPutOI").isNull() ? null : root.path("totalPutOI").asLong())
+               .totalCallOIChange(root.path("totalCallOIChange").isNull() ? null : root.path("totalCallOIChange").asLong())
+               .totalPutOIChange(root.path("totalPutOIChange").isNull() ? null : root.path("totalPutOIChange").asLong())
+               .callOiBuildingUp(root.path("callOiBuildingUp").asBoolean(false))
+               .putOiUnwinding(root.path("putOiUnwinding").asBoolean(false));
+
         // Gate status (if available)
         builder.hardGatePassed(root.path("hardGatePassed").asBoolean(false))
                .hardGateReason(root.path("hardGateReason").asText(""))
@@ -121,10 +145,22 @@ public class FamilyCandleConsumer {
                .signalEmitted(root.path("signalEmitted").asBoolean(false));
 
         // Module details map for expandable view
+        // FIX BUG #22: Handle null volume data properly
         Map<String, Object> details = new HashMap<>();
         details.put("vpin", equity.path("vpin").asDouble(0));
         details.put("ofi", equity.path("ofi").asDouble(0));
-        details.put("volumeDelta", equity.path("buyVolume").asLong() - equity.path("sellVolume").asLong());
+
+        // Calculate volume delta only if both values are present
+        long buyVolume = equity.path("buyVolume").asLong(0);
+        long sellVolume = equity.path("sellVolume").asLong(0);
+        // Only include volumeDelta if at least one volume is non-zero (data is present)
+        if (buyVolume > 0 || sellVolume > 0) {
+            details.put("volumeDelta", buyVolume - sellVolume);
+            details.put("volumeDeltaValid", true);
+        } else {
+            details.put("volumeDelta", 0L);
+            details.put("volumeDeltaValid", false);  // Flag to indicate data is unavailable
+        }
         builder.moduleDetails(details);
 
         return builder.build();
@@ -134,9 +170,8 @@ public class FamilyCandleConsumer {
         double vcpScore = root.path("vcpCombinedScore").asDouble(0);
         double ipuScore = root.path("ipuFinalScore").asDouble(0);
         double regimeStrength = root.path("indexRegimeStrength").asDouble(0.5);
-        
+
         // Simple weighted average for overall score
         return (vcpScore * 0.4 + ipuScore * 0.4 + regimeStrength * 0.2) * 10;
     }
 }
-

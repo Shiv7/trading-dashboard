@@ -10,6 +10,13 @@ import {
   Line,
 } from 'recharts'
 import type { FamilyScore } from '../../types'
+import type { IndicatorHistoryPoint } from '../../types/indicators'
+
+interface IndicatorToggles {
+  bollingerBands: boolean;
+  vwap: boolean;
+  superTrend: boolean;
+}
 
 interface PriceChartProps {
   data: FamilyScore[]
@@ -18,6 +25,9 @@ interface PriceChartProps {
   entryPrice?: number
   stopLoss?: number
   target1?: number
+  // Indicator overlay support
+  indicatorHistory?: IndicatorHistoryPoint[]
+  indicatorToggles?: IndicatorToggles
 }
 
 interface CandleData {
@@ -34,6 +44,15 @@ interface CandleData {
   bodyHeight: number
   wickTop: number
   wickBottom: number
+  // Indicator overlay fields (optional)
+  bbUpper?: number
+  bbMiddle?: number
+  bbLower?: number
+  vwap?: number
+  vwapUpper?: number
+  vwapLower?: number
+  superTrend?: number
+  superTrendDirection?: 'BULLISH' | 'BEARISH'
 }
 
 export default function PriceChart({
@@ -43,9 +62,11 @@ export default function PriceChart({
   entryPrice,
   stopLoss,
   target1,
+  indicatorHistory,
+  indicatorToggles,
 }: PriceChartProps) {
   const chartData = useMemo<CandleData[]>(() => {
-    return data
+    const candles: CandleData[] = data
       .map((score) => {
         const bullish = score.close >= score.open
         return {
@@ -69,7 +90,33 @@ export default function PriceChart({
       })
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(-50) // Last 50 candles
-  }, [data])
+
+    // Merge indicator history if available
+    if (indicatorHistory && indicatorHistory.length > 0) {
+      return candles.map((candle, idx) => {
+        // Try to find matching indicator data by index (same array position)
+        const indicatorIdx = indicatorHistory.length - candles.length + idx
+        const indicator = indicatorIdx >= 0 ? indicatorHistory[indicatorIdx] : null
+
+        if (indicator) {
+          return {
+            ...candle,
+            bbUpper: indicator.bbUpper,
+            bbMiddle: indicator.bbMiddle,
+            bbLower: indicator.bbLower,
+            vwap: indicator.vwap,
+            vwapUpper: indicator.vwapUpper,
+            vwapLower: indicator.vwapLower,
+            superTrend: indicator.superTrend,
+            superTrendDirection: indicator.superTrendDirection,
+          }
+        }
+        return candle
+      })
+    }
+
+    return candles
+  }, [data, indicatorHistory])
 
   const { minPrice, maxPrice, maxVolume } = useMemo(() => {
     if (chartData.length === 0) {
@@ -244,6 +291,91 @@ export default function PriceChart({
               )
             }) as any}
           />
+
+          {/* Bollinger Bands Overlay */}
+          {indicatorToggles?.bollingerBands && (
+            <>
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="bbUpper"
+                stroke="#9333ea"
+                strokeWidth={1}
+                strokeDasharray="3 3"
+                dot={false}
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="bbMiddle"
+                stroke="#9333ea"
+                strokeWidth={1}
+                dot={false}
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="bbLower"
+                stroke="#9333ea"
+                strokeWidth={1}
+                strokeDasharray="3 3"
+                dot={false}
+                connectNulls
+              />
+            </>
+          )}
+
+          {/* VWAP Overlay */}
+          {indicatorToggles?.vwap && (
+            <>
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="vwap"
+                stroke="#06b6d4"
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="vwapUpper"
+                stroke="#06b6d4"
+                strokeWidth={1}
+                strokeDasharray="5 5"
+                opacity={0.5}
+                dot={false}
+                connectNulls
+              />
+              <Line
+                yAxisId="price"
+                type="monotone"
+                dataKey="vwapLower"
+                stroke="#06b6d4"
+                strokeWidth={1}
+                strokeDasharray="5 5"
+                opacity={0.5}
+                dot={false}
+                connectNulls
+              />
+            </>
+          )}
+
+          {/* SuperTrend Overlay */}
+          {indicatorToggles?.superTrend && (
+            <Line
+              yAxisId="price"
+              type="stepAfter"
+              dataKey="superTrend"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              dot={false}
+              connectNulls
+            />
+          )}
 
           {/* Reference Lines for trade levels */}
           {entryPrice && (

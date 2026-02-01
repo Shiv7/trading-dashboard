@@ -95,12 +95,37 @@ public class TradeOutcomeConsumer {
             durationMinutes = ChronoUnit.MINUTES.between(entryTime, exitTime);
         }
 
-        double pnlPercent = entryPrice > 0 ? (pnl / entryPrice) * 100 : 0;
+        // FIX BUG #16: Properly read quantity with warning when missing
+        int quantity = root.path("quantity").asInt(0);
+        if (quantity == 0) {
+            quantity = root.path("qty").asInt(0); // Try alternate field name
+        }
+        if (quantity <= 0) {
+            log.warn("[TRADE_OUTCOME] {} - Missing quantity in trade outcome, defaulting to 1. P&L% may be wrong!",
+                root.path("scripCode").asText());
+            quantity = 1;
+        }
+
+        // FIX BUG #15: Correct P&L% calculation
+        // BEFORE: pnlPercent = (pnl / entryPrice) * 100 - WRONG! Ignores quantity
+        // AFTER: Calculate based on position cost (entryPrice * quantity)
+        double positionCost = entryPrice * quantity;
+        double pnlPercent = positionCost > 0 ? (pnl / positionCost) * 100 : 0;
+
         double stopLoss = root.path("stopLoss").asDouble(0);
+
+        // FIX BUG #17: Calculate R-multiple properly
         double rMultiple = root.path("rMultiple").asDouble(0);
         if (rMultiple == 0 && stopLoss > 0 && entryPrice > 0) {
-            double risk = Math.abs(entryPrice - stopLoss);
-            rMultiple = risk > 0 ? pnl / risk : 0;
+            double riskPerShare = Math.abs(entryPrice - stopLoss);
+            double totalRisk = riskPerShare * quantity;
+            rMultiple = totalRisk > 0 ? pnl / totalRisk : 0;
+        } else if (rMultiple == 0 && entryPrice > 0) {
+            // FIX: If no SL, use a default 2% risk estimate for R calculation
+            log.debug("[TRADE_OUTCOME] {} - No stopLoss provided, using 2% risk estimate for R-multiple",
+                root.path("scripCode").asText());
+            double estimatedRisk = entryPrice * 0.02 * quantity;
+            rMultiple = estimatedRisk > 0 ? pnl / estimatedRisk : 0;
         }
 
         return TradeDTO.builder()
@@ -112,7 +137,7 @@ public class TradeOutcomeConsumer {
                 .status(status)
                 .entryPrice(entryPrice)
                 .entryTime(entryTime)
-                .quantity(root.path("quantity").asInt(1))
+                .quantity(quantity) // FIX: Use properly parsed quantity
                 .exitPrice(exitPrice)
                 .exitTime(exitTime)
                 .exitReason(exitReason)
@@ -126,17 +151,45 @@ public class TradeOutcomeConsumer {
                 .build();
     }
 
+    /**
+     * FIX BUG #18: Properly determine side with better fallback logic
+     */
     private String determineSide(JsonNode root) {
+        // First, try explicit side field
         String side = root.path("side").asText();
-        if (side != null && !side.isEmpty()) {
-            return side.toUpperCase().contains("BUY") || side.toUpperCase().contains("LONG") 
-                ? "LONG" : "SHORT";
+        if (side != null && !side.isEmpty() && !"null".equals(side)) {
+            String normalized = side.toUpperCase();
+            if (normalized.contains("BUY") || normalized.contains("LONG")) {
+                return "LONG";
+            } else if (normalized.contains("SELL") || normalized.contains("SHORT")) {
+                return "SHORT";
+            }
         }
-        
-        // Infer from entry/exit prices
+
+        // Second, try direction field
+        String direction = root.path("direction").asText();
+        if (direction != null && !direction.isEmpty() && !"null".equals(direction)) {
+            String normalized = direction.toUpperCase();
+            if (normalized.contains("BULL") || normalized.contains("LONG") || normalized.contains("BUY")) {
+                return "LONG";
+            } else if (normalized.contains("BEAR") || normalized.contains("SHORT") || normalized.contains("SELL")) {
+                return "SHORT";
+            }
+        }
+
+        // Third, infer from entry/stop prices (only if stopLoss is explicitly provided)
         double entry = root.path("entryPrice").asDouble(0);
         double stop = root.path("stopLoss").asDouble(0);
-        return entry > stop ? "LONG" : "SHORT";
+
+        // FIX: Only use stop loss inference if stop is actually set (not 0)
+        if (stop > 0 && entry > 0) {
+            return entry > stop ? "LONG" : "SHORT";
+        }
+
+        // Default to LONG with warning
+        log.warn("[TRADE_OUTCOME] {} - Could not determine side, defaulting to LONG",
+            root.path("scripCode").asText());
+        return "LONG";
     }
 
     private LocalDateTime parseDateTime(JsonNode node) {

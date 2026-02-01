@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.QuantScoreDTO;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -30,6 +32,7 @@ import java.util.Collections;
 public class QuantScoreConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final RedisTemplate<String, String> redisTemplate;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -41,6 +44,59 @@ public class QuantScoreConsumer {
 
     // Legacy flat cache for backward-compatible API (returns latest timeframe only)
     private final Map<String, QuantScoreDTO> latestScoreFlat = new ConcurrentHashMap<>();
+
+    // Redis key prefix (must match streaming candle service)
+    private static final String REDIS_KEY_PREFIX = "quant:score:";
+
+    /**
+     * Load cached quant scores from Redis on startup.
+     * This ensures dashboard is not empty after backend restart.
+     */
+    @PostConstruct
+    public void loadFromRedis() {
+        try {
+            Set<String> keys = redisTemplate.keys(REDIS_KEY_PREFIX + "*");
+            if (keys == null || keys.isEmpty()) {
+                log.info("[QUANT_SCORE] No cached quant scores in Redis on startup");
+                return;
+            }
+
+            // Filter out history keys
+            int loaded = 0;
+            for (String key : keys) {
+                if (key.contains(":history:")) {
+                    continue;
+                }
+
+                try {
+                    String json = redisTemplate.opsForValue().get(key);
+                    if (json != null && !json.isEmpty()) {
+                        JsonNode root = objectMapper.readTree(json);
+                        String familyId = root.path("familyId").asText();
+
+                        if (familyId != null && !familyId.isEmpty()) {
+                            QuantScoreDTO dto = parseQuantScore(root);
+                            String timeframe = dto.getTimeframe() != null ? dto.getTimeframe() : "1m";
+
+                            // Cache score by familyId AND timeframe
+                            latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
+                                    .put(timeframe, dto);
+
+                            // Also update flat cache
+                            latestScoreFlat.put(familyId, dto);
+                            loaded++;
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("[QUANT_SCORE] Error parsing cached quant score from {}: {}", key, e.getMessage());
+                }
+            }
+
+            log.info("[QUANT_SCORE] Loaded {} quant scores from Redis on startup", loaded);
+        } catch (Exception e) {
+            log.error("[QUANT_SCORE] Error loading quant scores from Redis: {}", e.getMessage());
+        }
+    }
 
     @KafkaListener(topics = "quant-scores", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onQuantScore(String payload) {
@@ -54,7 +110,13 @@ public class QuantScoreConsumer {
             }
 
             QuantScoreDTO dto = parseQuantScore(root);
-            String timeframe = dto.getTimeframe() != null ? dto.getTimeframe() : "1m";
+            String timeframe = dto.getTimeframe();
+
+            // FIX BUG #13: Log warning when timeframe is missing - helps detect data issues
+            if (timeframe == null || timeframe.isEmpty()) {
+                log.warn("[QUANT_SCORE] {} - Missing timeframe in message, defaulting to 1m. This may cause data collision!", familyId);
+                timeframe = "1m";
+            }
 
             log.info("Received quant-score for {} (score={}, timeframe={}, label={}, actionable={})",
                 familyId, String.format("%.1f", dto.getQuantScore()), timeframe, dto.getQuantLabel(), dto.isActionable());
@@ -322,6 +384,11 @@ public class QuantScoreConsumer {
                 .oiMomentum(node.path("oiMomentum").asDouble(0))
                 .futuresBuildup(futuresBuildup)
                 .spotFuturePremium(node.path("spotFuturePremium").asDouble(0))
+                // FIX: Add raw OI data for transparency
+                .totalCallOI(node.path("totalCallOI").isNull() ? null : node.path("totalCallOI").asLong())
+                .totalPutOI(node.path("totalPutOI").isNull() ? null : node.path("totalPutOI").asLong())
+                .totalCallOIChange(node.path("totalCallOIChange").isNull() ? null : node.path("totalCallOIChange").asLong())
+                .totalPutOIChange(node.path("totalPutOIChange").isNull() ? null : node.path("totalPutOIChange").asLong())
                 .build();
     }
 
