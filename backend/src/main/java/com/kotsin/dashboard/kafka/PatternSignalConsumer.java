@@ -10,11 +10,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
+import org.springframework.scheduling.annotation.Scheduled;
+
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 /**
@@ -37,13 +41,26 @@ public class PatternSignalConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    // Memory limits to prevent OOM
+    private static final int MAX_ACTIVE_PATTERNS = 1000;
+    private static final int MAX_COMPLETED_PATTERNS = 500;
+    private static final int MAX_PATTERNS_PER_STOCK = 50;
+    private static final int PATTERN_EXPIRY_HOURS = 24;
+
     // In-memory pattern storage
     private final Map<String, PatternSignalDTO> activePatterns = new ConcurrentHashMap<>();
     private final Map<String, PatternSignalDTO> completedPatterns = new ConcurrentHashMap<>();
+    // FIX: Use CopyOnWriteArrayList for thread-safe iteration
     private final Map<String, List<PatternSignalDTO>> patternsByStock = new ConcurrentHashMap<>();
 
     // Pattern statistics
     private final Map<String, PatternStats> patternStats = new ConcurrentHashMap<>();
+
+    @PostConstruct
+    public void init() {
+        log.info("PatternSignalConsumer initialized with limits: maxActive={}, maxCompleted={}, maxPerStock={}",
+                MAX_ACTIVE_PATTERNS, MAX_COMPLETED_PATTERNS, MAX_PATTERNS_PER_STOCK);
+    }
 
     @KafkaListener(topics = {"pattern-signals"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onPatternSignal(String payload) {
@@ -58,9 +75,28 @@ public class PatternSignalConsumer {
                 return;
             }
 
+            // FIX: Check max limit before adding
+            if (activePatterns.size() >= MAX_ACTIVE_PATTERNS && !activePatterns.containsKey(pattern.getPatternId())) {
+                log.warn("Active patterns limit reached ({}), skipping new pattern for {}",
+                        MAX_ACTIVE_PATTERNS, pattern.getScripCode());
+                return;
+            }
+
             // Store pattern
             activePatterns.put(pattern.getPatternId(), pattern);
-            patternsByStock.computeIfAbsent(pattern.getScripCode(), k -> new ArrayList<>()).add(pattern);
+
+            // FIX: Use CopyOnWriteArrayList and enforce per-stock limit
+            patternsByStock.compute(pattern.getScripCode(), (k, list) -> {
+                if (list == null) {
+                    list = new CopyOnWriteArrayList<>();
+                }
+                // Remove old patterns if limit exceeded
+                while (list.size() >= MAX_PATTERNS_PER_STOCK) {
+                    list.remove(0); // Remove oldest
+                }
+                list.add(pattern);
+                return list;
+            });
 
             // Update statistics
             updatePatternStats(pattern);
@@ -91,12 +127,79 @@ public class PatternSignalConsumer {
             pattern.setStatus(isWin ? "COMPLETED_WIN" : "COMPLETED_LOSS");
             pattern.setActualPnl(pnl);
             pattern.setCompletedAt(LocalDateTime.now());
+
+            // FIX: Enforce completed patterns limit
+            if (completedPatterns.size() >= MAX_COMPLETED_PATTERNS) {
+                // Remove oldest completed pattern
+                completedPatterns.values().stream()
+                        .min(Comparator.comparing(p -> p.getCompletedAt() != null ? p.getCompletedAt() : LocalDateTime.MIN))
+                        .ifPresent(oldest -> completedPatterns.remove(oldest.getPatternId()));
+            }
             completedPatterns.put(patternId, pattern);
 
             // Update stats
             PatternStats stats = patternStats.computeIfAbsent(pattern.getPatternType(),
                     k -> new PatternStats(pattern.getPatternType()));
             stats.recordOutcome(isWin, pnl);
+        }
+    }
+
+    /**
+     * Scheduled cleanup of expired patterns (every 5 minutes)
+     */
+    @Scheduled(fixedRate = 300000) // 5 minutes
+    public void cleanupExpiredPatterns() {
+        try {
+            LocalDateTime cutoff = LocalDateTime.now().minusHours(PATTERN_EXPIRY_HOURS);
+            int expiredCount = 0;
+
+            // Expire old active patterns
+            List<String> toExpire = new ArrayList<>();
+            for (Map.Entry<String, PatternSignalDTO> entry : activePatterns.entrySet()) {
+                PatternSignalDTO pattern = entry.getValue();
+
+                // Check if pattern has explicit expiry
+                if (pattern.getExpiresAt() != null && pattern.getExpiresAt().isBefore(LocalDateTime.now())) {
+                    toExpire.add(entry.getKey());
+                }
+                // Check if pattern is older than cutoff
+                else if (pattern.getTriggeredAt() != null && pattern.getTriggeredAt().isBefore(cutoff)) {
+                    toExpire.add(entry.getKey());
+                }
+            }
+
+            for (String patternId : toExpire) {
+                PatternSignalDTO pattern = activePatterns.remove(patternId);
+                if (pattern != null) {
+                    pattern.setStatus("EXPIRED");
+                    pattern.setCompletedAt(LocalDateTime.now());
+                    // Don't add to completed if limit reached
+                    if (completedPatterns.size() < MAX_COMPLETED_PATTERNS) {
+                        completedPatterns.put(patternId, pattern);
+                    }
+                    expiredCount++;
+                }
+            }
+
+            // Cleanup old completed patterns (keep only recent ones)
+            if (completedPatterns.size() > MAX_COMPLETED_PATTERNS) {
+                List<String> toRemove = completedPatterns.values().stream()
+                        .sorted(Comparator.comparing(p -> p.getCompletedAt() != null ? p.getCompletedAt() : LocalDateTime.MIN))
+                        .limit(completedPatterns.size() - MAX_COMPLETED_PATTERNS)
+                        .map(PatternSignalDTO::getPatternId)
+                        .collect(Collectors.toList());
+                toRemove.forEach(completedPatterns::remove);
+            }
+
+            // Cleanup patternsByStock - remove empty lists
+            patternsByStock.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+
+            if (expiredCount > 0) {
+                log.info("Pattern cleanup: expired {} patterns, active={}, completed={}",
+                        expiredCount, activePatterns.size(), completedPatterns.size());
+            }
+        } catch (Exception e) {
+            log.error("Error during pattern cleanup: {}", e.getMessage());
         }
     }
 

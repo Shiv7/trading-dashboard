@@ -35,6 +35,10 @@ public class QuantScoresController {
         List<QuantScoreDTO> scores = allTimeframes
                 ? quantScoreConsumer.getAllScoresAllTimeframes()
                 : quantScoreConsumer.getAllScoresSorted();
+        // FIX BUG #6: Null check before size()
+        if (scores == null) {
+            return ResponseEntity.ok(List.of());
+        }
         if (scores.size() > limit) {
             scores = scores.subList(0, limit);
         }
@@ -49,6 +53,10 @@ public class QuantScoresController {
     public ResponseEntity<List<QuantScoreDTO>> getAllScoresAllTimeframes(
             @RequestParam(defaultValue = "500") int limit) {
         List<QuantScoreDTO> scores = quantScoreConsumer.getAllScoresAllTimeframes();
+        // FIX BUG #6: Null check before size()
+        if (scores == null) {
+            return ResponseEntity.ok(List.of());
+        }
         if (scores.size() > limit) {
             scores = scores.subList(0, limit);
         }
@@ -164,6 +172,19 @@ public class QuantScoresController {
     @GetMapping("/breakdown-summary")
     public ResponseEntity<Map<String, Object>> getBreakdownSummary() {
         List<QuantScoreDTO> scores = quantScoreConsumer.getAllScoresSorted();
+        // FIX BUG #7: Null check for scores list
+        if (scores == null || scores.isEmpty()) {
+            return ResponseEntity.ok(Map.of(
+                    "avgGreeksScore", 0.0,
+                    "avgIVSurfaceScore", 0.0,
+                    "avgMicrostructureScore", 0.0,
+                    "avgOptionsFlowScore", 0.0,
+                    "avgPriceActionScore", 0.0,
+                    "avgVolumeProfileScore", 0.0,
+                    "avgCrossInstrumentScore", 0.0,
+                    "avgConfluenceScore", 0.0
+            ));
+        }
 
         // Average each category across all scores
         double avgGreeks = scores.stream()

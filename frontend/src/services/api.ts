@@ -400,6 +400,64 @@ export const unifiedCandlesApi = {
     fetchStreamingJson<Record<string, unknown>>('/candles/stats'),
 }
 
+// ===== TRADING SIGNALS API (Signal Confirmation) =====
+export interface TradingSignal {
+  signalId: string
+  symbol: string
+  scripCode: string
+  exchange: string
+  companyName: string
+  timeframe: string
+  state: string
+  event: string
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  currentPrice: number
+  entryPrice: number
+  stopLoss: number
+  target1: number
+  target2: number
+  compositeScore: number
+  confidence: number
+  reason: string
+  confirmationStatus: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'EXECUTED' | 'EXPIRED'
+  receivedAt: string
+  confirmedAt?: string
+  executionOrderId?: string
+}
+
+export const tradingSignalsApi = {
+  getPendingSignals: () => fetchJson<TradingSignal[]>('/signals/trading/pending'),
+
+  getSignal: (signalId: string) => fetchJson<TradingSignal>(`/signals/trading/${signalId}`),
+
+  confirmSignal: (signalId: string, confirmedBy?: string) =>
+    postJson<{ success: boolean; message: string; signal: TradingSignal; orderId?: string }>(
+      `/signals/trading/${signalId}/confirm`,
+      { confirmedBy: confirmedBy || 'user' }
+    ),
+
+  rejectSignal: (signalId: string, reason?: string) =>
+    postJson<{ success: boolean; message: string; signal: TradingSignal }>(
+      `/signals/trading/${signalId}/reject`,
+      { rejectedBy: 'user', reason: reason || 'User rejected' }
+    ),
+
+  getSignalHistory: (limit = 50) =>
+    fetchJson<TradingSignal[]>(`/signals/trading/history?limit=${limit}`),
+
+  confirmAllQuality: (minScore = 70, minRR = 1.5) =>
+    postJson<{ confirmed: number; failed: number }>(
+      `/signals/trading/confirm-all?minScore=${minScore}&minRR=${minRR}`,
+      {}
+    ),
+
+  rejectAll: (reason?: string) =>
+    postJson<{ rejected: number }>(
+      '/signals/trading/reject-all',
+      { reason: reason || 'Bulk rejection' }
+    ),
+}
+
 // ===== STRATEGY ANALYSIS API (VCP, IPU, Pivot from Redis) =====
 export const strategyAnalysisApi = {
   // Individual symbol endpoints
@@ -437,5 +495,40 @@ export const strategyAnalysisApi = {
 
   getStateCounts: (timeframe: string = '5m') =>
     fetchStreamingJson<Record<string, number>>(`/strategy-analysis/counts?timeframe=${timeframe}`),
+}
+
+// ===== RISK STATUS API (Circuit Breaker, Risk Monitoring) =====
+export interface RiskStatus {
+  healthy: boolean
+  status: 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'HALTED'
+  message: string
+  circuitBreakerTripped: boolean
+  circuitBreakerReason?: string
+  dailyLossPercent: number
+  dailyLossAmount: number
+  dailyLossLimit: number
+  drawdownPercent: number
+  drawdownAmount: number
+  drawdownLimit: number
+  openPositions: number
+  maxOpenPositions: number
+  currentBalance: number
+  availableMargin: number
+}
+
+export const riskStatusApi = {
+  getStatus: () => fetchJson<RiskStatus>('/risk/status'),
+
+  tripCircuitBreaker: (reason?: string) =>
+    postJson<{ success: boolean; message: string }>(
+      `/risk/circuit-breaker/trip?reason=${encodeURIComponent(reason || 'Manual intervention')}`,
+      {}
+    ),
+
+  resetCircuitBreaker: () =>
+    postJson<{ success: boolean; message: string }>(
+      '/risk/circuit-breaker/reset',
+      {}
+    ),
 }
 

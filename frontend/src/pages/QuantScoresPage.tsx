@@ -37,25 +37,30 @@ export default function QuantScoresPage() {
   const { quantScores: wsQuantScores, bulkUpdateQuantScores } = useDashboardStore()
 
   // Merge API scores with real-time WebSocket updates
+  // FIX BUG #4: Changed from Map iteration to Record iteration after store change
   const scores = useMemo(() => {
     const scoreMap = new Map<string, QuantScore>()
     // First add all API scores
-    apiScores.forEach(s => scoreMap.set(s.scripCode, s))
-    // Then override with any real-time WebSocket updates (nested map: scripCode -> timeframe -> score)
-    wsQuantScores.forEach((tfMap: Map<string, QuantScore>, scripCode: string) => {
+    apiScores.forEach(s => {
+      if (s && s.scripCode) scoreMap.set(s.scripCode, s)
+    })
+    // Then override with any real-time WebSocket updates (nested record: scripCode -> timeframe -> score)
+    // wsQuantScores is now Record<string, Record<string, QuantScore>>
+    for (const [scripCode, tfRecord] of Object.entries(wsQuantScores)) {
+      if (!tfRecord || typeof tfRecord !== 'object') continue
       // Get the latest score by timestamp from all timeframes
       let latestScore: QuantScore | undefined
       let latestTime = 0
-      tfMap.forEach((score: QuantScore) => {
-        if (score.timestamp > latestTime) {
+      for (const score of Object.values(tfRecord)) {
+        if (score && score.timestamp > latestTime) {
           latestTime = score.timestamp
           latestScore = score
         }
-      })
+      }
       if (latestScore) {
         scoreMap.set(scripCode, latestScore)
       }
-    })
+    }
     return Array.from(scoreMap.values())
   }, [apiScores, wsQuantScores])
 
@@ -363,7 +368,8 @@ function ScoreCard({ score, isSelected, activeTab, getCategoryScore, getScoreCol
       </div>
 
       {/* Category Score (when filtered) */}
-      {activeTab !== 'all' && categoryScore !== null && (
+      {/* FIX BUG #1: Added null guard for categoryMax */}
+      {activeTab !== 'all' && categoryScore !== null && categoryMax != null && (
         <div className="text-right text-xs">
           <div className="text-white font-medium">{categoryScore.toFixed(1)}</div>
           <div className="text-slate-500">/{categoryMax}</div>
@@ -371,9 +377,10 @@ function ScoreCard({ score, isSelected, activeTab, getCategoryScore, getScoreCol
       )}
 
       {/* Main Score */}
+      {/* FIX BUG #3: Added fallback for undefined quantScore */}
       <div className="text-right flex-shrink-0">
-        <div className={`text-lg font-bold ${getScoreColor(score.quantScore)}`}>
-          {score.quantScore?.toFixed(0)}
+        <div className={`text-lg font-bold ${getScoreColor(score.quantScore ?? 0)}`}>
+          {(score.quantScore ?? 0).toFixed(0)}
         </div>
       </div>
 
@@ -390,8 +397,15 @@ function ScoreCard({ score, isSelected, activeTab, getCategoryScore, getScoreCol
 
 // Detail Panel Component
 function ScoreDetailPanel({ score, onTrade }: { score: QuantScore; onTrade: () => void }) {
-  const fmt = (n: number | undefined, d = 2) => n == null || isNaN(n) ? '-' : n.toFixed(d)
-  const fmtPct = (n: number | undefined) => n == null || isNaN(n) ? '-' : `${(n * 100).toFixed(0)}%`
+  const fmt = (n: number | undefined | null, d = 2) => n == null || isNaN(n) ? '-' : n.toFixed(d)
+  // FIX BUG #5: Handle both 0-1 range and 0-100 range percentages
+  const fmtPct = (n: number | undefined | null) => {
+    if (n == null || isNaN(n)) return '-'
+    // If value is > 1, assume it's already a percentage (0-100)
+    // If value is <= 1, assume it's a ratio (0-1) and multiply by 100
+    const pct = n > 1 ? n : n * 100
+    return `${pct.toFixed(0)}%`
+  }
 
   return (
     <div className="space-y-3 max-h-[calc(100vh-280px)] overflow-y-auto pr-1">
@@ -404,10 +418,11 @@ function ScoreDetailPanel({ score, onTrade }: { score: QuantScore; onTrade: () =
             </Link>
             <div className="text-xs text-slate-400">{score.humanReadableTime} | {score.timeframe}</div>
           </div>
-          <div className={`text-3xl font-bold ${score.quantScore >= 75 ? 'text-emerald-400' : score.quantScore >= 60 ? 'text-blue-400' :
-            score.quantScore >= 45 ? 'text-amber-400' : 'text-slate-400'
+          {/* FIX BUG #3: Added fallback for undefined quantScore */}
+          <div className={`text-3xl font-bold ${(score.quantScore ?? 0) >= 75 ? 'text-emerald-400' : (score.quantScore ?? 0) >= 60 ? 'text-blue-400' :
+            (score.quantScore ?? 0) >= 45 ? 'text-amber-400' : 'text-slate-400'
             }`}>
-            {score.quantScore?.toFixed(1)}
+            {(score.quantScore ?? 0).toFixed(1)}
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs">

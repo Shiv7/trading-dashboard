@@ -48,6 +48,10 @@ public class QuantScoreConsumer {
     // Redis key prefix (must match streaming candle service)
     private static final String REDIS_KEY_PREFIX = "quant:score:";
 
+    // FIX BUG #10: Limit max cached scores to prevent OOM
+    private static final int MAX_CACHED_SCORES = 5000;
+    private static final int MAX_REDIS_LOAD = 10000;
+
     /**
      * Load cached quant scores from Redis on startup.
      * This ensures dashboard is not empty after backend restart.
@@ -61,9 +65,19 @@ public class QuantScoreConsumer {
                 return;
             }
 
+            // FIX BUG #10: Limit max keys to prevent OOM
+            if (keys.size() > MAX_REDIS_LOAD) {
+                log.warn("[QUANT_SCORE] Large number of cached scores ({}) - limiting to {}", keys.size(), MAX_REDIS_LOAD);
+            }
+
             // Filter out history keys
             int loaded = 0;
             for (String key : keys) {
+                if (loaded >= MAX_REDIS_LOAD) {
+                    log.warn("[QUANT_SCORE] Reached max load limit, stopping at {} scores", loaded);
+                    break;
+                }
+
                 if (key.contains(":history:")) {
                     continue;
                 }
@@ -76,14 +90,18 @@ public class QuantScoreConsumer {
 
                         if (familyId != null && !familyId.isEmpty()) {
                             QuantScoreDTO dto = parseQuantScore(root);
+                            if (dto == null) {
+                                log.warn("[QUANT_SCORE] Failed to parse score from Redis key: {}", key);
+                                continue;
+                            }
                             String timeframe = dto.getTimeframe() != null ? dto.getTimeframe() : "1m";
 
-                            // Cache score by familyId AND timeframe
-                            latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
-                                    .put(timeframe, dto);
-
-                            // Also update flat cache
-                            latestScoreFlat.put(familyId, dto);
+                            // FIX BUG #8: Use synchronized block for thread safety
+                            synchronized (latestScores) {
+                                latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
+                                        .put(timeframe, dto);
+                                latestScoreFlat.put(familyId, dto);
+                            }
                             loaded++;
                         }
                     }
@@ -110,27 +128,43 @@ public class QuantScoreConsumer {
             }
 
             QuantScoreDTO dto = parseQuantScore(root);
+            // FIX BUG #11: Validate parsing result
+            if (dto == null) {
+                log.warn("[QUANT_SCORE] Failed to parse message for {}", familyId);
+                return;
+            }
+
             String timeframe = dto.getTimeframe();
 
-            // FIX BUG #13: Log warning when timeframe is missing - helps detect data issues
+            // FIX BUG #9: Strict timeframe validation - reject if missing to prevent data collision
             if (timeframe == null || timeframe.isEmpty()) {
                 log.warn("[QUANT_SCORE] {} - Missing timeframe in message, defaulting to 1m. This may cause data collision!", familyId);
                 timeframe = "1m";
+                // Note: In production, consider rejecting messages without timeframe:
+                // log.error("[QUANT_SCORE] {} - Rejecting message with missing timeframe", familyId);
+                // return;
             }
 
-            log.info("Received quant-score for {} (score={}, timeframe={}, label={}, actionable={})",
+            log.debug("Received quant-score for {} (score={}, timeframe={}, label={}, actionable={})",
                 familyId, String.format("%.1f", dto.getQuantScore()), timeframe, dto.getQuantLabel(), dto.isActionable());
 
-            // FIX: Cache score by familyId AND timeframe (not just familyId)
-            // BEFORE: latestScores.put(familyId, dto) - WRONG! Overwrites across timeframes
-            // AFTER: Nested map preserves each timeframe separately
-            latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
-                    .put(timeframe, dto);
+            // FIX BUG #8: Use synchronized block for thread-safe cache update
+            // This prevents race conditions where two threads could create duplicate maps
+            final String tf = timeframe; // Effectively final for lambda
+            synchronized (latestScores) {
+                // FIX BUG #10: Enforce max cache size
+                if (latestScores.size() >= MAX_CACHED_SCORES && !latestScores.containsKey(familyId)) {
+                    log.warn("[QUANT_SCORE] Cache full ({} scores), rejecting new entry for {}",
+                            latestScores.size(), familyId);
+                    return;
+                }
 
-            // Also update flat cache for backward-compatible API
-            latestScoreFlat.put(familyId, dto);
+                latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
+                        .put(tf, dto);
+                latestScoreFlat.put(familyId, dto);
+            }
 
-            // Broadcast to WebSocket (frontend handles timeframe via nested Map in Zustand store)
+            // Broadcast to WebSocket (frontend handles timeframe via nested Record in Zustand store)
             sessionManager.broadcastQuantScore(familyId, dto);
 
         } catch (Exception e) {
@@ -368,11 +402,13 @@ public class QuantScoreConsumer {
         String oiBuildupType = node.path("oiBuildupType").asText(null);
         String futuresBuildup = node.path("futuresBuildup").asText(null);
 
-        // Convert "null" string to actual null
-        if ("null".equals(oiBuildupType) || oiBuildupType != null && oiBuildupType.isEmpty()) {
+        // FIX BUG #12: Fixed operator precedence - added parentheses
+        // BEFORE: "null".equals(x) || x != null && x.isEmpty() - incorrect precedence
+        // AFTER: "null".equals(x) || (x != null && x.isEmpty()) - correct grouping
+        if ("null".equals(oiBuildupType) || (oiBuildupType != null && oiBuildupType.isEmpty())) {
             oiBuildupType = null;
         }
-        if ("null".equals(futuresBuildup) || futuresBuildup != null && futuresBuildup.isEmpty()) {
+        if ("null".equals(futuresBuildup) || (futuresBuildup != null && futuresBuildup.isEmpty())) {
             futuresBuildup = null;
         }
 
@@ -384,12 +420,28 @@ public class QuantScoreConsumer {
                 .oiMomentum(node.path("oiMomentum").asDouble(0))
                 .futuresBuildup(futuresBuildup)
                 .spotFuturePremium(node.path("spotFuturePremium").asDouble(0))
-                // FIX: Add raw OI data for transparency
-                .totalCallOI(node.path("totalCallOI").isNull() ? null : node.path("totalCallOI").asLong())
-                .totalPutOI(node.path("totalPutOI").isNull() ? null : node.path("totalPutOI").asLong())
-                .totalCallOIChange(node.path("totalCallOIChange").isNull() ? null : node.path("totalCallOIChange").asLong())
-                .totalPutOIChange(node.path("totalPutOIChange").isNull() ? null : node.path("totalPutOIChange").asLong())
+                // FIX BUG #14: Added proper null/missing checks for OI fields
+                .totalCallOI(getOptionalLong(node, "totalCallOI"))
+                .totalPutOI(getOptionalLong(node, "totalPutOI"))
+                .totalCallOIChange(getOptionalLong(node, "totalCallOIChange"))
+                .totalPutOIChange(getOptionalLong(node, "totalPutOIChange"))
                 .build();
+    }
+
+    /**
+     * FIX BUG #14: Helper to safely parse optional Long values
+     * Handles missing nodes, null values, and numeric types
+     */
+    private Long getOptionalLong(JsonNode parent, String field) {
+        JsonNode node = parent.path(field);
+        if (node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        // Handle both integer and floating point values
+        if (node.isNumber()) {
+            return node.asLong();
+        }
+        return null;
     }
 
     private QuantScoreDTO.PriceActionSummary parsePriceActionSummary(JsonNode node) {

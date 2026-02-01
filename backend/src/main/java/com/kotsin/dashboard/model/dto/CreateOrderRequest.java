@@ -62,6 +62,9 @@ public class CreateOrderRequest {
     @PositiveOrZero(message = "Trailing step must be positive or zero")
     private Double trailingStep;     // Step for trailing updates
 
+    // Signal reference (for auto-executed signals)
+    private String signalId;
+
     /**
      * FIX BUG #3: Custom validation to check SL/TP positions relative to entry
      * Called manually in controller before sending to execution service

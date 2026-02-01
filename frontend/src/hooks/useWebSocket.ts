@@ -51,7 +51,8 @@ export function useWebSocket() {
     updateNarrative,
     updateIntelligence,
     updateActiveSetups,
-    updateForecast
+    updateForecast,
+    updatePatternSignal
   } = useDashboardStore()
 
   // FIX BUG #11: Refresh data on reconnect to avoid stale data
@@ -230,6 +231,21 @@ export function useWebSocket() {
           }
         })
 
+        // Subscribe to Pattern Signals for real-time updates
+        client.subscribe('/topic/patterns', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            // Validate pattern - must have patternId
+            if (isValidObject(data) && 'patternId' in data) {
+              updatePatternSignal(data)
+            } else {
+              console.warn('Received invalid pattern signal data, skipping update')
+            }
+          } catch (e) {
+            handleParseError('patterns', e)
+          }
+        })
+
         // ======================== MARKET INTELLIGENCE SUBSCRIPTIONS ========================
 
         // Subscribe to market narratives
@@ -342,7 +358,7 @@ export function useWebSocket() {
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, refreshDataOnReconnect, bulkUpdateQuantScores])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, updatePatternSignal, refreshDataOnReconnect, bulkUpdateQuantScores])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {

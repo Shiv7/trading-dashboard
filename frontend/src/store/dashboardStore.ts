@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData, QuantScore } from '../types'
+import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData, QuantScore, PatternSignal } from '../types'
 
 // Market Intelligence types
 export interface MarketNarrative {
@@ -99,9 +99,11 @@ interface DashboardState {
   updateFUDKII: (data: FUDKIIData) => void
 
   // QuantScores (keyed by scripCode -> timeframe -> score for MTF support)
-  quantScores: Map<string, Map<string, QuantScore>>
+  // FIX BUG #20: Changed from Map<Map> to Record<Record> for JSON serialization
+  quantScores: Record<string, Record<string, QuantScore>>
   updateQuantScore: (score: QuantScore) => void
   bulkUpdateQuantScores: (scores: QuantScore[]) => void
+  getQuantScore: (scripCode: string, timeframe?: string) => QuantScore | undefined
 
   // Market Intelligence (keyed by familyId)
   narratives: Map<string, MarketNarrative>
@@ -112,6 +114,12 @@ interface DashboardState {
   updateActiveSetups: (familyId: string, setups: ActiveSetup[]) => void
   forecasts: Map<string, OpportunityForecast>
   updateForecast: (forecast: OpportunityForecast) => void
+
+  // Pattern Signals (for real-time updates)
+  patternSignals: PatternSignal[]
+  updatePatternSignal: (pattern: PatternSignal) => void
+  bulkUpdatePatternSignals: (patterns: PatternSignal[]) => void
+  removePatternSignal: (patternId: string) => void
 
   // UI state
   selectedStock: string | null
@@ -211,30 +219,47 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   }),
 
   // QuantScores - Multi-Timeframe support (scripCode -> timeframe -> score)
-  quantScores: new Map(),
+  // FIX BUG #20 & #21: Changed from Map to Record for JSON serialization and atomic updates
+  quantScores: {},
   updateQuantScore: (score) => set((state) => {
-    const newScores = new Map(state.quantScores)
+    if (!score || (!score.scripCode && !score.familyId)) {
+      console.warn('Invalid quant score update - missing scripCode')
+      return state
+    }
     const timeframe = score.timeframe || '1m'
     const scripCode = score.scripCode || score.familyId
 
-    // Get or create the timeframe map for this scripCode
-    const tfScores = new Map(newScores.get(scripCode) || new Map())
-    tfScores.set(timeframe, score)
-    newScores.set(scripCode, tfScores)
-
-    return { quantScores: newScores }
+    // Atomic immutable update
+    return {
+      quantScores: {
+        ...state.quantScores,
+        [scripCode]: {
+          ...(state.quantScores[scripCode] || {}),
+          [timeframe]: score
+        }
+      }
+    }
   }),
   bulkUpdateQuantScores: (scores) => set((state) => {
-    const newScores = new Map(state.quantScores)
-    scores.forEach(score => {
+    if (!scores || !Array.isArray(scores)) return state
+
+    // Build new state in single pass for atomicity (FIX BUG #21)
+    const newScores = { ...state.quantScores }
+    for (const score of scores) {
+      if (!score || (!score.scripCode && !score.familyId)) continue
       const timeframe = score.timeframe || '1m'
       const scripCode = score.scripCode || score.familyId
-      const tfScores = new Map(newScores.get(scripCode) || new Map())
-      tfScores.set(timeframe, score)
-      newScores.set(scripCode, tfScores)
-    })
+      newScores[scripCode] = {
+        ...(newScores[scripCode] || {}),
+        [timeframe]: score
+      }
+    }
     return { quantScores: newScores }
   }),
+  getQuantScore: (scripCode, timeframe = '5m') => {
+    const state = useDashboardStore.getState()
+    return state.quantScores[scripCode]?.[timeframe]
+  },
 
   // Market Intelligence
   narratives: new Map(),
@@ -261,6 +286,37 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     newForecasts.set(forecast.familyId, forecast)
     return { forecasts: newForecasts }
   }),
+
+  // Pattern Signals (for real-time WebSocket updates)
+  patternSignals: [],
+  updatePatternSignal: (pattern) => set((state) => {
+    if (!pattern || !pattern.patternId) {
+      console.warn('Invalid pattern signal update - missing patternId')
+      return state
+    }
+    const existingIndex = state.patternSignals.findIndex(p => p.patternId === pattern.patternId)
+    if (existingIndex >= 0) {
+      // Update existing pattern
+      const newPatterns = [...state.patternSignals]
+      newPatterns[existingIndex] = pattern
+      return { patternSignals: newPatterns }
+    }
+    // Add new pattern (keep last 200)
+    return { patternSignals: [pattern, ...state.patternSignals].slice(0, 200) }
+  }),
+  bulkUpdatePatternSignals: (patterns) => set((state) => {
+    if (!patterns || !Array.isArray(patterns)) return state
+    const patternMap = new Map(state.patternSignals.map(p => [p.patternId, p]))
+    for (const pattern of patterns) {
+      if (pattern && pattern.patternId) {
+        patternMap.set(pattern.patternId, pattern)
+      }
+    }
+    return { patternSignals: Array.from(patternMap.values()).slice(0, 200) }
+  }),
+  removePatternSignal: (patternId) => set((state) => ({
+    patternSignals: state.patternSignals.filter(p => p.patternId !== patternId)
+  })),
 
   // UI state
   selectedStock: null,

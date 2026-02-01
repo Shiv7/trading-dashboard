@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../store/dashboardStore'
 import { walletApi, scoresApi, signalsApi, tradesApi } from '../services/api'
@@ -6,6 +6,8 @@ import type { Wallet, FamilyScore, Signal, TradeStats } from '../types'
 import { TradingModeToggle, WalletHeader } from '../components/Company'
 import PositionCard from '../components/Wallet/PositionCard'
 import RegimePanel from '../components/Dashboard/RegimePanel'
+import PendingSignalsPanel from '../components/Signals/PendingSignalsPanel'
+import RiskStatusPanel from '../components/Risk/RiskStatusPanel'
 
 export default function DashboardPage() {
   const [wallet, setWallet] = useState<Wallet | null>(null)
@@ -253,6 +255,12 @@ export default function DashboardPage() {
 
         {/* Right: Market Context (col-4) */}
         <div className="col-span-12 lg:col-span-4 space-y-6">
+          {/* Risk Status - Circuit Breaker & Limits */}
+          <RiskStatusPanel />
+
+          {/* Pending Signals - Action Required */}
+          <PendingSignalsPanel onSignalConfirmed={() => walletApi.refreshWallet()} />
+
           {/* Regime Panel */}
           <RegimePanel regime={regime} />
 
