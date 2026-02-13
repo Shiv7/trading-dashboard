@@ -6,6 +6,7 @@ export default function PerformancePage() {
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily')
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     async function loadMetrics() {
@@ -218,7 +219,7 @@ export default function PerformancePage() {
               </tr>
             </thead>
             <tbody>
-              {periodData?.slice(-10).reverse().map((row, i) => (
+              {(showAll ? periodData : periodData?.slice(-10))?.reverse().map((row, i) => (
                 <tr key={i} className="border-b border-slate-700/50">
                   <td className="py-2 text-white">
                     {'date' in row ? row.date : 'weekStart' in row ? row.weekStart : (row as { month: string }).month}
@@ -239,6 +240,14 @@ export default function PerformancePage() {
             </tbody>
           </table>
         </div>
+        {periodData && periodData.length > 10 && (
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="mt-3 w-full py-2 text-sm text-slate-400 hover:text-white bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors"
+          >
+            {showAll ? `Show Less (10 of ${periodData.length})` : `Show All ${periodData.length} Entries`}
+          </button>
+        )}
       </div>
 
       {/* Performance by Source */}

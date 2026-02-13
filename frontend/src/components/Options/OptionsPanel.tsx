@@ -98,26 +98,42 @@ export default function OptionsPanel({ quantScore, familyScore }: OptionsPanelPr
               { label: 'Volume Profile', value: breakdown.volumeProfileScore, max: 8, pct: breakdown.volumeProfilePct },
               { label: 'Cross-Instrument', value: breakdown.crossInstrumentScore, max: 10, pct: breakdown.crossInstrumentPct },
               { label: 'Confluence', value: breakdown.confluenceScore, max: 10, pct: breakdown.confluencePct },
-            ].map((item) => (
-              <div key={item.label} className="bg-slate-700/30 rounded-lg p-3">
-                <div className="text-xs text-slate-400 mb-1">{item.label}</div>
-                <div className="flex items-end gap-1">
-                  <span className="text-lg font-bold text-white">
-                    {formatNumber(item.value, 1)}
-                  </span>
-                  <span className="text-xs text-slate-500">/{item.max}</span>
+            ].map((item) => {
+              const isNA = item.pct != null && item.pct === -1
+              const isDM = item.pct != null && item.pct === -2
+              return (
+                <div key={item.label} className="bg-slate-700/30 rounded-lg p-3">
+                  <div className="text-xs text-slate-400 mb-1">{item.label}</div>
+                  <div className="flex items-end gap-1">
+                    {isNA ? (
+                      <span className="text-lg font-bold text-slate-500">N/A</span>
+                    ) : isDM ? (
+                      <span className="text-lg font-bold text-amber-400">DM</span>
+                    ) : (
+                      <>
+                        <span className="text-lg font-bold text-white">
+                          {formatNumber(item.value, 1)}
+                        </span>
+                        <span className="text-xs text-slate-500">/{item.max}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="mt-1.5 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                    {isDM ? (
+                      <div className="h-full rounded-full bg-amber-500/30 animate-pulse" style={{ width: '100%' }} />
+                    ) : (
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          (item.pct || 0) >= 70 ? 'bg-emerald-500' :
+                          (item.pct || 0) >= 50 ? 'bg-amber-500' : 'bg-slate-500'
+                        }`}
+                        style={{ width: `${Math.max(0, item.pct || 0)}%` }}
+                      />
+                    )}
+                  </div>
                 </div>
-                <div className="mt-1.5 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      (item.pct || 0) >= 70 ? 'bg-emerald-500' :
-                      (item.pct || 0) >= 50 ? 'bg-amber-500' : 'bg-slate-500'
-                    }`}
-                    style={{ width: `${item.pct || 0}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}

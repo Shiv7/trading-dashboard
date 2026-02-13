@@ -1,5 +1,6 @@
 package com.kotsin.dashboard.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.cors.CorsConfiguration;
@@ -16,21 +17,21 @@ import java.util.List;
 @Configuration
 public class CorsConfig {
 
+    @Value("${cors.allowed-origins:http://localhost:*,http://127.0.0.1:*}")
+    private String allowedOrigins;
+
     @Bean
     public CorsFilter corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
-        
-        // Allow frontend origins
-        config.setAllowedOriginPatterns(List.of(
-            "http://localhost:*",
-            "http://127.0.0.1:*",
-            "http://3.111.242.49:*",
-            "https://3.111.242.49:*"
-        ));
-        
+
+        // Allow frontend origins from config
+        config.setAllowedOriginPatterns(
+            Arrays.asList(allowedOrigins.split(","))
+        );
+
         // Allow common HTTP methods
-        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        
+        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+
         // Allow common headers
         config.setAllowedHeaders(Arrays.asList(
             "Authorization",
@@ -39,18 +40,17 @@ public class CorsConfig {
             "Accept",
             "Origin"
         ));
-        
+
         // Allow credentials (cookies, auth headers)
         config.setAllowCredentials(true);
-        
+
         // Cache preflight response for 1 hour
         config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", config);
         source.registerCorsConfiguration("/ws/**", config);
-        
+
         return new CorsFilter(source);
     }
 }
-

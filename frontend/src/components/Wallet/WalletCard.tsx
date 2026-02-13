@@ -1,10 +1,40 @@
+import { useEffect, useRef, useState } from 'react'
 import type { Wallet } from '../../types'
+import { formatTimeAgo } from '../../utils/formatTime'
 
 interface WalletCardProps {
   wallet: Wallet | null
 }
 
 export default function WalletCard({ wallet }: WalletCardProps) {
+  const prevDayPnl = useRef<number | null>(null)
+  const prevTotalPnl = useRef<number | null>(null)
+  const [dayPnlFlash, setDayPnlFlash] = useState('')
+  const [totalPnlFlash, setTotalPnlFlash] = useState('')
+
+  // Flash P&L cells on value change
+  useEffect(() => {
+    if (!wallet) return
+
+    if (prevDayPnl.current !== null && prevDayPnl.current !== wallet.dayPnl) {
+      setDayPnlFlash(wallet.dayPnl > prevDayPnl.current ? 'flash-positive' : 'flash-negative')
+      const t = setTimeout(() => setDayPnlFlash(''), 600)
+      return () => clearTimeout(t)
+    }
+    prevDayPnl.current = wallet.dayPnl
+  }, [wallet?.dayPnl])
+
+  useEffect(() => {
+    if (!wallet) return
+
+    if (prevTotalPnl.current !== null && prevTotalPnl.current !== wallet.totalPnl) {
+      setTotalPnlFlash(wallet.totalPnl > prevTotalPnl.current ? 'flash-positive' : 'flash-negative')
+      const t = setTimeout(() => setTotalPnlFlash(''), 600)
+      return () => clearTimeout(t)
+    }
+    prevTotalPnl.current = wallet.totalPnl
+  }, [wallet?.totalPnl])
+
   if (!wallet) {
     return (
       <div className="card animate-pulse">
@@ -32,9 +62,9 @@ export default function WalletCard({ wallet }: WalletCardProps) {
   return (
     <div className="card">
       <div className="card-header">
-        <span>💰 Wallet Overview</span>
+        <span>Wallet Overview</span>
         <span className="text-xs text-slate-400">
-          Updated: {new Date(wallet.lastUpdated).toLocaleTimeString()}
+          {formatTimeAgo(wallet.lastUpdated)}
         </span>
       </div>
 
@@ -62,7 +92,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
         </div>
 
         {/* Day P&L */}
-        <div className="bg-slate-700/30 rounded-lg p-3">
+        <div className={`bg-slate-700/30 rounded-lg p-3 ${dayPnlFlash}`}>
           <div className="text-xs text-slate-400 mb-1">Day P&L</div>
           <div className={`text-lg font-semibold ${dayPnlColor}`}>
             {formatCurrency(wallet.dayPnl)}
@@ -73,7 +103,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
         </div>
 
         {/* Total P&L */}
-        <div className="bg-slate-700/30 rounded-lg p-3">
+        <div className={`bg-slate-700/30 rounded-lg p-3 ${totalPnlFlash}`}>
           <div className="text-xs text-slate-400 mb-1">Total P&L</div>
           <div className={`text-lg font-semibold ${pnlColor}`}>
             {formatCurrency(wallet.totalPnl)}
@@ -108,4 +138,3 @@ export default function WalletCard({ wallet }: WalletCardProps) {
     </div>
   )
 }
-

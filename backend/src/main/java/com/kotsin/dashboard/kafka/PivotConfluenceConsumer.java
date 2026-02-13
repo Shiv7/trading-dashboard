@@ -3,39 +3,95 @@ package com.kotsin.dashboard.kafka;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
-import lombok.RequiredArgsConstructor;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Kafka consumer for Pivot Confluence signals.
  * Detects multi-timeframe pivot confluence with SMC zones.
  *
  * Consumes from: pivot-confluence-signals
+ *
+ * FIXES APPLIED:
+ * - Signal TTL: Active triggers expire after configurable duration (default 30 min)
+ * - Dedup: Prevents duplicate signal processing on Kafka replays (5 min window)
+ * - Daily cap: Max signals per instrument per day (default 5)
+ * - Redis persistence: Survives dashboard restart via Redis backup
  */
 @Component
 @Slf4j
-@RequiredArgsConstructor
 public class PivotConfluenceConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    // Cache latest Pivot signals
+    private static final String REDIS_KEY = "dashboard:pivot:active-triggers";
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+
+    @Value("${signal.pivot.ttl.minutes:30}")
+    private int signalTtlMinutes;
+
+    @Value("${signal.pivot.max.per.day:5}")
+    private int maxSignalsPerDay;
+
+    // Active triggers with TTL via Caffeine
+    private Cache<String, Map<String, Object>> activeTriggers;
+
+    // Cache latest Pivot signals (no TTL - informational only)
     private final Map<String, Map<String, Object>> latestPivotSignals = new ConcurrentHashMap<>();
 
-    // Cache active triggers only
-    private final Map<String, Map<String, Object>> activeTriggers = new ConcurrentHashMap<>();
+    // Dedup cache
+    private final Cache<String, Boolean> dedupCache = Caffeine.newBuilder()
+            .expireAfterWrite(5, TimeUnit.MINUTES)
+            .maximumSize(10000)
+            .build();
+
+    // Daily signal counter
+    private final Map<String, Integer> dailySignalCount = new ConcurrentHashMap<>();
+    private volatile LocalDate currentTradeDate = LocalDate.now(IST);
+
+    public PivotConfluenceConsumer(
+            WebSocketSessionManager sessionManager,
+            @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate) {
+        this.sessionManager = sessionManager;
+        this.redisTemplate = redisTemplate;
+    }
+
+    @PostConstruct
+    public void init() {
+        activeTriggers = Caffeine.newBuilder()
+                .expireAfterWrite(signalTtlMinutes, TimeUnit.MINUTES)
+                .maximumSize(500)
+                .removalListener((key, value, cause) -> {
+                    if (cause.wasEvicted()) {
+                        log.info("Pivot signal expired: {} (TTL={}min)", key, signalTtlMinutes);
+                    }
+                })
+                .build();
+
+        restoreFromRedis();
+    }
 
     @KafkaListener(
             topics = {"pivot-confluence-signals"},
@@ -51,17 +107,46 @@ public class PivotConfluenceConsumer {
                 return;
             }
 
+            // --- DEDUP CHECK ---
+            String triggerTimeStr = root.path("triggerTime").asText("");
+            long timestamp = root.path("timestamp").asLong(0);
+            String dedupKey = scripCode + "|" + triggerTimeStr + "|" + timestamp;
+            if (dedupCache.getIfPresent(dedupKey) != null) {
+                log.debug("Pivot dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
+                return;
+            }
+            dedupCache.put(dedupKey, Boolean.TRUE);
+
             Map<String, Object> pivotData = parsePivotSignal(root);
             boolean triggered = Boolean.TRUE.equals(pivotData.get("triggered"));
 
             if (triggered) {
-                log.info("PIVOT CONFLUENCE: {} direction={} score={} R:R={}",
+                // --- DAILY CAP CHECK ---
+                resetDailyCounterIfNeeded();
+                String dailyKey = scripCode + "|" + currentTradeDate;
+                int todayCount = dailySignalCount.getOrDefault(dailyKey, 0);
+                if (todayCount >= maxSignalsPerDay) {
+                    log.warn("Pivot daily cap reached: {} has {} signals today (max={})",
+                            scripCode, todayCount, maxSignalsPerDay);
+                    return;
+                }
+                dailySignalCount.merge(dailyKey, 1, Integer::sum);
+
+                String symbol = (String) pivotData.get("symbol");
+                String companyName = (String) pivotData.get("companyName");
+                String displayName = symbol != null && !symbol.isEmpty() ? symbol :
+                        (companyName != null && !companyName.isEmpty() ? companyName : scripCode);
+
+                log.info("PIVOT CONFLUENCE: {} ({}) direction={} score={} R:R={} [signals today: {}]",
+                        displayName,
                         scripCode,
                         pivotData.get("direction"),
                         String.format("%.1f", ((Number) pivotData.getOrDefault("score", 0)).doubleValue()),
-                        String.format("%.2f", ((Number) pivotData.getOrDefault("riskReward", 0)).doubleValue()));
+                        String.format("%.2f", ((Number) pivotData.getOrDefault("riskReward", 0)).doubleValue()),
+                        todayCount + 1);
 
-                // Cache active trigger
+                // Cache active trigger (with TTL)
+                pivotData.put("cachedAt", Instant.now().toEpochMilli());
                 activeTriggers.put(scripCode, pivotData);
 
                 // Send notification
@@ -69,12 +154,11 @@ public class PivotConfluenceConsumer {
                 sessionManager.broadcastNotification("PIVOT_CONFLUENCE",
                         String.format("%s Pivot Confluence for %s! HTF: %s | LTF Confirmed | R:R=%.1f",
                                 emoji,
-                                scripCode,
+                                displayName,
                                 pivotData.get("htfDirection"),
                                 ((Number) pivotData.getOrDefault("riskReward", 0)).doubleValue()));
             } else {
-                // Remove from active triggers if no longer active
-                activeTriggers.remove(scripCode);
+                activeTriggers.invalidate(scripCode);
             }
 
             // Cache latest
@@ -98,9 +182,13 @@ public class PivotConfluenceConsumer {
 
         long timestamp = root.path("timestamp").asLong(System.currentTimeMillis());
         data.put("timestamp", LocalDateTime.ofInstant(
-                Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")).toString());
+                Instant.ofEpochMilli(timestamp), IST).toString());
+        data.put("timestampEpoch", timestamp);
 
         data.put("scripCode", root.path("scripCode").asText());
+        data.put("symbol", root.path("symbol").asText(""));
+        data.put("companyName", root.path("companyName").asText(""));
+        data.put("exchange", root.path("exchange").asText(""));
         data.put("triggered", root.path("triggered").asBoolean(false));
         data.put("direction", root.path("direction").asText("NEUTRAL"));
         data.put("reason", root.path("reason").asText(""));
@@ -139,24 +227,95 @@ public class PivotConfluenceConsumer {
         return data;
     }
 
-    /**
-     * Get latest Pivot signal for a scripCode
-     */
+    // --- REDIS PERSISTENCE ---
+
+    @PreDestroy
+    public void persistToRedis() {
+        try {
+            Map<String, Map<String, Object>> snapshot = new HashMap<>(activeTriggers.asMap());
+            if (snapshot.isEmpty()) {
+                redisTemplate.delete(REDIS_KEY);
+                return;
+            }
+            redisTemplate.delete(REDIS_KEY);
+            for (Map.Entry<String, Map<String, Object>> entry : snapshot.entrySet()) {
+                String json = objectMapper.writeValueAsString(entry.getValue());
+                redisTemplate.opsForHash().put(REDIS_KEY, entry.getKey(), json);
+            }
+            redisTemplate.expire(REDIS_KEY, signalTtlMinutes, TimeUnit.MINUTES);
+            log.info("Pivot persisted {} active triggers to Redis", snapshot.size());
+        } catch (Exception e) {
+            log.error("Failed to persist Pivot triggers to Redis: {}", e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void restoreFromRedis() {
+        try {
+            Map<Object, Object> entries = redisTemplate.opsForHash().entries(REDIS_KEY);
+            if (entries == null || entries.isEmpty()) {
+                log.info("Pivot: No persisted triggers found in Redis");
+                return;
+            }
+            int restored = 0;
+            long now = System.currentTimeMillis();
+            long maxAgeMs = signalTtlMinutes * 60_000L;
+            for (Map.Entry<Object, Object> entry : entries.entrySet()) {
+                try {
+                    Map<String, Object> data = objectMapper.readValue(
+                            (String) entry.getValue(), Map.class);
+                    long cachedAt = data.containsKey("cachedAt")
+                            ? ((Number) data.get("cachedAt")).longValue() : 0;
+                    if (cachedAt > 0 && (now - cachedAt) > maxAgeMs) {
+                        continue;
+                    }
+                    activeTriggers.put((String) entry.getKey(), data);
+                    restored++;
+                } catch (Exception e) {
+                    log.warn("Failed to restore Pivot trigger {}: {}", entry.getKey(), e.getMessage());
+                }
+            }
+            log.info("Pivot restored {} active triggers from Redis (skipped stale)", restored);
+        } catch (Exception e) {
+            log.error("Failed to restore Pivot triggers from Redis: {}", e.getMessage());
+        }
+    }
+
+    @Scheduled(fixedRate = 120000)
+    public void periodicPersist() {
+        persistToRedis();
+    }
+
+    private void resetDailyCounterIfNeeded() {
+        LocalDate today = LocalDate.now(IST);
+        if (!today.equals(currentTradeDate)) {
+            dailySignalCount.clear();
+            currentTradeDate = today;
+            log.info("Pivot daily signal counters reset for {}", today);
+        }
+    }
+
+    // --- PUBLIC ACCESSORS ---
+
     public Map<String, Object> getLatestPivotSignal(String scripCode) {
         return latestPivotSignals.get(scripCode);
     }
 
-    /**
-     * Get all active triggers
-     */
     public Map<String, Map<String, Object>> getActiveTriggers() {
-        return new HashMap<>(activeTriggers);
+        return new HashMap<>(activeTriggers.asMap());
     }
 
-    /**
-     * Get count of active triggers
-     */
     public int getActiveTriggerCount() {
-        return activeTriggers.size();
+        return (int) activeTriggers.estimatedSize();
+    }
+
+    public String getDirectionForScrip(String scripCode) {
+        Map<String, Object> data = activeTriggers.getIfPresent(scripCode);
+        return data != null ? (String) data.get("direction") : null;
+    }
+
+    public int getDailySignalCount(String scripCode) {
+        String dailyKey = scripCode + "|" + currentTradeDate;
+        return dailySignalCount.getOrDefault(dailyKey, 0);
     }
 }

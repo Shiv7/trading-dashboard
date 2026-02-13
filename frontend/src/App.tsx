@@ -1,4 +1,6 @@
-import { Routes, Route } from 'react-router-dom'
+import { useEffect, Component } from 'react'
+import type { ReactNode, ErrorInfo } from 'react'
+import { Routes, Route, useLocation } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import Layout from './components/Layout/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -16,10 +18,61 @@ import PerformancePage from './pages/PerformancePage'
 import PatternsPage from './pages/PatternsPage'
 import RiskPage from './pages/RiskPage'
 import StrategyTransparencyPage from './pages/StrategyTransparencyPage'
+import OrderHistoryPage from './pages/OrderHistoryPage'
+import ProfilePage from './pages/ProfilePage'
+import AdminPage from './pages/AdminPage'
+import WatchlistPage from './pages/WatchlistPage'
+import PnLDashboardPage from './pages/PnLDashboardPage'
+import OrderManagementPage from './pages/OrderManagementPage'
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('App Error Boundary caught:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-8">
+          <div className="bg-slate-800 border border-red-500/30 rounded-xl p-8 max-w-lg text-center">
+            <h1 className="text-2xl font-bold text-red-400 mb-4">Something went wrong</h1>
+            <p className="text-slate-400 mb-6">{this.state.error?.message || 'An unexpected error occurred'}</p>
+            <button
+              onClick={() => { this.setState({ hasError: false, error: null }); window.location.href = '/dashboard' }}
+              className="px-6 py-3 bg-blue-500 text-white font-medium rounded-lg hover:bg-blue-600 transition-colors"
+            >
+              Go to Dashboard
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function ScrollToTop() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [pathname])
+  return null
+}
 
 function App() {
   return (
+    <ErrorBoundary>
     <AuthProvider>
+      <ScrollToTop />
       <Routes>
         {/* Public Routes */}
         <Route path="/" element={<LandingPage />} />
@@ -137,8 +190,69 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/order-history"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <OrderHistoryPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <ProfilePage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute requireRole="ADMIN">
+              <Layout>
+                <AdminPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/watchlist"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <WatchlistPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/pnl"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <PnLDashboardPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/orders"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <OrderManagementPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </AuthProvider>
+    </ErrorBoundary>
   )
 }
 

@@ -23,11 +23,13 @@ import MtfAnalysisPanel from './MtfAnalysisPanel';
 interface StrategyCardProps {
   snapshot: InstrumentStateSnapshot;
   defaultExpanded?: boolean;
+  isSample?: boolean;
 }
 
 export const StrategyCard: React.FC<StrategyCardProps> = ({
   snapshot,
-  defaultExpanded = false
+  defaultExpanded = false,
+  isSample = false
 }) => {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [expandedSetups, setExpandedSetups] = useState<Set<string>>(new Set());
@@ -42,10 +44,16 @@ export const StrategyCard: React.FC<StrategyCardProps> = ({
     setExpandedSetups(newSet);
   };
 
-  const priceChange = ((snapshot.currentPrice - snapshot.currentPrice) / snapshot.currentPrice) * 100;
-
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+    <div className={`bg-gray-800 rounded-lg border overflow-hidden ${
+      isSample ? 'border-dashed border-yellow-600/40' : 'border-gray-700'
+    }`}>
+      {/* Sample badge */}
+      {isSample && (
+        <div className="px-4 pt-2">
+          <span className="text-[10px] text-yellow-500 font-mono">SAMPLE CARD — for UI review</span>
+        </div>
+      )}
       {/* Header */}
       <div
         className="p-4 cursor-pointer hover:bg-gray-750 transition-colors"
@@ -85,12 +93,12 @@ export const StrategyCard: React.FC<StrategyCardProps> = ({
           {/* Quick indicators */}
           <div className="flex items-center gap-4">
             {snapshot.superTrendBullish ? (
-              <TrendingUp className="w-5 h-5 text-green-400" title="SuperTrend Bullish" />
+              <TrendingUp className="w-5 h-5 text-green-400" aria-label="SuperTrend Bullish" />
             ) : (
-              <TrendingDown className="w-5 h-5 text-red-400" title="SuperTrend Bearish" />
+              <TrendingDown className="w-5 h-5 text-red-400" aria-label="SuperTrend Bearish" />
             )}
             {snapshot.bbSqueezing && (
-              <Activity className="w-5 h-5 text-yellow-400" title="BB Squeezing" />
+              <Activity className="w-5 h-5 text-yellow-400" aria-label="BB Squeezing" />
             )}
             {snapshot.activeSetups && snapshot.activeSetups.length > 0 && (
               <span className="text-sm text-gray-400">
@@ -225,7 +233,7 @@ const SetupSection: React.FC<SetupSectionProps> = ({ setup, expanded, onToggle }
           {/* Setup info */}
           <div className="grid grid-cols-3 gap-4 text-xs">
             <div>
-              <span className="text-gray-500">Key Level:</span>
+              <span className="text-gray-500">Entry @</span>
               <span className="ml-2 font-mono text-gray-300">{setup.keyLevel.toFixed(2)}</span>
             </div>
             <div>

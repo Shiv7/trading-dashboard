@@ -11,8 +11,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -20,11 +23,14 @@ import java.util.stream.Collectors;
  * Consumes from: strategy-opportunities
  *
  * Provides ranked list of instruments close to triggering signals.
+ * Automatically clears all data at the start of each new trading day.
  */
 @Component
 @Slf4j
 @RequiredArgsConstructor
 public class StrategyOpportunityConsumer {
+
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     private final WebSocketSessionManager sessionManager;
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -36,8 +42,11 @@ public class StrategyOpportunityConsumer {
     // Keep last update timestamp per key for staleness checks
     private final Map<String, Long> lastUpdateTime = new ConcurrentHashMap<>();
 
-    // Opportunities older than this are considered stale (5 minutes)
-    private static final long STALE_THRESHOLD_MS = 5 * 60 * 1000;
+    // Track the current trading session date for daily reset
+    private final AtomicReference<LocalDate> currentSessionDate = new AtomicReference<>(LocalDate.now(IST));
+
+    // Opportunities older than this are considered stale (35 minutes — covers 30m candle cycle)
+    private static final long STALE_THRESHOLD_MS = 35 * 60 * 1000;
 
     @KafkaListener(
             topics = {"strategy-opportunities"},
@@ -93,8 +102,14 @@ public class StrategyOpportunityConsumer {
                 .nextConditionNeeded(root.path("nextConditionNeeded").asText())
                 .estimatedTimeframe(root.path("estimatedTimeframe").asText())
                 .currentPrice(root.path("currentPrice").asDouble())
+                .entryLevel(root.path("entryLevel").asDouble())
                 .keyLevel(root.path("keyLevel").asDouble())
-                .timestamp(System.currentTimeMillis());
+                .target2(root.path("target2").asDouble())
+                .superTrendLevel(root.path("superTrendLevel").asDouble())
+                .expectedRR(root.path("expectedRR").asDouble())
+                .timestamp(System.currentTimeMillis())
+                .strategyContext(root.has("strategyContext") ? root.path("strategyContext").asText() : null)
+                .tradingMode(root.has("tradingMode") ? root.path("tradingMode").asText() : null);
 
         // Parse conditions
         JsonNode conditionsNode = root.path("conditions");
@@ -177,9 +192,22 @@ public class StrategyOpportunityConsumer {
     }
 
     /**
-     * Remove stale opportunities.
+     * Remove stale opportunities and clear all data on new trading day.
      */
     private void cleanupStale() {
+        // Daily session reset — clear everything when a new day starts
+        LocalDate today = LocalDate.now(IST);
+        LocalDate lastSession = currentSessionDate.get();
+        if (!today.equals(lastSession) && currentSessionDate.compareAndSet(lastSession, today)) {
+            int cleared = opportunityCache.size();
+            opportunityCache.clear();
+            lastUpdateTime.clear();
+            if (cleared > 0) {
+                log.info("[OPPORTUNITY] New trading session {} — cleared {} previous-day opportunities", today, cleared);
+            }
+            return;
+        }
+
         long now = System.currentTimeMillis();
         List<String> staleKeys = lastUpdateTime.entrySet().stream()
                 .filter(e -> now - e.getValue() > STALE_THRESHOLD_MS)

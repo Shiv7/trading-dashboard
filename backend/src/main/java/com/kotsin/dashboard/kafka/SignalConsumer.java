@@ -35,7 +35,7 @@ public class SignalConsumer {
     private final Map<String, SignalDTO> signalCache = new ConcurrentHashMap<>();
     private final Map<String, Map<String, SignalDTO>> signalsByStock = new ConcurrentHashMap<>();
 
-    @KafkaListener(topics = {"trading-signals-v2", "trading-signals-high-priority"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
+    @KafkaListener(topics = {"trading-signals-v2"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onSignal(String payload) {
         try {
             log.info("📥 Received signal from Kafka: {}", payload.substring(0, Math.min(150, payload.length())));
@@ -262,8 +262,40 @@ public class SignalConsumer {
         return "NEUTRAL";
     }
 
+    // ========== External Signal Integration ==========
+
+    /**
+     * Add a signal from an external source (e.g., FUDKII, FUKAA consumers).
+     * Stores in cache and broadcasts to WebSocket clients.
+     */
+    public void addExternalSignal(SignalDTO dto) {
+        String signalId = dto.getSignalId();
+        if (signalId == null || signalId.isEmpty()) {
+            signalId = UUID.randomUUID().toString();
+            dto.setSignalId(signalId);
+        }
+
+        String scripCode = dto.getScripCode();
+        signalCache.put(signalId, dto);
+        if (scripCode != null) {
+            signalsByStock.computeIfAbsent(scripCode, k -> new ConcurrentHashMap<>()).put(signalId, dto);
+        }
+
+        // Broadcast to WebSocket
+        sessionManager.broadcastSignal(dto);
+
+        String direction = dto.getDirection();
+        String emoji = "BULLISH".equals(direction) ? "^" : "v";
+        sessionManager.broadcastNotification("SIGNAL",
+            String.format("%s %s %s signal for %s @ %.2f",
+                emoji, direction, dto.getSignalSource(), dto.getCompanyName(), dto.getEntryPrice()));
+
+        log.info("External signal added: {} {} {} source={} @ {}",
+            dto.getScripCode(), dto.getSignalType(), dto.getDirection(), dto.getSignalSource(), dto.getEntryPrice());
+    }
+
     // ========== REST API Support ==========
-    
+
     public Map<String, SignalDTO> getAllSignals() {
         return signalCache;
     }

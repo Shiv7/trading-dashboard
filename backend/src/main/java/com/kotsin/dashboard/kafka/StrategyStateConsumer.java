@@ -10,8 +10,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -36,6 +39,21 @@ public class StrategyStateConsumer {
     // Cache only WATCHING instruments
     private final Map<String, InstrumentStateSnapshotDTO> watchingCache = new ConcurrentHashMap<>();
 
+    // Cache READY instruments
+    private final Map<String, InstrumentStateSnapshotDTO> readyCache = new ConcurrentHashMap<>();
+
+    // Cache POSITIONED instruments
+    private final Map<String, InstrumentStateSnapshotDTO> positionedCache = new ConcurrentHashMap<>();
+
+    // Track when each entry was last updated (for stale cleanup)
+    private final Map<String, Long> lastUpdateTime = new ConcurrentHashMap<>();
+
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+    private final AtomicReference<LocalDate> currentSessionDate = new AtomicReference<>(LocalDate.now(IST));
+
+    // Entries older than this are considered stale (30 minutes)
+    private static final long STALE_THRESHOLD_MS = 30 * 60 * 1000;
+
     @KafkaListener(
             topics = {"instrument-state-snapshots"},
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
@@ -54,13 +72,36 @@ public class StrategyStateConsumer {
 
             // Update caches
             stateCache.put(scripCode, snapshot);
+            lastUpdateTime.put(scripCode, System.currentTimeMillis());
 
-            if ("WATCHING".equals(snapshot.getState())) {
-                watchingCache.put(scripCode, snapshot);
-                log.debug("[STRATEGY_STATE] {} now WATCHING | setups={}",
-                        scripCode, snapshot.getActiveSetups() != null ? snapshot.getActiveSetups().size() : 0);
-            } else {
-                watchingCache.remove(scripCode);
+            String state = snapshot.getState();
+            switch (state) {
+                case "WATCHING", "CONFIRMATION_HOLD" -> {
+                    watchingCache.put(scripCode, snapshot);
+                    readyCache.remove(scripCode);
+                    positionedCache.remove(scripCode);
+                    log.debug("[STRATEGY_STATE] {} now {} | setups={}",
+                            scripCode, state, snapshot.getActiveSetups() != null ? snapshot.getActiveSetups().size() : 0);
+                }
+                case "READY" -> {
+                    readyCache.put(scripCode, snapshot);
+                    watchingCache.remove(scripCode);
+                    positionedCache.remove(scripCode);
+                    log.info("[STRATEGY_STATE] {} now READY | setups={}",
+                            scripCode, snapshot.getActiveSetups() != null ? snapshot.getActiveSetups().size() : 0);
+                }
+                case "POSITIONED", "PENDING_ENTRY" -> {
+                    positionedCache.put(scripCode, snapshot);
+                    watchingCache.remove(scripCode);
+                    readyCache.remove(scripCode);
+                    log.info("[STRATEGY_STATE] {} now {} | position={}",
+                            scripCode, state, snapshot.getPosition() != null);
+                }
+                default -> {
+                    watchingCache.remove(scripCode);
+                    readyCache.remove(scripCode);
+                    positionedCache.remove(scripCode);
+                }
             }
 
             // Broadcast to WebSocket
@@ -244,6 +285,44 @@ public class StrategyStateConsumer {
                 .collect(Collectors.toList());
     }
 
+    // ============ STALE CLEANUP ============
+
+    private void cleanupStale() {
+        // Daily session reset
+        LocalDate today = LocalDate.now(IST);
+        LocalDate lastSession = currentSessionDate.get();
+        if (!today.equals(lastSession) && currentSessionDate.compareAndSet(lastSession, today)) {
+            int cleared = stateCache.size();
+            stateCache.clear();
+            watchingCache.clear();
+            readyCache.clear();
+            positionedCache.clear();
+            lastUpdateTime.clear();
+            if (cleared > 0) {
+                log.info("[STRATEGY_STATE] New trading session {} — cleared {} state entries", today, cleared);
+            }
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        List<String> staleKeys = lastUpdateTime.entrySet().stream()
+                .filter(e -> now - e.getValue() > STALE_THRESHOLD_MS)
+                .map(Map.Entry::getKey)
+                .toList();
+
+        for (String key : staleKeys) {
+            stateCache.remove(key);
+            watchingCache.remove(key);
+            readyCache.remove(key);
+            positionedCache.remove(key);
+            lastUpdateTime.remove(key);
+        }
+
+        if (!staleKeys.isEmpty()) {
+            log.debug("[STRATEGY_STATE] Cleaned up {} stale state entries", staleKeys.size());
+        }
+    }
+
     // ============ PUBLIC ACCESSORS ============
 
     public InstrumentStateSnapshotDTO getState(String scripCode) {
@@ -251,10 +330,12 @@ public class StrategyStateConsumer {
     }
 
     public List<InstrumentStateSnapshotDTO> getAllStates() {
+        cleanupStale();
         return new ArrayList<>(stateCache.values());
     }
 
     public List<InstrumentStateSnapshotDTO> getWatchingInstruments() {
+        cleanupStale();
         return new ArrayList<>(watchingCache.values());
     }
 
@@ -264,5 +345,23 @@ public class StrategyStateConsumer {
 
     public int getTotalCount() {
         return stateCache.size();
+    }
+
+    public List<InstrumentStateSnapshotDTO> getReadyInstruments() {
+        cleanupStale();
+        return new ArrayList<>(readyCache.values());
+    }
+
+    public List<InstrumentStateSnapshotDTO> getPositionedInstruments() {
+        cleanupStale();
+        return new ArrayList<>(positionedCache.values());
+    }
+
+    public int getReadyCount() {
+        return readyCache.size();
+    }
+
+    public int getPositionedCount() {
+        return positionedCache.size();
     }
 }

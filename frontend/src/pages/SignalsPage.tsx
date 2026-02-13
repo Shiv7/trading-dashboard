@@ -71,8 +71,19 @@ export default function SignalsPage() {
 
       {/* Signals Grid */}
       {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="text-slate-400">Loading signals...</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-pulse">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="card h-32">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-slate-700/50 rounded-lg" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-32 bg-slate-700/50 rounded" />
+                  <div className="h-3 w-20 bg-slate-700/50 rounded" />
+                </div>
+              </div>
+              <div className="h-3 w-full bg-slate-700/30 rounded" />
+            </div>
+          ))}
         </div>
       ) : displaySignals.length > 0 ? (
         <>
@@ -106,8 +117,12 @@ export default function SignalsPage() {
           )}
         </>
       ) : (
-        <div className="text-center text-slate-500 py-12">
-          No signals found
+        <div className="text-center py-16 text-slate-500">
+          <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <p className="text-sm">No signals found</p>
+          <p className="text-xs mt-1 text-slate-600">Signals appear when the system detects trading opportunities</p>
         </div>
       )}
     </div>

@@ -2,7 +2,6 @@ import React from 'react';
 import {
   ArrowRight,
   CheckCircle,
-  XCircle,
   TrendingUp,
   TrendingDown,
   AlertTriangle,
@@ -31,7 +30,6 @@ export const MtfAnalysisPanel: React.FC<MtfAnalysisPanelProps> = ({ analysis }) 
 
   // Calculate position in swing range
   const position = analysis.rangePositionPercent;
-  const swingRange = analysis.swingHigh - analysis.swingLow;
 
   return (
     <div className="bg-gray-800/50 rounded-lg p-4 space-y-4">

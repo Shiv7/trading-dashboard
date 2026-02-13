@@ -38,6 +38,7 @@ export interface Position {
   trailingStop?: number;
   openedAt: string;
   lastUpdated: string;
+  strategy?: string;
 }
 
 // Family Score types
@@ -261,6 +262,7 @@ export interface Trade {
   pnlPercent: number;
   rMultiple: number;
   durationMinutes: number;
+  strategy?: string;
 }
 
 // Regime types
@@ -344,28 +346,41 @@ export interface ACLData {
   flow1D?: number;
 }
 
-// FUDKII (First-Up/Down-Kill Ignition Indicator) Data
+// FUDKII Signal - SuperTrend flip + Bollinger Band breakout
+// BULLISH: SuperTrend flips UP AND close > BB_UPPER
+// BEARISH: SuperTrend flips DOWN AND close < BB_LOWER
 export interface FUDKIIData {
   scripCode: string;
-  companyName: string;
-  timestamp: string;
-  ignitionFlag: boolean;
-  direction: 'BULLISH_IGNITION' | 'BEARISH_IGNITION' | 'NO_IGNITION';
-  fudkiiStrength: number;
-  simultaneityScore: number;
-  priceBreaking: boolean;
-  volumeSurging: boolean;
-  momentumPositive: boolean;
-  atrExpanding: boolean;
-  flowConfirming: boolean;
+  symbol?: string;
+  companyName?: string;
+  exchange?: string;
+  triggerTime: string;
+
+  // Trigger state
+  triggered: boolean;
+  direction: 'BULLISH' | 'BEARISH' | 'NONE';
+  reason: string;
+  triggerPrice: number;
+  triggerScore: number;
+
+  // Bollinger Bands (20, 2)
+  bbUpper: number;
+  bbMiddle: number;
+  bbLower: number;
+
+  // SuperTrend (10, 3)
+  superTrend: number;
+  trend: 'UP' | 'DOWN' | 'NONE';
+  trendChanged: boolean;
+  pricePosition: 'ABOVE_UPPER' | 'BETWEEN' | 'BELOW_LOWER';
 }
 
 
 // QuantScore types (Institutional-Grade Scoring System)
 export interface QuantScore {
-  familyId: string;
   symbol: string;
   scripCode: string;
+  companyName?: string;
   timestamp: number;
   timeframe: string;
   humanReadableTime: string;
@@ -504,6 +519,10 @@ export interface DataQuality {
   hasPriceAction: boolean;
   hasVolumeProfile: boolean;
   hasCrossInstrument: boolean;
+  // Applicability: true when category SHOULD have data for this instrument
+  greeksApplicable?: boolean;
+  ivSurfaceApplicable?: boolean;
+  crossInstrumentApplicable?: boolean;
   completenessScore: number;
   qualityLevel: 'FULL' | 'PARTIAL' | 'MINIMAL';
 }

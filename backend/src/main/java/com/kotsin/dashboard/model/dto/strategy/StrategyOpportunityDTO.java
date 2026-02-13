@@ -24,6 +24,13 @@ public class StrategyOpportunityDTO {
     private String nextConditionNeeded;
     private String estimatedTimeframe;
     private double currentPrice;
+    private double entryLevel;
     private double keyLevel;
+    private double target2;
+    private double superTrendLevel;
+    private double expectedRR;
     private long timestamp;
+    // Strategy-specific context for display
+    private String strategyContext;  // e.g., "HTF: BULLISH 85% · Daily R1 + Weekly P" or "Mode: TREND_FOLLOWING · Conv: 38/40"
+    private String tradingMode;     // MicroAlpha trading mode (TREND_FOLLOWING, MEAN_REVERSION, etc.)
 }

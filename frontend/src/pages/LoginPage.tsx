@@ -136,7 +136,7 @@ export default function LoginPage() {
         <div className="mt-6 bg-slate-800/30 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-slate-500 text-xs mb-1">Demo Admin Access</p>
           <p className="text-slate-400 text-sm">
-            Username: <span className="text-amber-400 font-mono">devina</span> | Password: <span className="text-amber-400 font-mono">devina</span>
+            Username: <span className="text-amber-400 font-mono">admin</span> | Password: <span className="text-amber-400 font-mono">admin123</span>
           </p>
         </div>
       </div>

@@ -264,19 +264,13 @@ public class TradingSignalService {
     }
 
     /**
-     * Check if signal should be auto-executed
+     * Check if signal should be auto-executed.
+     * In infinite-margin mode, execute all valid signals regardless of score thresholds.
      */
     private boolean shouldAutoExecute(TradingSignalDTO signal) {
-        // High-quality signal criteria:
-        // 1. Score >= 75
-        // 2. Risk/Reward >= 2
-        // 3. Active trigger confirmed
-        Double score = signal.getCompositeScore();
-        Double rr = signal.getRiskRewardRatio();
-
-        return score != null && score >= 75 &&
-               rr != null && rr >= 2.0 &&
-               Boolean.TRUE.equals(signal.getIsActiveTrigger());
+        // Execute all signals that have a valid scripCode and direction
+        return signal.getScripCode() != null && !signal.getScripCode().isEmpty()
+                && signal.getDirection() != null && !signal.getDirection().isEmpty();
     }
 
     /**

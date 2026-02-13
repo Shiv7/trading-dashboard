@@ -36,5 +36,8 @@ public class PositionDTO {
     private Double trailingStop;
     private LocalDateTime openedAt;
     private LocalDateTime lastUpdated;
+
+    // Strategy
+    private String strategy;
 }
 

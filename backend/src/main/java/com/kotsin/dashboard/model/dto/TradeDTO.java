@@ -46,5 +46,8 @@ public class TradeDTO {
     
     // Duration
     private long durationMinutes;
+
+    // Strategy
+    private String strategy;
 }
 

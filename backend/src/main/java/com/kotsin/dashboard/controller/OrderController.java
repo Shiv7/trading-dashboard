@@ -2,6 +2,8 @@ package com.kotsin.dashboard.controller;
 
 import com.kotsin.dashboard.model.dto.CreateOrderRequest;
 import com.kotsin.dashboard.model.dto.ModifyPositionRequest;
+import com.kotsin.dashboard.model.entity.UserOrder;
+import com.kotsin.dashboard.repository.UserOrderRepository;
 import com.kotsin.dashboard.service.TradingModeService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
@@ -12,11 +14,14 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -31,15 +36,34 @@ public class OrderController {
 
     private final RestTemplate restTemplate;
     private final TradingModeService tradingModeService;
+    private final UserOrderRepository userOrderRepository;
 
     @Value("${execution.service.url:http://localhost:8089}")
     private String executionServiceUrl;
 
     public OrderController(
             @Qualifier("executionRestTemplate") RestTemplate restTemplate,
-            TradingModeService tradingModeService) {
+            TradingModeService tradingModeService,
+            UserOrderRepository userOrderRepository) {
         this.restTemplate = restTemplate;
         this.tradingModeService = tradingModeService;
+        this.userOrderRepository = userOrderRepository;
+    }
+
+    /**
+     * Get all orders from Redis (virtual:orders:*)
+     */
+    @GetMapping
+    public ResponseEntity<?> getOrders(@RequestParam(defaultValue = "50") int limit) {
+        try {
+            String apiPath = tradingModeService.getApiPathPrefix();
+            String url = executionServiceUrl + apiPath + "/orders?limit=" + limit;
+            ResponseEntity<Object> response = restTemplate.getForEntity(url, Object.class);
+            return ResponseEntity.ok(response.getBody());
+        } catch (RestClientException e) {
+            log.warn("Could not fetch orders from execution service: {}", e.getMessage());
+            return ResponseEntity.ok(List.of()); // Return empty list as fallback
+        }
     }
 
     /**
@@ -50,11 +74,14 @@ public class OrderController {
      */
     @PostMapping
     public ResponseEntity<?> createOrder(
+            Authentication auth,
             @Valid @RequestBody CreateOrderRequest request,
             BindingResult bindingResult) {
 
+        String userId = auth != null ? (String) auth.getPrincipal() : null;
         boolean isLive = tradingModeService.isLive();
         String modeLabel = isLive ? "LIVE" : "VIRTUAL";
+        String walletType = isLive ? "REAL" : "PAPER";
 
         // FIX BUG #7: Check for validation errors from @Valid annotations
         if (bindingResult.hasErrors()) {
@@ -92,10 +119,41 @@ public class OrderController {
             ResponseEntity<Map> response = restTemplate.postForEntity(url, entity, Map.class);
             log.info("[{}] Order created successfully: {}", modeLabel, response.getBody());
 
+            // Record per-user order
+            if (userId != null) {
+                try {
+                    String orderId = response.getBody() != null && response.getBody().get("orderId") != null
+                            ? response.getBody().get("orderId").toString() : null;
+                    UserOrder userOrder = UserOrder.builder()
+                            .userId(userId)
+                            .orderId(orderId)
+                            .walletType(walletType)
+                            .scripCode(request.getScripCode())
+                            .side(request.getSide())
+                            .type(request.getType())
+                            .quantity(request.getQty())
+                            .limitPrice(request.getLimitPrice() != null ? request.getLimitPrice() : 0)
+                            .currentPrice(request.getCurrentPrice() != null ? request.getCurrentPrice() : 0)
+                            .stopLoss(request.getSl() != null ? request.getSl() : 0)
+                            .target1(request.getTp1() != null ? request.getTp1() : 0)
+                            .target2(request.getTp2() != null ? request.getTp2() : 0)
+                            .trailingType(request.getTrailingType())
+                            .trailingValue(request.getTrailingValue() != null ? request.getTrailingValue() : 0)
+                            .status("FILLED")
+                            .filledAt(LocalDateTime.now())
+                            .build();
+                    userOrderRepository.save(userOrder);
+                    log.info("Recorded user order for {} ({})", userId, walletType);
+                } catch (Exception e) {
+                    log.warn("Failed to record user order: {}", e.getMessage());
+                }
+            }
+
             // Add mode info to response
             Map<String, Object> body = new java.util.HashMap<>(response.getBody() != null ? response.getBody() : Map.of());
             body.put("tradingMode", modeLabel);
             body.put("isLive", isLive);
+            body.put("walletType", walletType);
 
             return ResponseEntity.status(response.getStatusCode()).body(body);
 

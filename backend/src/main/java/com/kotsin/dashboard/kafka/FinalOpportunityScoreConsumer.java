@@ -49,7 +49,8 @@ public class FinalOpportunityScoreConsumer {
      */
     @KafkaListener(
             topics = {"kotsin_FF1", "score-final-opportunity"},
-            groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
+            groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}",
+            autoStartup = "false"
     )
     public void onFinalOpportunityScore(String payload) {
         try {

@@ -14,7 +14,7 @@ interface SessionContextPanelProps {
 
 export const SessionContextPanel: React.FC<SessionContextPanelProps> = ({
     sessionPosition,
-    sessionPositionDesc,
+    sessionPositionDesc: _sessionPositionDesc,
     vBottomDetected,
     vTopDetected,
     failedBreakoutCount,

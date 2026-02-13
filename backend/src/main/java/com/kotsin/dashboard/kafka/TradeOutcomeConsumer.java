@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.PositionDTO;
 import com.kotsin.dashboard.model.dto.TradeDTO;
+import com.kotsin.dashboard.model.entity.UserTrade;
+import com.kotsin.dashboard.service.UserPnLService;
 import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +30,7 @@ public class TradeOutcomeConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final WalletService walletService;
+    private final UserPnLService userPnLService;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -46,13 +49,46 @@ public class TradeOutcomeConsumer {
             }
 
             TradeDTO trade = parseTrade(root);
-            
+
             // Broadcast trade update
             sessionManager.broadcastTradeUpdate(trade);
-            
+
             // Update wallet and broadcast
             walletService.refreshWallet();
             sessionManager.broadcastWalletUpdate(walletService.getWallet());
+
+            // Record per-user trade if userId is present in the payload
+            String userId = root.path("userId").asText(null);
+            String walletType = root.path("walletType").asText("PAPER");
+            if (userId != null && !userId.isEmpty()) {
+                try {
+                    UserTrade userTrade = UserTrade.builder()
+                            .tradeId(trade.getTradeId())
+                            .signalId(trade.getSignalId())
+                            .scripCode(trade.getScripCode())
+                            .symbol(trade.getScripCode())
+                            .companyName(trade.getCompanyName())
+                            .side(trade.getSide())
+                            .entryPrice(trade.getEntryPrice())
+                            .exitPrice(trade.getExitPrice())
+                            .quantity(trade.getQuantity())
+                            .stopLoss(trade.getStopLoss())
+                            .target1(trade.getTarget1())
+                            .pnl(trade.getPnl())
+                            .pnlPercent(trade.getPnlPercent())
+                            .rMultiple(trade.getRMultiple())
+                            .entryTime(trade.getEntryTime())
+                            .exitTime(trade.getExitTime())
+                            .exitReason(trade.getExitReason())
+                            .durationMinutes((int) trade.getDurationMinutes())
+                            .strategy(root.path("strategy").asText(root.path("signalSource").asText("UNKNOWN")))
+                            .netPnl(trade.getPnl())
+                            .build();
+                    userPnLService.recordTrade(userId, walletType, userTrade);
+                } catch (Exception e) {
+                    log.warn("Failed to record per-user trade: {}", e.getMessage());
+                }
+            }
 
             // Send notification
             String status = trade.getStatus();

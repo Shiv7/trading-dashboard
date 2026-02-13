@@ -10,8 +10,8 @@ export default function ActivePositionBar({ position, onClose, className = '' }:
     if (!position) return null
 
     const isLong = position.side === 'LONG'
-    const pnl = position.unrealizedPnl
-    const pnlPercent = position.unrealizedPnlPercent
+    const pnl = Number(position.unrealizedPnl) || 0
+    const pnlPercent = Number(position.unrealizedPnlPercent) || 0
 
     // Calculate R-multiple (rough estimate)
     const riskPerUnit = Math.abs(position.avgEntryPrice - position.stopLoss)

@@ -3,7 +3,7 @@ import { useDashboardStore } from '../store/dashboardStore'
 import type { QuantScore } from '../types'
 
 // Standard timeframes in order from smallest to largest
-export const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'] as const
+export const TIMEFRAMES = ['5m', '15m', '30m', '1h', '2h', '4h', '1d'] as const
 export type Timeframe = typeof TIMEFRAMES[number]
 
 interface UseTimeframeScoresResult {
@@ -51,8 +51,8 @@ export function useTimeframeScores(scripCode: string | undefined): UseTimeframeS
       }
     }
 
-    const tfMap = quantScores.get(scripCode)
-    const allScores: QuantScore[] = tfMap ? Array.from(tfMap.values()) : []
+    const tfRecord = quantScores[scripCode]
+    const allScores: QuantScore[] = tfRecord ? Object.values(tfRecord) : []
 
     // Find latest score by timestamp
     let latestScore: QuantScore | undefined
@@ -92,9 +92,9 @@ export function useTimeframeScores(scripCode: string | undefined): UseTimeframeS
 
     return {
       allScores,
-      getScore: (tf: string) => tfMap?.get(tf),
+      getScore: (tf: string) => tfRecord?.[tf],
       latestScore,
-      hasTimeframe: (tf: string) => tfMap?.has(tf) ?? false,
+      hasTimeframe: (tf: string) => tf in (tfRecord ?? {}),
       availableCount: allScores.length,
       directionConsensus: {
         dominant,

@@ -2,9 +2,10 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Client, IMessage } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
 import { useDashboardStore } from '../store/dashboardStore'
+import type { QuantScore, PatternSignal } from '../types'
 import { walletApi, scoresApi, quantScoresApi } from '../services/api'
 
-const WS_URL = 'http://3.111.242.49:8085/ws'
+const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:8085/ws'
 
 // FIX BUG #10: Data validation helper
 function isValidObject(data: unknown): data is Record<string, unknown> {
@@ -52,7 +53,8 @@ export function useWebSocket() {
     updateIntelligence,
     updateActiveSetups,
     updateForecast,
-    updatePatternSignal
+    updatePatternSignal,
+    touchLastData
   } = useDashboardStore()
 
   // FIX BUG #11: Refresh data on reconnect to avoid stale data
@@ -123,6 +125,7 @@ export function useWebSocket() {
             // Validate data before updating store
             if (isValidWallet(data)) {
               updateWallet(data)
+              touchLastData()
             } else {
               console.warn('Received invalid wallet data, skipping update:', data)
             }
@@ -138,6 +141,7 @@ export function useWebSocket() {
             // Validate data before updating store
             if (isValidScore(data)) {
               updateScore(data)
+              touchLastData()
             } else {
               console.warn('Received invalid score data, skipping update:', data)
             }
@@ -161,6 +165,7 @@ export function useWebSocket() {
           try {
             const data = JSON.parse(message.body)
             updateTrade(data)
+            touchLastData()
           } catch (e) {
             handleParseError('trades', e)
           }
@@ -206,11 +211,16 @@ export function useWebSocket() {
           }
         })
 
-        // Subscribe to FUDKII ignition signals
+        // Subscribe to FUDKII signals (SuperTrend + BB triggers)
         client.subscribe('/topic/fudkii', (message: IMessage) => {
           try {
-            const data = JSON.parse(message.body)
-            updateFUDKII(data)
+            const msg = JSON.parse(message.body)
+            // Backend sends { type, scripCode, triggered, data: {...} }
+            // Extract the nested data object which contains the actual signal
+            const fudkiiData = msg.data || msg
+            if (fudkiiData && fudkiiData.scripCode) {
+              updateFUDKII(fudkiiData)
+            }
           } catch (e) {
             handleParseError('fudkii', e)
           }
@@ -220,9 +230,9 @@ export function useWebSocket() {
         client.subscribe('/topic/quant-scores', (message: IMessage) => {
           try {
             const data = JSON.parse(message.body)
-            // Validate quant score - must have familyId or scripCode and quantScore
-            if (isValidObject(data) && ('familyId' in data || 'scripCode' in data)) {
-              updateQuantScore(data)
+            // Validate quant score - must have scripCode
+            if (isValidObject(data) && 'scripCode' in data) {
+              updateQuantScore(data as unknown as QuantScore)
             } else {
               console.warn('Received invalid quant score data, skipping update')
             }
@@ -237,7 +247,7 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             // Validate pattern - must have patternId
             if (isValidObject(data) && 'patternId' in data) {
-              updatePatternSignal(data)
+              updatePatternSignal(data as unknown as PatternSignal)
             } else {
               console.warn('Received invalid pattern signal data, skipping update')
             }
@@ -358,7 +368,7 @@ export function useWebSocket() {
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, updatePatternSignal, refreshDataOnReconnect, bulkUpdateQuantScores])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, updatePatternSignal, refreshDataOnReconnect, bulkUpdateQuantScores, touchLastData])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {

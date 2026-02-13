@@ -103,8 +103,6 @@ interface DashboardState {
   quantScores: Record<string, Record<string, QuantScore>>
   updateQuantScore: (score: QuantScore) => void
   bulkUpdateQuantScores: (scores: QuantScore[]) => void
-  getQuantScore: (scripCode: string, timeframe?: string) => QuantScore | undefined
-
   // Market Intelligence (keyed by familyId)
   narratives: Map<string, MarketNarrative>
   updateNarrative: (narrative: MarketNarrative) => void
@@ -120,6 +118,15 @@ interface DashboardState {
   updatePatternSignal: (pattern: PatternSignal) => void
   bulkUpdatePatternSignals: (patterns: PatternSignal[]) => void
   removePatternSignal: (patternId: string) => void
+
+  // Data freshness
+  lastDataReceived: number
+  touchLastData: () => void
+
+  // Manual toast messages (for trade actions, errors, etc.)
+  toastMessages: { id: string; message: string; type: 'success' | 'error' | 'info'; visible: boolean }[]
+  addToast: (message: string, type: 'success' | 'error' | 'info') => void
+  dismissToast: (id: string) => void
 
   // UI state
   selectedStock: string | null
@@ -177,9 +184,6 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   // Keep multiple signals per scripCode (e.g., BUY at 10:00, SELL at 10:05)
   masterArchSignals: [],
   updateMasterArch: (signal) => set((state) => {
-    // Create a unique key combining scripCode and timestamp to allow multiple signals per stock
-    const signalKey = `${signal.scripCode}-${signal.timestamp}`
-
     // Check if this exact signal already exists
     const existingIndex = state.masterArchSignals.findIndex(s =>
       s.scripCode === signal.scripCode && s.timestamp === signal.timestamp
@@ -200,11 +204,13 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   acl: null,
   updateACL: (acl) => set({ acl }),
 
-  // FUDKII active ignitions
+  // FUDKII active signals (SuperTrend + BB triggers)
   activeIgnitions: [],
   updateFUDKII: (data) => set((state) => {
-    if (data.ignitionFlag) {
-      // Add or update active ignition
+    // Use 'triggered' field for new ST+BB format
+    const isTriggered = data.triggered ?? false
+    if (isTriggered) {
+      // Add or update active signal
       const existingIndex = state.activeIgnitions.findIndex(i => i.scripCode === data.scripCode)
       if (existingIndex >= 0) {
         const newIgnitions = [...state.activeIgnitions]
@@ -213,7 +219,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
       }
       return { activeIgnitions: [data, ...state.activeIgnitions].slice(0, 10) }
     } else {
-      // Remove from active ignitions
+      // Remove from active signals
       return { activeIgnitions: state.activeIgnitions.filter(i => i.scripCode !== data.scripCode) }
     }
   }),
@@ -222,12 +228,12 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   // FIX BUG #20 & #21: Changed from Map to Record for JSON serialization and atomic updates
   quantScores: {},
   updateQuantScore: (score) => set((state) => {
-    if (!score || (!score.scripCode && !score.familyId)) {
+    if (!score || !score.scripCode) {
       console.warn('Invalid quant score update - missing scripCode')
       return state
     }
-    const timeframe = score.timeframe || '1m'
-    const scripCode = score.scripCode || score.familyId
+    const timeframe = score.timeframe || '5m'
+    const scripCode = score.scripCode
 
     // Atomic immutable update
     return {
@@ -246,9 +252,9 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     // Build new state in single pass for atomicity (FIX BUG #21)
     const newScores = { ...state.quantScores }
     for (const score of scores) {
-      if (!score || (!score.scripCode && !score.familyId)) continue
-      const timeframe = score.timeframe || '1m'
-      const scripCode = score.scripCode || score.familyId
+      if (!score || !score.scripCode) continue
+      const timeframe = score.timeframe || '5m'
+      const scripCode = score.scripCode
       newScores[scripCode] = {
         ...(newScores[scripCode] || {}),
         [timeframe]: score
@@ -256,11 +262,6 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     }
     return { quantScores: newScores }
   }),
-  getQuantScore: (scripCode, timeframe = '5m') => {
-    const state = useDashboardStore.getState()
-    return state.quantScores[scripCode]?.[timeframe]
-  },
-
   // Market Intelligence
   narratives: new Map(),
   updateNarrative: (narrative) => set((state) => {
@@ -318,8 +319,43 @@ export const useDashboardStore = create<DashboardState>((set) => ({
     patternSignals: state.patternSignals.filter(p => p.patternId !== patternId)
   })),
 
+  // Data freshness
+  lastDataReceived: Date.now(),
+  touchLastData: () => set({ lastDataReceived: Date.now() }),
+
+  // Manual toast messages
+  toastMessages: [],
+  addToast: (message, type) => set((state) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+      useDashboardStore.setState((s) => ({
+        toastMessages: s.toastMessages.map((t) =>
+          t.id === id ? { ...t, visible: false } : t
+        ),
+      }))
+      setTimeout(() => {
+        useDashboardStore.setState((s) => ({
+          toastMessages: s.toastMessages.filter((t) => t.id !== id),
+        }))
+      }, 300)
+    }, 4000)
+    return { toastMessages: [...state.toastMessages, { id, message, type, visible: true }] }
+  }),
+  dismissToast: (id) => set((state) => ({
+    toastMessages: state.toastMessages.map((t) =>
+      t.id === id ? { ...t, visible: false } : t
+    ),
+  })),
+
   // UI state
   selectedStock: null,
   setSelectedStock: (scripCode) => set({ selectedStock: scripCode }),
 }))
+
+/** Standalone accessor — avoids circular reference inside store definition */
+export function getQuantScore(scripCode: string, timeframe = '5m'): QuantScore | undefined {
+  const state = useDashboardStore.getState()
+  return state.quantScores[scripCode]?.[timeframe]
+}
 

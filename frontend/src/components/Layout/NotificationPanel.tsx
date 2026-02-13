@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useDashboardStore } from '../../store/dashboardStore'
 import type { Notification } from '../../types'
+import { formatTimeAgo } from '../../utils/formatTime'
 
 export default function NotificationPanel() {
   const [isOpen, setIsOpen] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   const { notifications, clearNotifications } = useDashboardStore()
+  const navigate = useNavigate()
 
   // Close panel when clicking outside
   useEffect(() => {
@@ -34,12 +37,22 @@ export default function NotificationPanel() {
     return 'border-l-blue-400'
   }
 
-  const formatTime = (timestamp: number) => {
-    const diff = Date.now() - timestamp
-    if (diff < 60000) return 'Just now'
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
-    return new Date(timestamp).toLocaleDateString()
+  // Extract scripCode from notification if available
+  const getScripCode = (notification: Notification): string | null => {
+    if ('scripCode' in notification && typeof (notification as Record<string, unknown>).scripCode === 'string') {
+      return (notification as Record<string, unknown>).scripCode as string
+    }
+    // Try to extract from message — look for uppercase word patterns like stock symbols
+    const match = notification.message.match(/\b([A-Z]{3,}(?:BANK|FIN|TECH|PHARMA)?)\b/)
+    return match ? match[1] : null
+  }
+
+  const handleNotificationClick = (notification: Notification) => {
+    const scripCode = getScripCode(notification)
+    if (scripCode) {
+      navigate(`/stock/${scripCode}`)
+      setIsOpen(false)
+    }
   }
 
   return (
@@ -76,7 +89,7 @@ export default function NotificationPanel() {
           </div>
 
           {/* Notifications List */}
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-80 overflow-y-auto custom-scrollbar">
             {notifications.length > 0 ? (
               <div className="divide-y divide-slate-700/50">
                 {notifications.slice(0, 20).map((notification, idx) => (
@@ -85,7 +98,9 @@ export default function NotificationPanel() {
                     notification={notification}
                     icon={getNotificationIcon(notification.type)}
                     colorClass={getNotificationColor(notification.type)}
-                    timeAgo={formatTime(notification.timestamp)}
+                    timeAgo={formatTimeAgo(notification.timestamp)}
+                    onClick={() => handleNotificationClick(notification)}
+                    clickable={!!getScripCode(notification)}
                   />
                 ))}
               </div>
@@ -119,11 +134,16 @@ interface NotificationItemProps {
   icon: string
   colorClass: string
   timeAgo: string
+  onClick: () => void
+  clickable: boolean
 }
 
-function NotificationItem({ notification, icon, colorClass, timeAgo }: NotificationItemProps) {
+function NotificationItem({ notification, icon, colorClass, timeAgo, onClick, clickable }: NotificationItemProps) {
   return (
-    <div className={`px-4 py-3 hover:bg-slate-700/30 transition-colors cursor-pointer border-l-2 ${colorClass}`}>
+    <div
+      className={`px-4 py-3 hover:bg-slate-700/30 transition-colors border-l-2 ${colorClass} ${clickable ? 'cursor-pointer' : ''}`}
+      onClick={clickable ? onClick : undefined}
+    >
       <div className="flex items-start gap-3">
         <span className="text-lg flex-shrink-0">{icon}</span>
         <div className="flex-1 min-w-0">

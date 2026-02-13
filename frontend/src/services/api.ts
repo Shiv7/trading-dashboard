@@ -14,17 +14,98 @@ import type {
   StrategyStateDTO
 } from '../types/indicators'
 
-// Hardcoded production API URL
-const API_BASE = 'http://3.111.242.49:8085/api'
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8085/api'
+const STREAMING_API_BASE = API_BASE
+const AUTH_TOKEN_KEY = 'kotsin_auth_token'
 
-// Technical indicators API - now served from main backend (was port 8081)
-// Using the same backend to avoid dependency on external streaming candle service
-const STREAMING_API_BASE = 'http://3.111.242.49:8085/api'
+function getAuthHeaders(): HeadersInit {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY)
+  const headers: HeadersInit = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
+
+// --- Token refresh & auth retry logic ---
+let _isRefreshing = false
+let _refreshPromise: Promise<boolean> | null = null
+
+async function tryRefreshToken(): Promise<boolean> {
+  if (_isRefreshing && _refreshPromise) return _refreshPromise
+  _isRefreshing = true
+  _refreshPromise = (async () => {
+    try {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY)
+      if (!token) return false
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({}),
+      })
+      if (!response.ok) return false
+      const data = await response.json()
+      if (data.token) {
+        localStorage.setItem(AUTH_TOKEN_KEY, data.token)
+        if (data.user) localStorage.setItem('kotsin_user', JSON.stringify(data.user))
+        return true
+      }
+      return false
+    } catch {
+      return false
+    } finally {
+      _isRefreshing = false
+      _refreshPromise = null
+    }
+  })()
+  return _refreshPromise
+}
+
+function forceLogout(): void {
+  localStorage.removeItem(AUTH_TOKEN_KEY)
+  localStorage.removeItem('kotsin_user')
+  window.location.href = '/login'
+}
+
+async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  const makeOpts = (): RequestInit => ({
+    ...options,
+    headers: { ...getAuthHeaders(), ...(options.headers as Record<string, string> || {}) },
+  })
+  let response = await fetch(url, makeOpts())
+  if (response.status === 401) {
+    const refreshed = await tryRefreshToken()
+    if (refreshed) {
+      response = await fetch(url, makeOpts())
+      if (response.status === 401) {
+        forceLogout()
+        throw new Error('Session expired')
+      }
+    } else {
+      forceLogout()
+      throw new Error('Session expired')
+    }
+  }
+  return response
+}
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${url}`)
+  const response = await fetchWithAuth(`${API_BASE}${url}`)
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+async function postJsonNoAuth<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${url}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.error || `HTTP error! status: ${response.status}`)
   }
   return response.json()
 }
@@ -105,28 +186,51 @@ export const indicatorsApi = {
 
 // Helper for POST requests
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${url}`, {
+  const response = await fetchWithAuth(`${API_BASE}${url}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || `HTTP error! status: ${response.status}`)
+    throw new Error(error.message || error.error || `HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+// Helper for PUT requests
+async function putJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetchWithAuth(`${API_BASE}${url}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || error.error || `HTTP error! status: ${response.status}`)
+  }
+  return response.json()
+}
+
+// Helper for DELETE requests
+async function deleteJson<T>(url: string): Promise<T> {
+  const response = await fetchWithAuth(`${API_BASE}${url}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.message || error.error || `HTTP error! status: ${response.status}`)
   }
   return response.json()
 }
 
 // Helper for PATCH requests
 async function patchJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${url}`, {
+  const response = await fetchWithAuth(`${API_BASE}${url}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || `HTTP error! status: ${response.status}`)
+    throw new Error(error.message || error.error || `HTTP error! status: ${response.status}`)
   }
   return response.json()
 }
@@ -531,4 +635,125 @@ export const riskStatusApi = {
       {}
     ),
 }
+
+// ===== AUTH API =====
+export interface AuthResponse {
+  token: string
+  user: UserProfile
+}
+
+export interface UserProfile {
+  id: string
+  username: string
+  email: string
+  displayName: string
+  role: 'ADMIN' | 'TRADER' | 'VIEWER'
+  enabled: boolean
+  createdAt: string
+  lastLoginAt: string
+  preferences?: {
+    timezone: string
+    defaultLotSize: number
+    riskTolerance: string
+    preferredInstruments: string[]
+    notificationSettings: {
+      telegram: boolean
+      email: boolean
+      inApp: boolean
+      telegramChatId?: string
+      emailAddress?: string
+    }
+  }
+}
+
+export const authApi = {
+  login: (credentials: { username: string; password: string }) =>
+    postJsonNoAuth<AuthResponse>('/auth/login', credentials),
+
+  register: (data: { username: string; email: string; password: string; displayName: string }) =>
+    postJsonNoAuth<AuthResponse>('/auth/register', data),
+
+  me: () => fetchJson<UserProfile>('/auth/me'),
+
+  refresh: async (): Promise<AuthResponse> => {
+    // Uses raw fetch — NOT fetchWithAuth — to avoid infinite retry loop
+    const response = await fetch(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({}),
+    })
+    if (!response.ok) {
+      throw new Error(`Refresh failed: ${response.status}`)
+    }
+    return response.json()
+  },
+
+  changePassword: (data: { oldPassword: string; newPassword: string }) =>
+    postJson<{ message: string }>('/auth/password/change', data),
+}
+
+// ===== PROFILE API =====
+export const profileApi = {
+  getProfile: () => fetchJson<UserProfile>('/profile'),
+  updateProfile: (data: Partial<UserProfile>) => putJson<UserProfile>('/profile', data),
+  updatePreferences: (prefs: UserProfile['preferences']) => putJson<UserProfile>('/profile/preferences', prefs),
+  updateNotifications: (settings: UserProfile['preferences']) => putJson<UserProfile>('/profile/notifications', settings),
+}
+
+// ===== ADMIN API =====
+export const adminApi = {
+  getUsers: (page = 0, size = 20) => fetchJson<{ content: UserProfile[]; totalElements: number }>(`/admin/users?page=${page}&size=${size}`),
+  updateUserRole: (userId: string, role: string) => putJson<UserProfile>(`/admin/users/${userId}/role`, { role }),
+  toggleUserEnabled: (userId: string, enabled: boolean) => putJson<UserProfile>(`/admin/users/${userId}/enable`, { enabled }),
+  deleteUser: (userId: string) => deleteJson<{ message: string }>(`/admin/users/${userId}`),
+}
+
+// ===== PnL API =====
+export const pnlApi = {
+  getSummary: (walletType = 'PAPER') =>
+    fetchJson<Record<string, unknown>>(`/pnl/summary?walletType=${walletType}`),
+  getWallets: () => fetchJson<unknown[]>('/pnl/wallets'),
+  getDailyPnl: (walletType = 'PAPER', days = 30) =>
+    fetchJson<unknown[]>(`/pnl/daily?walletType=${walletType}&days=${days}`),
+  getEquityCurve: (walletType = 'PAPER') =>
+    fetchJson<unknown[]>(`/pnl/equity-curve?walletType=${walletType}`),
+  getCalendar: (walletType = 'PAPER', year?: number) =>
+    fetchJson<Record<string, number>>(`/pnl/calendar?walletType=${walletType}${year ? `&year=${year}` : ''}`),
+  getByInstrument: (walletType = 'PAPER') =>
+    fetchJson<unknown[]>(`/pnl/by-instrument?walletType=${walletType}`),
+  getByStrategy: (walletType = 'PAPER') =>
+    fetchJson<unknown[]>(`/pnl/by-strategy?walletType=${walletType}`),
+  getMetrics: (walletType = 'PAPER') =>
+    fetchJson<Record<string, unknown>>(`/pnl/metrics?walletType=${walletType}`),
+  getTradeJournal: (walletType = 'PAPER', page = 0, size = 20) =>
+    fetchJson<{ content: unknown[] }>(`/pnl/trade-journal?walletType=${walletType}&page=${page}&size=${size}`),
+  updateTradeNotes: (tradeId: string, notes: string, tags?: string[]) =>
+    putJson<unknown>(`/pnl/trade-journal/${tradeId}/notes`, { notes, tags }),
+}
+
+// ===== WATCHLIST API =====
+export const watchlistApi = {
+  getWatchlists: () => fetchJson<unknown[]>('/watchlists'),
+  createWatchlist: (name: string) => postJson<unknown>('/watchlists', { name }),
+  renameWatchlist: (id: string, name: string) => putJson<unknown>(`/watchlists/${id}`, { name }),
+  deleteWatchlist: (id: string) => deleteJson<unknown>(`/watchlists/${id}`),
+  addInstrument: (id: string, instrument: { scripCode: string; symbol: string; companyName: string; exchange: string }) =>
+    postJson<unknown>(`/watchlists/${id}/instruments`, instrument),
+  removeInstrument: (id: string, scripCode: string) =>
+    deleteJson<unknown>(`/watchlists/${id}/instruments/${scripCode}`),
+  reorderInstruments: (id: string, scripCodes: string[]) =>
+    putJson<unknown>(`/watchlists/${id}/instruments/reorder`, { scripCodes }),
+}
+
+// ===== INSTRUMENT ANALYSIS API =====
+export const analysisApi = {
+  getOverview: (scripCode: string) => fetchJson<Record<string, unknown>>(`/analysis/${scripCode}/overview`),
+  getSignals: (scripCode: string) => fetchJson<unknown[]>(`/analysis/${scripCode}/signals`),
+  getPivotLevels: (scripCode: string) => fetchJson<Record<string, unknown>>(`/analysis/${scripCode}/pivots`),
+  getRegime: (scripCode: string) => fetchJson<Record<string, unknown>>(`/analysis/${scripCode}/regime`),
+  getPrediction: (scripCode: string) => fetchJson<Record<string, unknown>>(`/analysis/${scripCode}/prediction`),
+}
+
+// Export helpers for use in other service files
+export { fetchJson, postJson, putJson, deleteJson, patchJson, API_BASE }
 

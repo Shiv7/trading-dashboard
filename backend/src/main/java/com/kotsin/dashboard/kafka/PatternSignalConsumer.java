@@ -42,9 +42,9 @@ public class PatternSignalConsumer {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     // Memory limits to prevent OOM
-    private static final int MAX_ACTIVE_PATTERNS = 1000;
-    private static final int MAX_COMPLETED_PATTERNS = 500;
-    private static final int MAX_PATTERNS_PER_STOCK = 50;
+    private static final int MAX_ACTIVE_PATTERNS = 5000;
+    private static final int MAX_COMPLETED_PATTERNS = 1000;
+    private static final int MAX_PATTERNS_PER_STOCK = 100;
     private static final int PATTERN_EXPIRY_HOURS = 24;
 
     // In-memory pattern storage
@@ -75,9 +75,9 @@ public class PatternSignalConsumer {
                 return;
             }
 
-            // FIX: Check max limit before adding
+            // Check max limit before adding
             if (activePatterns.size() >= MAX_ACTIVE_PATTERNS && !activePatterns.containsKey(pattern.getPatternId())) {
-                log.warn("Active patterns limit reached ({}), skipping new pattern for {}",
+                log.debug("Active patterns limit reached ({}), skipping new pattern for {}",
                         MAX_ACTIVE_PATTERNS, pattern.getScripCode());
                 return;
             }
@@ -207,11 +207,20 @@ public class PatternSignalConsumer {
         long timestamp = root.path("timestamp").asLong(
                 root.path("triggeredAt").asLong(System.currentTimeMillis()));
 
+        // Resolve patternId: prefer patternId, fallback to id, then generate UUID
+        String patternId = root.path("patternId").asText(null);
+        if (patternId == null || patternId.isEmpty() || "null".equals(patternId)) {
+            patternId = root.path("id").asText(null);
+        }
+        if (patternId == null || patternId.isEmpty() || "null".equals(patternId)) {
+            patternId = UUID.randomUUID().toString();
+        }
+
         return PatternSignalDTO.builder()
-                .patternId(root.path("patternId").asText(UUID.randomUUID().toString()))
+                .patternId(patternId)
                 .signalId(root.path("signalId").asText())
                 .scripCode(root.path("scripCode").asText(root.path("familyId").asText()))
-                .companyName(root.path("companyName").asText(root.path("scripCode").asText()))
+                .companyName(root.path("companyName").asText(root.path("symbol").asText(root.path("scripCode").asText())))
                 .patternType(root.path("patternType").asText(root.path("type").asText("UNKNOWN")))
                 .direction(root.path("direction").asText("NEUTRAL"))
                 .status("ACTIVE")

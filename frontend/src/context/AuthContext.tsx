@@ -1,113 +1,85 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-
-interface User {
-  id: string
-  username: string
-  email: string
-  role: 'admin' | 'user'
-  name: string
-}
+import { authApi, type UserProfile } from '../services/api'
 
 interface AuthContextType {
-  user: User | null
+  user: UserProfile | null
   isAuthenticated: boolean
   isLoading: boolean
   login: (username: string, password: string) => Promise<boolean>
   signup: (email: string, username: string, password: string, name: string) => Promise<boolean>
   logout: () => void
   error: string | null
+  token: string | null
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Master admin credentials
-const MASTER_ADMIN: User = {
-  id: 'admin-001',
-  username: 'devina',
-  email: 'devina@kotsin.com',
-  role: 'admin',
-  name: 'Devina (Admin)'
-}
-
-const MASTER_PASSWORD = 'devina'
-
-// Local storage keys
 const AUTH_TOKEN_KEY = 'kotsin_auth_token'
 const USER_KEY = 'kotsin_user'
-const USERS_DB_KEY = 'kotsin_users_db'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<UserProfile | null>(null)
+  const [token, setToken] = useState<string | null>(localStorage.getItem(AUTH_TOKEN_KEY))
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Initialize auth state from localStorage
+  // Validate token on mount
   useEffect(() => {
-    const storedUser = localStorage.getItem(USER_KEY)
     const storedToken = localStorage.getItem(AUTH_TOKEN_KEY)
-
-    if (storedUser && storedToken) {
-      try {
-        setUser(JSON.parse(storedUser))
-      } catch {
-        localStorage.removeItem(USER_KEY)
-        localStorage.removeItem(AUTH_TOKEN_KEY)
-      }
+    if (storedToken) {
+      // authApi.me() goes through fetchWithAuth which auto-retries with refresh on 401
+      authApi.me()
+        .then((userData) => {
+          setUser(userData)
+          setToken(localStorage.getItem(AUTH_TOKEN_KEY) || storedToken)
+          localStorage.setItem(USER_KEY, JSON.stringify(userData))
+        })
+        .catch(() => {
+          localStorage.removeItem(AUTH_TOKEN_KEY)
+          localStorage.removeItem(USER_KEY)
+          setUser(null)
+          setToken(null)
+        })
+        .finally(() => setIsLoading(false))
+    } else {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }, [])
 
-  // Get users database from localStorage
-  const getUsersDB = (): Record<string, { user: User; password: string }> => {
-    try {
-      const db = localStorage.getItem(USERS_DB_KEY)
-      return db ? JSON.parse(db) : {}
-    } catch {
-      return {}
-    }
-  }
-
-  // Save users database to localStorage
-  const saveUsersDB = (db: Record<string, { user: User; password: string }>) => {
-    localStorage.setItem(USERS_DB_KEY, JSON.stringify(db))
-  }
+  // Proactive token refresh — refresh every 30 min to keep session alive
+  useEffect(() => {
+    if (!user || !token) return
+    const interval = setInterval(async () => {
+      try {
+        const response = await authApi.refresh()
+        localStorage.setItem(AUTH_TOKEN_KEY, response.token)
+        setToken(response.token)
+        if (response.user) {
+          setUser(response.user)
+          localStorage.setItem(USER_KEY, JSON.stringify(response.user))
+        }
+      } catch {
+        // Refresh failed silently — fetchWithAuth will handle 401 on next API call
+      }
+    }, 30 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [user, token])
 
   const login = async (username: string, password: string): Promise<boolean> => {
     setError(null)
     setIsLoading(true)
 
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500))
-
     try {
-      // Check master admin
-      if (username.toLowerCase() === MASTER_ADMIN.username && password === MASTER_PASSWORD) {
-        const token = btoa(`${username}:${Date.now()}`)
-        localStorage.setItem(AUTH_TOKEN_KEY, token)
-        localStorage.setItem(USER_KEY, JSON.stringify(MASTER_ADMIN))
-        setUser(MASTER_ADMIN)
-        setIsLoading(false)
-        return true
-      }
-
-      // Check registered users
-      const usersDB = getUsersDB()
-      const userRecord = usersDB[username.toLowerCase()]
-
-      if (userRecord && userRecord.password === password) {
-        const token = btoa(`${username}:${Date.now()}`)
-        localStorage.setItem(AUTH_TOKEN_KEY, token)
-        localStorage.setItem(USER_KEY, JSON.stringify(userRecord.user))
-        setUser(userRecord.user)
-        setIsLoading(false)
-        return true
-      }
-
-      setError('Invalid username or password')
+      const response = await authApi.login({ username, password })
+      localStorage.setItem(AUTH_TOKEN_KEY, response.token)
+      localStorage.setItem(USER_KEY, JSON.stringify(response.user))
+      setToken(response.token)
+      setUser(response.user)
       setIsLoading(false)
-      return false
+      return true
     } catch (err) {
-      setError('Login failed. Please try again.')
+      const message = err instanceof Error ? err.message : 'Login failed'
+      setError(message)
       setIsLoading(false)
       return false
     }
@@ -117,60 +89,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null)
     setIsLoading(true)
 
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500))
-
     try {
-      // Validate inputs
-      if (!email || !username || !password || !name) {
-        setError('All fields are required')
-        setIsLoading(false)
-        return false
-      }
-
       if (password.length < 6) {
         setError('Password must be at least 6 characters')
         setIsLoading(false)
         return false
       }
 
-      // Check if username is reserved
-      if (username.toLowerCase() === MASTER_ADMIN.username) {
-        setError('This username is reserved')
-        setIsLoading(false)
-        return false
-      }
-
-      // Check if user exists
-      const usersDB = getUsersDB()
-      if (usersDB[username.toLowerCase()]) {
-        setError('Username already exists')
-        setIsLoading(false)
-        return false
-      }
-
-      // Create new user
-      const newUser: User = {
-        id: `user-${Date.now()}`,
-        username: username.toLowerCase(),
+      const response = await authApi.register({
+        username,
         email,
-        role: 'user',
-        name
-      }
-
-      // Save to database
-      usersDB[username.toLowerCase()] = { user: newUser, password }
-      saveUsersDB(usersDB)
-
-      // Auto-login
-      const token = btoa(`${username}:${Date.now()}`)
-      localStorage.setItem(AUTH_TOKEN_KEY, token)
-      localStorage.setItem(USER_KEY, JSON.stringify(newUser))
-      setUser(newUser)
+        password,
+        displayName: name,
+      })
+      localStorage.setItem(AUTH_TOKEN_KEY, response.token)
+      localStorage.setItem(USER_KEY, JSON.stringify(response.user))
+      setToken(response.token)
+      setUser(response.user)
       setIsLoading(false)
       return true
     } catch (err) {
-      setError('Signup failed. Please try again.')
+      const message = err instanceof Error ? err.message : 'Signup failed'
+      setError(message)
       setIsLoading(false)
       return false
     }
@@ -180,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(AUTH_TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
     setUser(null)
+    setToken(null)
   }
 
   return (
@@ -191,7 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         signup,
         logout,
-        error
+        error,
+        token,
       }}
     >
       {children}

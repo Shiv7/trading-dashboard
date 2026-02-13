@@ -152,9 +152,56 @@ export default function StockDetailPage() {
   }, [scripCode, subscribeToStock, subscribeToIPU, subscribeToVCP, bulkUpdateQuantScores])
 
   // Use WebSocket data if available, fallback to API data
-  const displayScore = (scripCode && wsScores.get(scripCode)) || score
+  const rawDisplayScore = (scripCode && wsScores.get(scripCode)) || score
   const displayWallet = wsWallet || wallet
   const displayQuantScore = wsQuantScore || quantScore
+
+  // Build fallback displayScore from QuantScore when FamilyScore is unavailable
+  const displayScore: FamilyScore | null = rawDisplayScore || (displayQuantScore ? {
+    scripCode: displayQuantScore.scripCode || scripCode || '',
+    companyName: displayQuantScore.companyName || displayQuantScore.symbol || scripCode || '',
+    timeframe: displayQuantScore.timeframe || '5m',
+    timestamp: String(displayQuantScore.timestamp || Date.now()),
+    mtis: displayQuantScore.quantScore || 0,
+    mtisLabel: displayQuantScore.quantLabel || 'NEUTRAL',
+    mtisTrend: 'STABLE',
+    open: 0,
+    high: 0,
+    low: 0,
+    close: 0,
+    volume: 0,
+    vwap: 0,
+    vcpCombinedScore: 0,
+    vcpRunway: 0,
+    vcpStructuralBias: 0,
+    vcpSupportScore: 0,
+    vcpResistanceScore: 0,
+    ipuFinalScore: 0,
+    ipuInstProxy: 0,
+    ipuMomentum: 0,
+    ipuExhaustion: 0,
+    ipuUrgency: 0,
+    ipuDirectionalConviction: 0,
+    ipuXfactor: false,
+    ipuMomentumState: 'STEADY',
+    indexRegimeLabel: 'NEUTRAL',
+    indexRegimeStrength: 0,
+    securityRegimeLabel: 'NEUTRAL',
+    securityAligned: false,
+    oiSignal: '',
+    futuresBuildup: '',
+    hardGatePassed: false,
+    hardGateReason: '',
+    mtfGatePassed: false,
+    mtfGateReason: '',
+    qualityGatePassed: false,
+    qualityGateReason: '',
+    statsGatePassed: false,
+    statsGateReason: '',
+    overallScore: displayQuantScore.quantScore || 0,
+    direction: displayQuantScore.direction || 'NEUTRAL',
+    signalEmitted: false,
+  } as FamilyScore : null)
 
   // Merge signals: WebSocket signals for this stock + API signals
   const stockWsSignals = wsSignals.filter(s => s.scripCode === scripCode)

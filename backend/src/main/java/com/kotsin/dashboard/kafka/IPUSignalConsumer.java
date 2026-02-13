@@ -36,7 +36,8 @@ public class IPUSignalConsumer {
 
     @KafkaListener(
         topics = {"ipu-signals-5m", "ipu-signals-15m", "ipu-signals-30m"},
-        groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
+        groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}",
+        autoStartup = "false"
     )
     public void onIPUSignal(String payload) {
         try {

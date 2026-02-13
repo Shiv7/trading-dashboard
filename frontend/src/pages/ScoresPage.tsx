@@ -9,6 +9,7 @@ export default function ScoresPage() {
   const [loading, setLoading] = useState(true)
   const [sortBy, setSortBy] = useState<'score' | 'vcp' | 'ipu'>('score')
   const [filterDirection, setFilterDirection] = useState<string>('')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const wsScores = useDashboardStore((s) => s.scores)
 
@@ -34,6 +35,11 @@ export default function ScoresPage() {
   // Filter and sort
   const displayScores = allScores
     .filter(s => !filterDirection || s.direction === filterDirection)
+    .filter(s => {
+      if (!searchQuery.trim()) return true
+      const q = searchQuery.toLowerCase()
+      return s.scripCode?.toLowerCase().includes(q) || s.companyName?.toLowerCase().includes(q)
+    })
     .sort((a, b) => {
       switch (sortBy) {
         case 'vcp': return b.vcpCombinedScore - a.vcpCombinedScore
@@ -58,6 +64,17 @@ export default function ScoresPage() {
           <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-green" />
           <span className="text-sm text-slate-400">Live Updates</span>
         </div>
+      </div>
+
+      {/* Search */}
+      <div>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search by stock name, code, or symbol..."
+          className="w-full max-w-md bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+        />
       </div>
 
       {/* Filters and Sort */}

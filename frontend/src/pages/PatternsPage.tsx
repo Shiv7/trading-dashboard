@@ -49,6 +49,20 @@ const PATTERN_TYPES = {
 
 type PatternType = keyof typeof PATTERN_TYPES
 
+// Static Tailwind class map (dynamic template literals get purged)
+const colorClasses: Record<string, { bg: string; text: string }> = {
+  emerald: { bg: 'bg-emerald-500/20', text: 'text-emerald-400' },
+  red: { bg: 'bg-red-500/20', text: 'text-red-400' },
+  amber: { bg: 'bg-amber-500/20', text: 'text-amber-400' },
+  blue: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
+  purple: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
+  cyan: { bg: 'bg-cyan-500/20', text: 'text-cyan-400' },
+  orange: { bg: 'bg-orange-500/20', text: 'text-orange-400' },
+  slate: { bg: 'bg-slate-500/20', text: 'text-slate-400' },
+  indigo: { bg: 'bg-indigo-500/20', text: 'text-indigo-400' },
+  rose: { bg: 'bg-rose-500/20', text: 'text-rose-400' },
+}
+
 // Timeframes
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1D'] as const
 
@@ -361,7 +375,7 @@ export default function PatternsPage() {
                 onClick={() => setDirectionFilter(d.key as typeof directionFilter)}
                 className={`px-2 py-1.5 rounded-md text-xs font-medium transition-all ${
                   directionFilter === d.key
-                    ? d.color ? `bg-${d.color}-500/20 text-${d.color}-400` : 'bg-slate-700 text-white'
+                    ? d.color ? `${colorClasses[d.color]?.bg} ${colorClasses[d.color]?.text}` : 'bg-slate-700 text-white'
                     : 'text-slate-500 hover:text-white'
                 }`}
               >
@@ -385,7 +399,7 @@ export default function PatternsPage() {
                 onClick={() => setConfidenceFilter(c.key as typeof confidenceFilter)}
                 className={`px-2 py-1.5 rounded-md text-xs font-medium transition-all ${
                   confidenceFilter === c.key
-                    ? c.color ? `bg-${c.color}-500/20 text-${c.color}-400` : 'bg-slate-700 text-white'
+                    ? c.color ? `${colorClasses[c.color]?.bg} ${colorClasses[c.color]?.text}` : 'bg-slate-700 text-white'
                     : 'text-slate-500 hover:text-white'
                 }`}
               >
@@ -515,7 +529,7 @@ export default function PatternsPage() {
 
                     {/* Pattern Type & Direction */}
                     <div className="flex items-center gap-2 mb-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium bg-${info.color}-500/20 text-${info.color}-400`}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${colorClasses[info.color]?.bg} ${colorClasses[info.color]?.text}`}>
                         {pattern.patternType?.replace(/_/g, ' ')}
                       </span>
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${
@@ -637,7 +651,7 @@ function PatternDetailPanel({ pattern }: { pattern: PatternSignal }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs mb-3">
-          <span className={`px-2 py-1 rounded bg-${info.color}-500/20 text-${info.color}-400`}>
+          <span className={`px-2 py-1 rounded ${colorClasses[info.color]?.bg} ${colorClasses[info.color]?.text}`}>
             {pattern.patternType?.replace(/_/g, ' ')}
           </span>
           <span className={`px-2 py-1 rounded ${

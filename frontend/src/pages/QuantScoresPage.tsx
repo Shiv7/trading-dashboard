@@ -29,6 +29,7 @@ export default function QuantScoresPage() {
   const [directionFilter, setDirectionFilter] = useState<'ALL' | 'BULLISH' | 'BEARISH'>('ALL')
   const [instrumentFilter, setInstrumentFilter] = useState<'ALL' | 'EQUITY' | 'INDEX' | 'COMMODITY'>('ALL')
   const [actionableOnly, setActionableOnly] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [selectedScore, setSelectedScore] = useState<QuantScore | null>(null)
   const [tradeModal, setTradeModal] = useState<{ open: boolean; score: QuantScore | null }>({ open: false, score: null })
 
@@ -88,8 +89,36 @@ export default function QuantScoresPage() {
   }
 
   // Helper functions
-  const getCategoryScore = (score: QuantScore, key: CategoryKey): number => {
+  // Returns: number (real score), null (N/A), or -1 (DM = data missing)
+  const getCategoryScore = (score: QuantScore, key: CategoryKey): number | null => {
     if (!score.breakdown) return 0
+    // Check DataQuality: return null for N/A, -1 for DM
+    const dq = score.dataQuality
+    if (dq) {
+      const hasDataMap: Record<CategoryKey, boolean> = {
+        greeks: dq.hasGreeks,
+        ivSurface: dq.hasIVSurface,
+        microstructure: dq.hasMicrostructure,
+        optionsFlow: dq.hasOptionsFlow,
+        priceAction: dq.hasPriceAction ?? true,
+        volumeProfile: dq.hasVolumeProfile,
+        crossInstrument: dq.hasCrossInstrument,
+        confluence: true,
+      }
+      const applicableMap: Record<CategoryKey, boolean> = {
+        greeks: dq.greeksApplicable ?? dq.hasGreeks,
+        ivSurface: dq.ivSurfaceApplicable ?? dq.hasIVSurface,
+        microstructure: true,
+        optionsFlow: true,
+        priceAction: true,
+        volumeProfile: true,
+        crossInstrument: dq.crossInstrumentApplicable ?? true,
+        confluence: true,
+      }
+      if (!hasDataMap[key]) {
+        return applicableMap[key] ? -1 : null  // -1 = DM, null = N/A
+      }
+    }
     const map: Record<CategoryKey, number> = {
       greeks: score.breakdown.greeksScore || 0,
       ivSurface: score.breakdown.ivSurfaceScore || 0,
@@ -106,6 +135,14 @@ export default function QuantScoresPage() {
   // Filter & sort scores
   const filteredScores = useMemo(() => {
     let result = scores
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      result = result.filter(s =>
+        s.scripCode?.toLowerCase().includes(q) ||
+        s.symbol?.toLowerCase().includes(q)
+      )
+    }
 
     if (directionFilter !== 'ALL') {
       result = result.filter(s => s.direction === directionFilter)
@@ -126,13 +163,13 @@ export default function QuantScoresPage() {
 
     // Sort by selected category if not 'all'
     if (activeTab !== 'all') {
-      result = [...result].sort((a, b) => getCategoryScore(b, activeTab) - getCategoryScore(a, activeTab))
+      result = [...result].sort((a, b) => (getCategoryScore(b, activeTab) ?? -1) - (getCategoryScore(a, activeTab) ?? -1))
     } else {
       result = [...result].sort((a, b) => (b.quantScore || 0) - (a.quantScore || 0))
     }
 
     return result
-  }, [scores, directionFilter, instrumentFilter, actionableOnly, activeTab])
+  }, [scores, searchQuery, directionFilter, instrumentFilter, actionableOnly, activeTab])
 
   const getScoreColor = (score: number) => {
     if (score >= 75) return 'text-emerald-400'
@@ -173,6 +210,17 @@ export default function QuantScoresPage() {
           )}
         </div>
 
+        {/* Search */}
+        <div>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by symbol or code..."
+            className="w-full max-w-xs bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-white text-sm placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+
         {/* Unified Filter Bar */}
         <div className="flex items-center gap-2 bg-slate-800/30 rounded-lg p-1.5">
           {/* Category Icons - Compact */}
@@ -211,7 +259,7 @@ export default function QuantScoresPage() {
                 key={d.key}
                 onClick={() => setDirectionFilter(d.key as typeof directionFilter)}
                 className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${directionFilter === d.key
-                  ? d.color ? `bg-${d.color}-500/20 text-${d.color}-400` : 'bg-slate-700 text-white'
+                  ? d.color === 'emerald' ? 'bg-emerald-500/20 text-emerald-400' : d.color === 'red' ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-white'
                   : 'text-slate-500 hover:text-white'
                   }`}
                 title={d.label}
@@ -262,9 +310,9 @@ export default function QuantScoresPage() {
         </div>
 
         {/* Main Grid: List + Detail Panel */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Scores List */}
-          <div className="xl:col-span-2 space-y-2 max-h-[calc(100vh-280px)] overflow-y-auto pr-2">
+          <div className="lg:col-span-2 space-y-2 max-h-[calc(100vh-280px)] overflow-y-auto pr-2">
             {filteredScores.slice(0, 100).map((score) => (
               <ScoreCard
                 key={score.scripCode}
@@ -286,7 +334,7 @@ export default function QuantScoresPage() {
           </div>
 
           {/* Detail Panel */}
-          <div className="xl:sticky xl:top-4 xl:h-fit">
+          <div className="lg:sticky lg:top-4 lg:h-fit">
             {selectedScore ? (
               <ScoreDetailPanel
                 score={selectedScore}
@@ -322,7 +370,7 @@ interface ScoreCardProps {
   score: QuantScore
   isSelected: boolean
   activeTab: FilterTab
-  getCategoryScore: (s: QuantScore, k: CategoryKey) => number
+  getCategoryScore: (s: QuantScore, k: CategoryKey) => number | null
   getScoreColor: (n: number) => string
   onSelect: () => void
   onTrade: () => void
@@ -354,7 +402,7 @@ function ScoreCard({ score, isSelected, activeTab, getCategoryScore, getScoreCol
             onClick={(e) => e.stopPropagation()}
             className="font-medium text-white hover:text-amber-400 transition-colors truncate"
           >
-            {score.symbol || score.scripCode}
+            {score.symbol || score.companyName || score.scripCode}
           </Link>
           {score.actionable && (
             <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400">⚡</span>
@@ -367,12 +415,19 @@ function ScoreCard({ score, isSelected, activeTab, getCategoryScore, getScoreCol
         )}
       </div>
 
-      {/* Category Score (when filtered) */}
-      {/* FIX BUG #1: Added null guard for categoryMax */}
-      {activeTab !== 'all' && categoryScore !== null && categoryMax != null && (
+      {/* Category Score (when filtered): null=N/A, -1=DM, >=0=real */}
+      {activeTab !== 'all' && categoryMax != null && (
         <div className="text-right text-xs">
-          <div className="text-white font-medium">{categoryScore.toFixed(1)}</div>
-          <div className="text-slate-500">/{categoryMax}</div>
+          {categoryScore === null ? (
+            <div className="text-slate-500 font-medium">N/A</div>
+          ) : categoryScore === -1 ? (
+            <div className="text-amber-400 font-medium">DM</div>
+          ) : (
+            <>
+              <div className="text-white font-medium">{categoryScore.toFixed(1)}</div>
+              <div className="text-slate-500">/{categoryMax}</div>
+            </>
+          )}
         </div>
       )}
 
@@ -414,7 +469,7 @@ function ScoreDetailPanel({ score, onTrade }: { score: QuantScore; onTrade: () =
         <div className="flex items-center justify-between mb-2">
           <div>
             <Link to={`/stock/${score.scripCode}`} className="text-lg font-bold text-white hover:text-amber-400">
-              {score.symbol || score.scripCode}
+              {score.symbol || score.companyName || score.scripCode}
             </Link>
             <div className="text-xs text-slate-400">{score.humanReadableTime} | {score.timeframe}</div>
           </div>
@@ -448,18 +503,36 @@ function ScoreDetailPanel({ score, onTrade }: { score: QuantScore; onTrade: () =
         <div className="space-y-2">
           {CATEGORIES.map((cat) => {
             const value = score.breakdown ? (score.breakdown as any)[`${cat.key}Score`] || 0 : 0
-            const pct = score.breakdown ? (score.breakdown as any)[`${cat.key}Pct`] || 0 : 0
+            const pct = score.breakdown ? (score.breakdown as any)[`${cat.key}Pct`] : 0
+            const isNA = pct != null && pct === -1  // -1 sentinel = N/A (not applicable)
+            const isDM = pct != null && pct === -2  // -2 sentinel = DM (data missing)
             return (
               <div key={cat.key} className="flex items-center gap-2">
                 <span className="w-5 text-center text-sm">{cat.icon}</span>
                 <span className="text-[11px] text-slate-400 w-20 truncate">{cat.label}</span>
-                <div className="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full transition-all ${pct >= 70 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-slate-600'}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-                <span className="text-[11px] text-white w-14 text-right">{fmt(value, 1)}/{cat.max}</span>
+                {isNA ? (
+                  <>
+                    <div className="flex-1 h-2 bg-slate-700/30 rounded-full overflow-hidden" />
+                    <span className="text-[11px] text-slate-500 w-14 text-right">N/A</span>
+                  </>
+                ) : isDM ? (
+                  <>
+                    <div className="flex-1 h-2 bg-slate-700/30 rounded-full overflow-hidden">
+                      <div className="h-full bg-amber-500/30 animate-pulse" style={{ width: '100%' }} />
+                    </div>
+                    <span className="text-[11px] text-amber-400 w-14 text-right">DM</span>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-all ${pct >= 70 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-slate-600'}`}
+                        style={{ width: `${Math.max(0, pct)}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-white w-14 text-right">{fmt(value, 1)}/{cat.max}</span>
+                  </>
+                )}
               </div>
             )
           })}

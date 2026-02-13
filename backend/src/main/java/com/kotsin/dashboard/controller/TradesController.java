@@ -162,6 +162,18 @@ public class TradesController {
 
             double pnlPercent = entryPrice > 0 ? (pnl / entryPrice) * 100 : 0;
 
+            // Extract strategy with fallback chain: signalSource -> strategy -> signalType -> UNKNOWN
+            String strategy = doc.getString("signalSource");
+            if (strategy == null || strategy.isEmpty()) {
+                strategy = doc.getString("strategy");
+            }
+            if (strategy == null || strategy.isEmpty()) {
+                strategy = doc.getString("signalType");
+            }
+            if (strategy == null || strategy.isEmpty()) {
+                strategy = "UNKNOWN";
+            }
+
             return TradeDTO.builder()
                     .tradeId(doc.getString("signalId"))
                     .signalId(doc.getString("signalId"))
@@ -181,6 +193,7 @@ public class TradesController {
                     .pnlPercent(pnlPercent)
                     .rMultiple(getDouble(doc, "rMultiple"))
                     .durationMinutes(durationMinutes)
+                    .strategy(strategy)
                     .build();
                     
         } catch (Exception e) {

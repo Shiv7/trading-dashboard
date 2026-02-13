@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../store/dashboardStore'
 import { walletApi, scoresApi, signalsApi, tradesApi } from '../services/api'
@@ -8,6 +8,8 @@ import PositionCard from '../components/Wallet/PositionCard'
 import RegimePanel from '../components/Dashboard/RegimePanel'
 import PendingSignalsPanel from '../components/Signals/PendingSignalsPanel'
 import RiskStatusPanel from '../components/Risk/RiskStatusPanel'
+import TrendStatePanel from '../components/Dashboard/TrendStatePanel'
+import WalletCard from '../components/Wallet/WalletCard'
 
 export default function DashboardPage() {
   const [wallet, setWallet] = useState<Wallet | null>(null)
@@ -21,7 +23,8 @@ export default function DashboardPage() {
   const wsSignals = useDashboardStore((s) => s.signals)
   const wsScores = useDashboardStore((s) => s.scores)
   const regime = useDashboardStore((s) => s.regime)
-  const tradingMode = useDashboardStore((s) => s.tradingMode)
+  const activeIgnitions = useDashboardStore((s) => s.activeIgnitions)
+  const acl = useDashboardStore((s) => s.acl)
 
   useEffect(() => {
     async function loadData() {
@@ -67,10 +70,30 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="space-y-6 animate-pulse">
-        <div className="h-20 bg-slate-800/50 rounded-xl" />
+        {/* Header skeleton */}
+        <div className="h-16 bg-slate-800/50 rounded-xl" />
         <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-8 h-96 bg-slate-800/50 rounded-xl" />
-          <div className="col-span-4 h-96 bg-slate-800/50 rounded-xl" />
+          {/* Left column */}
+          <div className="col-span-12 lg:col-span-8 space-y-6">
+            <div className="bg-slate-800/50 rounded-xl p-4 space-y-3">
+              <div className="h-6 w-48 bg-slate-700/50 rounded" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[...Array(6)].map((_, i) => (
+                  <div key={i} className="h-20 bg-slate-700/30 rounded-xl" />
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="h-48 bg-slate-800/50 rounded-xl" />
+              <div className="h-48 bg-slate-800/50 rounded-xl" />
+            </div>
+          </div>
+          {/* Right column */}
+          <div className="col-span-12 lg:col-span-4 space-y-6">
+            <div className="h-48 bg-slate-800/50 rounded-xl" />
+            <div className="h-32 bg-slate-800/50 rounded-xl" />
+            <div className="h-32 bg-slate-800/50 rounded-xl" />
+          </div>
         </div>
       </div>
     )
@@ -79,32 +102,34 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen">
       {/* Command Center Header */}
-      <header className="flex items-center justify-between px-6 py-4 bg-slate-900/80 
-                         border-b border-slate-700/50 backdrop-blur-sm sticky top-0 z-40 -mx-6 -mt-6 mb-6">
-        <div className="flex items-center gap-6">
-          <h1 className="text-xl font-bold text-white">Command Center</h1>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            Live
+      <header className="px-4 md:px-6 py-3 md:py-4 bg-slate-900/80
+                         border-b border-slate-700/50 backdrop-blur-sm sticky top-0 z-40 -mx-4 md:-mx-6 -mt-4 md:-mt-6 mb-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 md:gap-6">
+            <h1 className="text-lg md:text-xl font-bold text-white">Command Center</h1>
+            <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Live
+            </div>
+          </div>
+
+          <div className="hidden md:flex items-center gap-6">
+            <TradingModeToggle />
+            <WalletHeader wallet={displayWallet} />
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
-          {/* Quick Stats */}
-          <div className="flex items-center gap-4 text-xs">
-            <span className="text-slate-400">
-              <span className="text-emerald-400 font-bold">↑{bullishCount}</span> Bull
-            </span>
-            <span className="text-slate-400">
-              <span className="text-red-400 font-bold">↓{bearishCount}</span> Bear
-            </span>
-            <span className="text-slate-400">
-              <span className="text-amber-400 font-bold">★{highConviction}</span> High Conv
-            </span>
-          </div>
-
-          <TradingModeToggle />
-          <WalletHeader wallet={displayWallet} />
+        {/* Quick Stats — visible on all sizes */}
+        <div className="flex items-center gap-3 md:gap-4 mt-2 text-xs">
+          <span className="text-slate-400">
+            <span className="text-emerald-400 font-bold">↑{bullishCount}</span> Bull
+          </span>
+          <span className="text-slate-400">
+            <span className="text-red-400 font-bold">↓{bearishCount}</span> Bear
+          </span>
+          <span className="text-slate-400">
+            <span className="text-amber-400 font-bold">★{highConviction}</span> High Conv
+          </span>
         </div>
       </header>
 
@@ -141,7 +166,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Opportunities Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] md:max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
               {displayScores.slice(0, 20).map((score, index) => (
                 <OpportunityCard key={`${score.scripCode}-${index}`} score={score} />
               ))}
@@ -255,6 +280,12 @@ export default function DashboardPage() {
 
         {/* Right: Market Context (col-4) */}
         <div className="col-span-12 lg:col-span-4 space-y-6">
+          {/* FUDKII Ignitions & Trend State */}
+          <TrendStatePanel acl={acl || undefined} activeIgnitions={activeIgnitions} />
+
+          {/* Full Wallet Overview with Paper Trade Stats */}
+          <WalletCard wallet={displayWallet} />
+
           {/* Risk Status - Circuit Breaker & Limits */}
           <RiskStatusPanel />
 
@@ -263,99 +294,6 @@ export default function DashboardPage() {
 
           {/* Regime Panel */}
           <RegimePanel regime={regime} />
-
-          {/* Market Overview */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-4">
-              Market Overview
-            </h3>
-            <div className="space-y-3">
-              <MarketRow
-                label="NIFTY 50"
-                value={regime?.indexName === 'NIFTY50' ? regime.label : 'Loading...'}
-                strength={regime?.regimeStrength || 0}
-              />
-              <MarketRow
-                label="BANKNIFTY"
-                value="—"
-                strength={0}
-              />
-              <MarketRow
-                label="VIX"
-                value="—"
-                strength={0}
-              />
-            </div>
-          </div>
-
-          {/* Quick Actions */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-4">
-              Quick Actions
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <Link
-                to="/quant-scores"
-                className="p-4 bg-gradient-to-br from-purple-500/20 to-indigo-500/20 
-                           border border-purple-500/30 rounded-xl text-center
-                           hover:from-purple-500/30 hover:to-indigo-500/30 transition-all"
-              >
-                <div className="text-2xl mb-1">📊</div>
-                <div className="text-xs font-medium text-white">QuantScores</div>
-              </Link>
-              <Link
-                to="/signals"
-                className="p-4 bg-gradient-to-br from-amber-500/20 to-orange-500/20 
-                           border border-amber-500/30 rounded-xl text-center
-                           hover:from-amber-500/30 hover:to-orange-500/30 transition-all"
-              >
-                <div className="text-2xl mb-1">⚡</div>
-                <div className="text-xs font-medium text-white">Signals</div>
-              </Link>
-              <Link
-                to="/trades"
-                className="p-4 bg-gradient-to-br from-emerald-500/20 to-green-500/20 
-                           border border-emerald-500/30 rounded-xl text-center
-                           hover:from-emerald-500/30 hover:to-green-500/30 transition-all"
-              >
-                <div className="text-2xl mb-1">💰</div>
-                <div className="text-xs font-medium text-white">Trades</div>
-              </Link>
-              <Link
-                to="/wallet"
-                className="p-4 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 
-                           border border-blue-500/30 rounded-xl text-center
-                           hover:from-blue-500/30 hover:to-cyan-500/30 transition-all"
-              >
-                <div className="text-2xl mb-1">💳</div>
-                <div className="text-xs font-medium text-white">Wallet</div>
-              </Link>
-            </div>
-          </div>
-
-          {/* Trading Mode Info */}
-          <div className={`rounded-xl p-4 border ${tradingMode === 'DEMO'
-              ? 'bg-blue-500/10 border-blue-500/30'
-              : 'bg-emerald-500/10 border-emerald-500/30'
-            }`}>
-            <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${tradingMode === 'DEMO' ? 'bg-blue-500/20' : 'bg-emerald-500/20'
-                }`}>
-                {tradingMode === 'DEMO' ? '🎮' : '💹'}
-              </div>
-              <div>
-                <div className={`font-bold ${tradingMode === 'DEMO' ? 'text-blue-400' : 'text-emerald-400'
-                  }`}>
-                  {tradingMode} Mode
-                </div>
-                <div className="text-xs text-slate-400">
-                  {tradingMode === 'DEMO'
-                    ? 'Paper trading - no real money'
-                    : 'Live trading - real executions'}
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -382,7 +320,7 @@ function OpportunityCard({ score }: { score: FamilyScore }) {
             {isBullish ? '↑' : '↓'}
           </div>
           <div>
-            <div className="font-medium text-white text-sm truncate max-w-[120px]">
+            <div className="font-medium text-white text-sm truncate max-w-[160px]">
               {score.companyName || score.scripCode}
             </div>
             <div className="text-xs text-slate-400">{score.scripCode}</div>
@@ -424,7 +362,7 @@ function SignalMiniCard({ signal }: { signal: Signal }) {
       className="p-3 bg-slate-700/30 rounded-lg hover:bg-slate-700/50 transition-all"
     >
       <div className="flex items-center justify-between mb-1">
-        <span className="font-medium text-white text-sm truncate max-w-[100px]">
+        <span className="font-medium text-white text-sm truncate max-w-[140px]">
           {signal.companyName || signal.scripCode}
         </span>
         <span className={`text-lg ${isBullish ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -450,23 +388,6 @@ function StatCard({ label, value, positive }: { label: string; value: string; po
         {value}
       </div>
       <div className="text-xs text-slate-400">{label}</div>
-    </div>
-  )
-}
-
-function MarketRow({ label, value, strength }: { label: string; value: string; strength: number }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-sm text-slate-400">{label}</span>
-      <div className="flex items-center gap-2">
-        <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-emerald-500"
-            style={{ width: `${strength * 100}%` }}
-          />
-        </div>
-        <span className="text-sm text-white font-medium w-20 text-right">{value}</span>
-      </div>
     </div>
   )
 }

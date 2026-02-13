@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+@import './styles/design-tokens.css';
+
 :root {
   --bg-primary: #0f172a;
   --bg-secondary: #1e293b;
@@ -71,22 +73,36 @@ body {
 /* Table styles */
 .table-container {
   @apply overflow-x-auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Mobile scroll hint fade */
+@media (max-width: 768px) {
+  .table-container {
+    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  }
 }
 
 .table {
   @apply w-full text-sm;
+  min-width: 800px;
 }
 
 .table th {
-  @apply text-left text-slate-400 font-medium py-3 px-4 border-b border-slate-700;
+  @apply text-left text-slate-400 font-medium py-3 px-4 border-b border-slate-700 whitespace-nowrap;
 }
 
 .table td {
-  @apply py-3 px-4 border-b border-slate-700/50;
+  @apply py-3 px-4 border-b border-slate-700/50 whitespace-nowrap;
 }
 
 .table tr:hover td {
   @apply bg-slate-700/30;
+}
+
+.table tr td {
+  @apply transition-colors duration-150;
 }
 
 /* Button styles */
@@ -268,6 +284,31 @@ body {
 
 .tooltip:hover::after {
   @apply opacity-100;
+}
+
+/* P&L flash animations */
+@keyframes flash-green {
+  0% { background-color: rgba(16, 185, 129, 0.3); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-red {
+  0% { background-color: rgba(239, 68, 68, 0.3); }
+  100% { background-color: transparent; }
+}
+
+.flash-positive {
+  animation: flash-green 0.6s ease-out;
+}
+
+.flash-negative {
+  animation: flash-red 0.6s ease-out;
+}
+
+/* Mobile nav scroll fade hint */
+.mobile-nav-scroll {
+  mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 24px), transparent);
 }
 
 /* Skeleton loading */

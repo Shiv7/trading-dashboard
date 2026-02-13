@@ -1,7 +1,7 @@
 package com.kotsin.dashboard.controller;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -15,13 +15,16 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/risk")
-@RequiredArgsConstructor
 @Slf4j
 public class RiskStatusController {
 
     private final RestTemplate restTemplate;
 
-    @Value("${execution.service.url:http://localhost:8081}")
+    public RiskStatusController(@Qualifier("executionRestTemplate") RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    @Value("${execution.service.url:http://localhost:8089}")
     private String executionServiceUrl;
 
     /**

@@ -108,7 +108,9 @@ public class TradeResultsConsumer {
             durationMinutes = ChronoUnit.MINUTES.between(entryTime, exitTime);
         }
 
-        double pnlPercent = entryPrice > 0 ? (pnl / entryPrice) * 100 : 0;
+        int quantity = root.path("quantity").asInt(root.path("positionSize").asInt(1));
+        double positionCost = entryPrice * quantity;
+        double pnlPercent = positionCost > 0 ? (pnl / positionCost) * 100 : 0;
 
         // Extract signal source/strategy
         String signalSource = root.path("signalSource").asText(
@@ -135,6 +137,7 @@ public class TradeResultsConsumer {
                 .pnlPercent(pnlPercent)
                 .rMultiple(rMultiple)
                 .durationMinutes(durationMinutes)
+                .strategy(signalSource)
                 .build();
     }
 

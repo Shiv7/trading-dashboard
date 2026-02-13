@@ -93,7 +93,7 @@ public class FamilyScoreConsumer {
         }
     }
 
-    @KafkaListener(topics = "family-score", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
+    @KafkaListener(topics = "family-score", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}", autoStartup = "false")
     public void onFamilyScore(String payload) {
         try {
             JsonNode root = objectMapper.readTree(payload);

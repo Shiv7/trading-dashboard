@@ -12,6 +12,9 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -22,9 +25,7 @@ import java.util.Collections;
  * Receives QuantScore from StreamingCandle and broadcasts to WebSocket clients.
  * Maintains sorted cache for REST API endpoints.
  *
- * FIX: Changed cache structure to support multi-timeframe data.
- * BEFORE: Map<familyId, score> - timeframes would overwrite each other!
- * AFTER: Map<familyId, Map<timeframe, score>> - each timeframe preserved separately
+ * Cache structure: scripCode -> (timeframe -> score)
  */
 @Component
 @Slf4j
@@ -37,20 +38,30 @@ public class QuantScoreConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    // FIX: Multi-timeframe cache structure: familyId -> (timeframe -> score)
-    // BEFORE: Map<String, QuantScoreDTO> latestScores - WRONG! Timeframes overwrite each other
-    // AFTER: Nested map preserves all timeframe data separately
+    // Multi-timeframe cache: scripCode -> (timeframe -> score)
     private final Map<String, Map<String, QuantScoreDTO>> latestScores = new ConcurrentHashMap<>();
 
-    // Legacy flat cache for backward-compatible API (returns latest timeframe only)
+    // Flat cache for backward-compatible API (returns latest timeframe only per scripCode)
     private final Map<String, QuantScoreDTO> latestScoreFlat = new ConcurrentHashMap<>();
 
     // Redis key prefix (must match streaming candle service)
     private static final String REDIS_KEY_PREFIX = "quant:score:";
 
-    // FIX BUG #10: Limit max cached scores to prevent OOM
     private static final int MAX_CACHED_SCORES = 5000;
     private static final int MAX_REDIS_LOAD = 10000;
+
+    // Category max points for percentage calculation
+    private static final double GREEKS_MAX = 15.0;
+    private static final double IV_SURFACE_MAX = 12.0;
+    private static final double MICROSTRUCTURE_MAX = 18.0;
+    private static final double OPTIONS_FLOW_MAX = 15.0;
+    private static final double PRICE_ACTION_MAX = 12.0;
+    private static final double VOLUME_PROFILE_MAX = 8.0;
+    private static final double CROSS_INSTRUMENT_MAX = 10.0;
+    private static final double CONFLUENCE_MAX = 10.0;
+
+    private static final DateTimeFormatter TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.of("Asia/Kolkata"));
 
     /**
      * Load cached quant scores from Redis on startup.
@@ -65,12 +76,10 @@ public class QuantScoreConsumer {
                 return;
             }
 
-            // FIX BUG #10: Limit max keys to prevent OOM
             if (keys.size() > MAX_REDIS_LOAD) {
                 log.warn("[QUANT_SCORE] Large number of cached scores ({}) - limiting to {}", keys.size(), MAX_REDIS_LOAD);
             }
 
-            // Filter out history keys
             int loaded = 0;
             for (String key : keys) {
                 if (loaded >= MAX_REDIS_LOAD) {
@@ -86,24 +95,27 @@ public class QuantScoreConsumer {
                     String json = redisTemplate.opsForValue().get(key);
                     if (json != null && !json.isEmpty()) {
                         JsonNode root = objectMapper.readTree(json);
-                        String familyId = root.path("familyId").asText();
 
-                        if (familyId != null && !familyId.isEmpty()) {
-                            QuantScoreDTO dto = parseQuantScore(root);
-                            if (dto == null) {
-                                log.warn("[QUANT_SCORE] Failed to parse score from Redis key: {}", key);
-                                continue;
-                            }
-                            String timeframe = dto.getTimeframe() != null ? dto.getTimeframe() : "1m";
-
-                            // FIX BUG #8: Use synchronized block for thread safety
-                            synchronized (latestScores) {
-                                latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
-                                        .put(timeframe, dto);
-                                latestScoreFlat.put(familyId, dto);
-                            }
-                            loaded++;
+                        // Use scripCode as the primary identifier
+                        String scripCode = resolveScripCode(root);
+                        if (scripCode == null || scripCode.isEmpty()) {
+                            log.warn("[QUANT_SCORE] No scripCode in Redis key: {}, skipping", key);
+                            continue;
                         }
+
+                        QuantScoreDTO dto = parseQuantScore(root);
+                        if (dto == null) {
+                            log.warn("[QUANT_SCORE] Failed to parse score from Redis key: {}", key);
+                            continue;
+                        }
+                        String timeframe = dto.getTimeframe() != null ? dto.getTimeframe() : "5m";
+
+                        synchronized (latestScores) {
+                            latestScores.computeIfAbsent(scripCode, k -> new ConcurrentHashMap<>())
+                                    .put(timeframe, dto);
+                            latestScoreFlat.put(scripCode, dto);
+                        }
+                        loaded++;
                     }
                 } catch (Exception e) {
                     log.warn("[QUANT_SCORE] Error parsing cached quant score from {}: {}", key, e.getMessage());
@@ -121,55 +133,64 @@ public class QuantScoreConsumer {
         try {
             JsonNode root = objectMapper.readTree(payload);
 
-            String familyId = root.path("familyId").asText();
-            if (familyId == null || familyId.isEmpty()) {
-                log.trace("No familyId in quant-scores message, skipping");
+            // Use scripCode as the primary identifier
+            String scripCode = resolveScripCode(root);
+            if (scripCode == null || scripCode.isEmpty()) {
+                log.trace("[QUANT_SCORE] No scripCode in quant-scores message, skipping");
                 return;
             }
 
             QuantScoreDTO dto = parseQuantScore(root);
-            // FIX BUG #11: Validate parsing result
             if (dto == null) {
-                log.warn("[QUANT_SCORE] Failed to parse message for {}", familyId);
+                log.warn("[QUANT_SCORE] Failed to parse message for {}", scripCode);
                 return;
             }
 
             String timeframe = dto.getTimeframe();
-
-            // FIX BUG #9: Strict timeframe validation - reject if missing to prevent data collision
             if (timeframe == null || timeframe.isEmpty()) {
-                log.warn("[QUANT_SCORE] {} - Missing timeframe in message, defaulting to 1m. This may cause data collision!", familyId);
-                timeframe = "1m";
-                // Note: In production, consider rejecting messages without timeframe:
-                // log.error("[QUANT_SCORE] {} - Rejecting message with missing timeframe", familyId);
-                // return;
+                log.warn("[QUANT_SCORE] {} - Missing timeframe, defaulting to 5m", scripCode);
+                timeframe = "5m";
             }
 
-            log.debug("Received quant-score for {} (score={}, timeframe={}, label={}, actionable={})",
-                familyId, String.format("%.1f", dto.getQuantScore()), timeframe, dto.getQuantLabel(), dto.isActionable());
+            log.debug("[QUANT_SCORE] Received {} score={} tf={} dir={} actionable={}",
+                scripCode, String.format("%.1f", dto.getQuantScore()), timeframe,
+                dto.getDirection(), dto.isActionable());
 
-            // FIX BUG #8: Use synchronized block for thread-safe cache update
-            // This prevents race conditions where two threads could create duplicate maps
-            final String tf = timeframe; // Effectively final for lambda
+            final String tf = timeframe;
             synchronized (latestScores) {
-                // FIX BUG #10: Enforce max cache size
-                if (latestScores.size() >= MAX_CACHED_SCORES && !latestScores.containsKey(familyId)) {
+                if (latestScores.size() >= MAX_CACHED_SCORES && !latestScores.containsKey(scripCode)) {
                     log.warn("[QUANT_SCORE] Cache full ({} scores), rejecting new entry for {}",
-                            latestScores.size(), familyId);
+                            latestScores.size(), scripCode);
                     return;
                 }
 
-                latestScores.computeIfAbsent(familyId, k -> new ConcurrentHashMap<>())
+                latestScores.computeIfAbsent(scripCode, k -> new ConcurrentHashMap<>())
                         .put(tf, dto);
-                latestScoreFlat.put(familyId, dto);
+                latestScoreFlat.put(scripCode, dto);
             }
 
-            // Broadcast to WebSocket (frontend handles timeframe via nested Record in Zustand store)
-            sessionManager.broadcastQuantScore(familyId, dto);
+            // Broadcast to WebSocket
+            sessionManager.broadcastQuantScore(scripCode, dto);
 
         } catch (Exception e) {
-            log.error("Error processing quant-scores: {}", e.getMessage(), e);
+            log.error("[QUANT_SCORE] Error processing quant-scores: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Resolve scripCode from message - the primary identifier after family concept removal.
+     */
+    private String resolveScripCode(JsonNode root) {
+        String scripCode = root.path("scripCode").asText(null);
+        if (scripCode != null && !scripCode.isEmpty()) {
+            return scripCode;
+        }
+        // Fallback to familyId for backward compat with any old messages
+        String familyId = root.path("familyId").asText(null);
+        if (familyId != null && !familyId.isEmpty()) {
+            return familyId;
+        }
+        return null;
     }
 
     /**
@@ -180,7 +201,7 @@ public class QuantScoreConsumer {
     }
 
     /**
-     * FIX: Get quant score for a specific scripCode and timeframe
+     * Get quant score for a specific scripCode and timeframe
      */
     public QuantScoreDTO getScore(String scripCode, String timeframe) {
         Map<String, QuantScoreDTO> tfScores = latestScores.get(scripCode);
@@ -189,7 +210,7 @@ public class QuantScoreConsumer {
     }
 
     /**
-     * FIX: Get all timeframe scores for a specific scripCode
+     * Get all timeframe scores for a specific scripCode
      */
     public Map<String, QuantScoreDTO> getAllTimeframeScores(String scripCode) {
         return latestScores.getOrDefault(scripCode, Collections.emptyMap());
@@ -205,7 +226,7 @@ public class QuantScoreConsumer {
     }
 
     /**
-     * FIX: Get all scores for all timeframes, flattened and sorted
+     * Get all scores for all timeframes, flattened and sorted
      */
     public List<QuantScoreDTO> getAllScoresAllTimeframes() {
         return latestScores.values().stream()
@@ -236,7 +257,7 @@ public class QuantScoreConsumer {
     }
 
     /**
-     * FIX: Get count of scores per timeframe for monitoring
+     * Get count of scores per timeframe for monitoring
      */
     public Map<String, Long> getScoreCountByTimeframe() {
         return latestScores.values().stream()
@@ -247,59 +268,81 @@ public class QuantScoreConsumer {
     }
 
     private QuantScoreDTO parseQuantScore(JsonNode root) {
-        QuantScoreDTO.QuantScoreDTOBuilder builder = QuantScoreDTO.builder()
-                .familyId(root.path("familyId").asText())
-                .symbol(root.path("symbol").asText())
-                .scripCode(root.path("scripCode").asText(root.path("familyId").asText()))
-                .timestamp(root.path("timestamp").asLong(System.currentTimeMillis()))
-                .timeframe(root.path("timeframe").asText("1m"))
-                .humanReadableTime(root.path("humanReadableTime").asText())
-                .quantScore(root.path("quantScore").asDouble(0))
-                .quantLabel(root.path("quantLabel").asText("NEUTRAL"))
-                .confidence(root.path("confidence").asDouble(0))
-                .direction(root.path("direction").asText("NEUTRAL"))
-                .directionalStrength(root.path("directionalStrength").asDouble(0))
-                .actionable(root.path("actionable").asBoolean(false))
-                .actionableReason(root.path("actionableReason").asText())
-                .minActionableScore(root.path("minActionableScore").asDouble(65));
+        String scripCode = resolveScripCode(root);
+        double quantScore = root.path("quantScore").asDouble(0);
+        double confidence = root.path("confidence").asDouble(0);
+        String direction = root.path("direction").asText("NEUTRAL");
 
-        // Parse breakdown
-        JsonNode breakdownNode = root.path("breakdown");
-        if (!breakdownNode.isMissingNode()) {
-            builder.breakdown(parseBreakdown(breakdownNode));
+        // Convert timestamp: producer sends epoch-seconds as double, we store as epoch-millis
+        long timestampMillis = parseTimestamp(root);
+
+        // Derive humanReadableTime from timestamp
+        String humanReadableTime = root.path("humanReadableTime").asText(null);
+        if (humanReadableTime == null || humanReadableTime.isEmpty() || "null".equals(humanReadableTime)) {
+            humanReadableTime = TIME_FORMATTER.format(Instant.ofEpochMilli(timestampMillis));
         }
 
-        // Parse Greeks summary
+        // Derive quantLabel from score if not provided
+        String quantLabel = root.path("quantLabel").asText(null);
+        if (quantLabel == null || quantLabel.isEmpty() || "null".equals(quantLabel)) {
+            quantLabel = deriveQuantLabel(quantScore, direction);
+        }
+
+        // Derive directionalStrength from direction + confidence if not provided
+        double directionalStrength = root.path("directionalStrength").asDouble(0);
+        if (directionalStrength == 0 && !"NEUTRAL".equals(direction)) {
+            directionalStrength = "BULLISH".equals(direction) ? confidence : -confidence;
+        }
+
+        QuantScoreDTO.QuantScoreDTOBuilder builder = QuantScoreDTO.builder()
+                .symbol(root.path("symbol").asText())
+                .scripCode(scripCode)
+                .companyName(root.path("companyName").asText(root.path("symbol").asText()))
+                .timestamp(timestampMillis)
+                .timeframe(root.path("timeframe").asText("5m"))
+                .humanReadableTime(humanReadableTime)
+                .quantScore(quantScore)
+                .quantLabel(quantLabel)
+                .confidence(confidence)
+                .direction(direction)
+                .directionalStrength(directionalStrength)
+                .actionable(root.path("actionable").asBoolean(false))
+                .actionableReason(root.path("actionableReason").asText(null))
+                .minActionableScore(root.path("minActionableScore").asDouble(65));
+
+        // Parse breakdown (uses dataQuality for regime modifier normalization)
+        JsonNode breakdownNode = root.path("breakdown");
+        if (!breakdownNode.isMissingNode()) {
+            JsonNode dqNode = root.path("dataQuality");
+            builder.breakdown(parseBreakdown(breakdownNode, quantScore, confidence, dqNode));
+        }
+
+        // Parse optional summary sections (only present when producer generates them)
         JsonNode greeksNode = root.path("greeksSummary");
         if (!greeksNode.isMissingNode()) {
             builder.greeksSummary(parseGreeksSummary(greeksNode));
         }
 
-        // Parse IV summary
         JsonNode ivNode = root.path("ivSummary");
         if (!ivNode.isMissingNode()) {
             builder.ivSummary(parseIVSummary(ivNode));
         }
 
-        // Parse microstructure summary
         JsonNode microNode = root.path("microstructureSummary");
         if (!microNode.isMissingNode()) {
             builder.microstructureSummary(parseMicrostructureSummary(microNode));
         }
 
-        // Parse options flow summary
         JsonNode flowNode = root.path("optionsFlowSummary");
         if (!flowNode.isMissingNode()) {
             builder.optionsFlowSummary(parseOptionsFlowSummary(flowNode));
         }
 
-        // Parse price action summary
         JsonNode priceNode = root.path("priceActionSummary");
         if (!priceNode.isMissingNode()) {
             builder.priceActionSummary(parsePriceActionSummary(priceNode));
         }
 
-        // Parse volume profile summary
         JsonNode volumeNode = root.path("volumeProfileSummary");
         if (!volumeNode.isMissingNode()) {
             builder.volumeProfileSummary(parseVolumeProfileSummary(volumeNode));
@@ -329,28 +372,172 @@ public class QuantScoreConsumer {
         return builder.build();
     }
 
-    private QuantScoreDTO.ScoreBreakdown parseBreakdown(JsonNode node) {
+    /**
+     * Parse timestamp from producer. Handles:
+     * - Epoch seconds as double (1770361629.066) from Instant serialization
+     * - Epoch millis as long (1770361629066)
+     * Returns epoch millis.
+     */
+    private long parseTimestamp(JsonNode root) {
+        JsonNode tsNode = root.path("timestamp");
+        if (tsNode.isMissingNode() || tsNode.isNull()) {
+            return System.currentTimeMillis();
+        }
+        double tsValue = tsNode.asDouble(0);
+        if (tsValue == 0) {
+            return System.currentTimeMillis();
+        }
+        // If value < 1e12, it's epoch seconds (possibly fractional); convert to millis
+        // If value >= 1e12, it's already epoch millis
+        if (tsValue < 1e12) {
+            return (long) (tsValue * 1000);
+        }
+        return (long) tsValue;
+    }
+
+    /**
+     * Derive quantLabel from score and direction.
+     */
+    private String deriveQuantLabel(double score, String direction) {
+        if ("BULLISH".equals(direction)) {
+            if (score >= 75) return "STRONG_BUY";
+            if (score >= 60) return "BUY";
+        } else if ("BEARISH".equals(direction)) {
+            if (score >= 75) return "STRONG_SELL";
+            if (score >= 60) return "SELL";
+        }
+        return "NEUTRAL";
+    }
+
+    /**
+     * Parse breakdown with proper field mapping from producer's FUDKII fields
+     * to the dashboard's 8-category system.
+     */
+    private QuantScoreDTO.ScoreBreakdown parseBreakdown(JsonNode node, double quantScore, double confidence, JsonNode dqNode) {
+        // Read the 8-category scores directly (producer sends these)
+        double greeksScore = node.path("greeksScore").asDouble(0);
+        double ivSurfaceScore = node.path("ivSurfaceScore").asDouble(0);
+        double microstructureScore = node.path("microstructureScore").asDouble(0);
+        double optionsFlowScore = node.path("optionsFlowScore").asDouble(0);
+        double volumeProfileScore = node.path("volumeProfileScore").asDouble(0);
+        double crossInstrumentScore = node.path("crossInstrumentScore").asDouble(0);
+        double confluenceScore = node.path("confluenceScore").asDouble(0);
+
+        // priceActionScore: map from patternScore + trendScore if not directly provided
+        double priceActionScore = node.path("priceActionScore").asDouble(-1);
+        if (priceActionScore < 0) {
+            double patternScore = node.path("patternScore").asDouble(0);
+            double trendScore = node.path("trendScore").asDouble(0);
+            // Combine: pattern (0-100) and trend (0-100) → priceAction (0-100)
+            priceActionScore = (patternScore + trendScore) / 2.0;
+        }
+
+        // Normalize all raw scores from 0-100 range to their max-point ranges
+        double greeksNorm = clampToMax(greeksScore, GREEKS_MAX);
+        double ivNorm = clampToMax(ivSurfaceScore, IV_SURFACE_MAX);
+        double microNorm = clampToMax(microstructureScore, MICROSTRUCTURE_MAX);
+        double optionsNorm = clampToMax(optionsFlowScore, OPTIONS_FLOW_MAX);
+        double priceNorm = clampToMax(priceActionScore, PRICE_ACTION_MAX);
+        double volumeNorm = clampToMax(volumeProfileScore, VOLUME_PROFILE_MAX);
+        double crossNorm = clampToMax(crossInstrumentScore, CROSS_INSTRUMENT_MAX);
+        double confNorm = clampToMax(confluenceScore, CONFLUENCE_MAX);
+
+        // Parse DataQuality to determine which categories have data
+        boolean hasGreeks = dqNode != null && !dqNode.isMissingNode() && dqNode.path("hasGreeks").asBoolean(false);
+        boolean hasIV = dqNode != null && !dqNode.isMissingNode() && dqNode.path("hasIVSurface").asBoolean(false);
+        boolean hasMicro = dqNode != null && !dqNode.isMissingNode() ? dqNode.path("hasMicrostructure").asBoolean(true) : true;
+        boolean hasOptFlow = dqNode != null && !dqNode.isMissingNode() ? dqNode.path("hasOptionsFlow").asBoolean(true) : true;
+        boolean hasPrice = true; // Price action always applicable
+        boolean hasVolume = dqNode != null && !dqNode.isMissingNode() ? dqNode.path("hasVolumeProfile").asBoolean(true) : true;
+        boolean hasCross = dqNode != null && !dqNode.isMissingNode() && dqNode.path("hasCrossInstrument").asBoolean(false);
+        boolean hasConf = true; // Confluence always applicable
+
+        // Parse applicability flags (distinguishes N/A from DM)
+        boolean greeksApplicable = dqNode != null && !dqNode.isMissingNode() && dqNode.path("greeksApplicable").asBoolean(false);
+        boolean ivApplicable = dqNode != null && !dqNode.isMissingNode() && dqNode.path("ivSurfaceApplicable").asBoolean(false);
+        boolean crossApplicable = dqNode != null && !dqNode.isMissingNode() ? dqNode.path("crossInstrumentApplicable").asBoolean(true) : true;
+
+        // Compute applicable max score (only sum max points for categories that HAVE data)
+        double applicableMax = 0;
+        if (hasGreeks) applicableMax += GREEKS_MAX;
+        if (hasIV) applicableMax += IV_SURFACE_MAX;
+        if (hasMicro) applicableMax += MICROSTRUCTURE_MAX;
+        if (hasOptFlow) applicableMax += OPTIONS_FLOW_MAX;
+        if (hasPrice) applicableMax += PRICE_ACTION_MAX;
+        if (hasVolume) applicableMax += VOLUME_PROFILE_MAX;
+        if (hasCross) applicableMax += CROSS_INSTRUMENT_MAX;
+        if (hasConf) applicableMax += CONFLUENCE_MAX;
+        if (applicableMax <= 0) applicableMax = 100.0;
+
+        // Sum only applicable categories into rawScore
+        double rawScore = 0;
+        if (hasGreeks) rawScore += greeksNorm;
+        if (hasIV) rawScore += ivNorm;
+        if (hasMicro) rawScore += microNorm;
+        if (hasOptFlow) rawScore += optionsNorm;
+        if (hasPrice) rawScore += priceNorm;
+        if (hasVolume) rawScore += volumeNorm;
+        if (hasCross) rawScore += crossNorm;
+        if (hasConf) rawScore += confNorm;
+
+        // Normalize rawScore to 0-100 scale based on applicable categories
+        double normalizedRaw = (rawScore / applicableMax) * 100.0;
+
+        // Derive regimeModifier: stable because it compares only against existing categories
+        double regimeModifier = 1.0;
+        double confidenceModifier = Math.max(0.8, Math.min(1.0, confidence));
+        if (normalizedRaw > 0 && confidenceModifier > 0) {
+            regimeModifier = quantScore / (normalizedRaw * confidenceModifier);
+            regimeModifier = Math.max(0.7, Math.min(1.3, regimeModifier));
+        }
+
+        // Compute percentages with tri-state sentinels:
+        //   >= 0  → real score percentage
+        //   -1    → N/A (category not applicable for this instrument)
+        //   -2    → DM  (data missing: applicable but not yet available)
+        double greeksPct = hasGreeks ? (greeksNorm / GREEKS_MAX) * 100
+                         : greeksApplicable ? -2 : -1;
+        double ivPct = hasIV ? (ivNorm / IV_SURFACE_MAX) * 100
+                     : ivApplicable ? -2 : -1;
+        double microPct = MICROSTRUCTURE_MAX > 0 ? (microNorm / MICROSTRUCTURE_MAX) * 100 : 0;
+        double optionsPct = OPTIONS_FLOW_MAX > 0 ? (optionsNorm / OPTIONS_FLOW_MAX) * 100 : 0;
+        double pricePct = PRICE_ACTION_MAX > 0 ? (priceNorm / PRICE_ACTION_MAX) * 100 : 0;
+        double volumePct = VOLUME_PROFILE_MAX > 0 ? (volumeNorm / VOLUME_PROFILE_MAX) * 100 : 0;
+        double crossPct = hasCross ? (crossNorm / CROSS_INSTRUMENT_MAX) * 100
+                        : crossApplicable ? -2 : -1;
+        double confPct = CONFLUENCE_MAX > 0 ? (confNorm / CONFLUENCE_MAX) * 100 : 0;
+
         return QuantScoreDTO.ScoreBreakdown.builder()
-                .greeksScore(node.path("greeksScore").asDouble(0))
-                .ivSurfaceScore(node.path("ivSurfaceScore").asDouble(0))
-                .microstructureScore(node.path("microstructureScore").asDouble(0))
-                .optionsFlowScore(node.path("optionsFlowScore").asDouble(0))
-                .priceActionScore(node.path("priceActionScore").asDouble(0))
-                .volumeProfileScore(node.path("volumeProfileScore").asDouble(0))
-                .crossInstrumentScore(node.path("crossInstrumentScore").asDouble(0))
-                .confluenceScore(node.path("confluenceScore").asDouble(0))
-                .greeksPct(node.path("greeksPct").asDouble(0))
-                .ivSurfacePct(node.path("ivSurfacePct").asDouble(0))
-                .microstructurePct(node.path("microstructurePct").asDouble(0))
-                .optionsFlowPct(node.path("optionsFlowPct").asDouble(0))
-                .priceActionPct(node.path("priceActionPct").asDouble(0))
-                .volumeProfilePct(node.path("volumeProfilePct").asDouble(0))
-                .crossInstrumentPct(node.path("crossInstrumentPct").asDouble(0))
-                .confluencePct(node.path("confluencePct").asDouble(0))
-                .rawScore(node.path("rawScore").asDouble(0))
-                .regimeModifier(node.path("regimeModifier").asDouble(1))
-                .confidenceModifier(node.path("confidenceModifier").asDouble(1))
+                .greeksScore(greeksNorm)
+                .ivSurfaceScore(ivNorm)
+                .microstructureScore(microNorm)
+                .optionsFlowScore(optionsNorm)
+                .priceActionScore(priceNorm)
+                .volumeProfileScore(volumeNorm)
+                .crossInstrumentScore(crossNorm)
+                .confluenceScore(confNorm)
+                .greeksPct(greeksPct)
+                .ivSurfacePct(ivPct)
+                .microstructurePct(microPct)
+                .optionsFlowPct(optionsPct)
+                .priceActionPct(pricePct)
+                .volumeProfilePct(volumePct)
+                .crossInstrumentPct(crossPct)
+                .confluencePct(confPct)
+                .rawScore(rawScore)
+                .regimeModifier(regimeModifier)
+                .confidenceModifier(confidenceModifier)
                 .build();
+    }
+
+    /**
+     * Clamp a 0-100 raw score to a category's max points.
+     * E.g., raw 100 with max 18 → 18, raw 50 with max 18 → 9.
+     */
+    private double clampToMax(double rawScore0to100, double maxPoints) {
+        if (rawScore0to100 <= 0) return 0;
+        double scaled = (Math.abs(rawScore0to100) / 100.0) * maxPoints;
+        return Math.min(scaled, maxPoints);
     }
 
     private QuantScoreDTO.GreeksSummary parseGreeksSummary(JsonNode node) {
@@ -398,13 +585,9 @@ public class QuantScoreConsumer {
     }
 
     private QuantScoreDTO.OptionsFlowSummary parseOptionsFlowSummary(JsonNode node) {
-        // Handle null values properly - asText() returns "null" for explicit null in JSON
         String oiBuildupType = node.path("oiBuildupType").asText(null);
         String futuresBuildup = node.path("futuresBuildup").asText(null);
 
-        // FIX BUG #12: Fixed operator precedence - added parentheses
-        // BEFORE: "null".equals(x) || x != null && x.isEmpty() - incorrect precedence
-        // AFTER: "null".equals(x) || (x != null && x.isEmpty()) - correct grouping
         if ("null".equals(oiBuildupType) || (oiBuildupType != null && oiBuildupType.isEmpty())) {
             oiBuildupType = null;
         }
@@ -420,7 +603,6 @@ public class QuantScoreConsumer {
                 .oiMomentum(node.path("oiMomentum").asDouble(0))
                 .futuresBuildup(futuresBuildup)
                 .spotFuturePremium(node.path("spotFuturePremium").asDouble(0))
-                // FIX BUG #14: Added proper null/missing checks for OI fields
                 .totalCallOI(getOptionalLong(node, "totalCallOI"))
                 .totalPutOI(getOptionalLong(node, "totalPutOI"))
                 .totalCallOIChange(getOptionalLong(node, "totalCallOIChange"))
@@ -428,16 +610,11 @@ public class QuantScoreConsumer {
                 .build();
     }
 
-    /**
-     * FIX BUG #14: Helper to safely parse optional Long values
-     * Handles missing nodes, null values, and numeric types
-     */
     private Long getOptionalLong(JsonNode parent, String field) {
         JsonNode node = parent.path(field);
         if (node.isMissingNode() || node.isNull()) {
             return null;
         }
-        // Handle both integer and floating point values
         if (node.isNumber()) {
             return node.asLong();
         }
@@ -479,14 +656,14 @@ public class QuantScoreConsumer {
                 .hasPriceAction(node.path("hasPriceAction").asBoolean(false))
                 .hasVolumeProfile(node.path("hasVolumeProfile").asBoolean(false))
                 .hasCrossInstrument(node.path("hasCrossInstrument").asBoolean(false))
+                .greeksApplicable(node.path("greeksApplicable").asBoolean(false))
+                .ivSurfaceApplicable(node.path("ivSurfaceApplicable").asBoolean(false))
+                .crossInstrumentApplicable(node.path("crossInstrumentApplicable").asBoolean(true))
                 .completenessScore(node.path("completenessScore").asDouble(0))
                 .qualityLevel(node.path("qualityLevel").asText("MINIMAL"))
                 .build();
     }
 
-    /**
-     * Helper to get nullable text - handles both missing fields and "null" string
-     */
     private String getNullableText(JsonNode node, String field) {
         JsonNode fieldNode = node.path(field);
         if (fieldNode.isMissingNode() || fieldNode.isNull()) {

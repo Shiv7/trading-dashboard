@@ -19,9 +19,9 @@ import java.util.Map;
 public class QuantScoreDTO {
 
     // Identification
-    private String familyId;
     private String symbol;
     private String scripCode;
+    private String companyName;
     private long timestamp;
     private String timeframe;
     private String humanReadableTime;
@@ -208,6 +208,10 @@ public class QuantScoreDTO {
         private boolean hasPriceAction;
         private boolean hasVolumeProfile;
         private boolean hasCrossInstrument;
+        // Applicability: true when category SHOULD have data for this instrument
+        private boolean greeksApplicable;          // true if instrument has derivatives
+        private boolean ivSurfaceApplicable;       // true if instrument has derivatives
+        private boolean crossInstrumentApplicable; // true always (all vs index)
         private double completenessScore; // 0-1
         private String qualityLevel;     // FULL/PARTIAL/MINIMAL
     }

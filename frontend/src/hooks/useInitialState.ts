@@ -18,7 +18,6 @@ export function useInitialState() {
 
   const {
     updateScore,
-    updateQuantScore,
     bulkUpdateQuantScores,
     addSignal,
     updateNarrative,

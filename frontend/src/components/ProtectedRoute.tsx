@@ -3,10 +3,16 @@ import { useAuth } from '../context/AuthContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  requireAdmin?: boolean
+  requireRole?: 'ADMIN' | 'TRADER' | 'VIEWER'
 }
 
-export default function ProtectedRoute({ children, requireAdmin = false }: ProtectedRouteProps) {
+const ROLE_HIERARCHY: Record<string, number> = {
+  VIEWER: 1,
+  TRADER: 2,
+  ADMIN: 3,
+}
+
+export default function ProtectedRoute({ children, requireRole }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, user } = useAuth()
   const location = useLocation()
 
@@ -25,8 +31,12 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     return <Navigate to="/login" state={{ from: location }} replace />
   }
 
-  if (requireAdmin && user?.role !== 'admin') {
-    return <Navigate to="/dashboard" replace />
+  if (requireRole && user) {
+    const userLevel = ROLE_HIERARCHY[user.role] || 0
+    const requiredLevel = ROLE_HIERARCHY[requireRole] || 0
+    if (userLevel < requiredLevel) {
+      return <Navigate to="/dashboard" replace />
+    }
   }
 
   return <>{children}</>

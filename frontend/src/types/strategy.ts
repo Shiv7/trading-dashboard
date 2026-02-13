@@ -146,14 +146,20 @@ export interface StrategyOpportunity {
   scripCode: string;
   companyName: string;
   strategyId: string;
-  direction: 'LONG' | 'SHORT';
+  direction: string;
   opportunityScore: number;
   conditions: ConditionCheck[];
   nextConditionNeeded: string;
   estimatedTimeframe: string;
   currentPrice: number;
+  entryLevel?: number;
   keyLevel: number;
+  target2?: number;
+  superTrendLevel?: number;
+  expectedRR?: number;
   timestamp: number;
+  strategyContext?: string;  // Strategy-specific context (e.g., "HTF: BULLISH 85% · Daily R1 + Weekly P")
+  tradingMode?: string;     // MicroAlpha trading mode
 }
 
 export interface StrategyStateStats {
@@ -265,4 +271,51 @@ export function getFlowStatusColor(status: string): string {
     default:
       return 'text-gray-400';
   }
+}
+
+// Strategy display configuration
+export const STRATEGY_CONFIGS: Record<string, {
+  label: string;
+  accentBg: string;
+  accentText: string;
+  accentBorder: string;
+}> = {
+  FUDKII:           { label: 'FUDKII',    accentBg: 'bg-orange-500/10', accentText: 'text-orange-400', accentBorder: 'border-orange-500/50' },
+  FUKAA:            { label: 'FUKAA',      accentBg: 'bg-amber-500/10',  accentText: 'text-amber-400',  accentBorder: 'border-amber-500/50' },
+  PIVOT_CONFLUENCE: { label: 'PIVOT',      accentBg: 'bg-purple-500/10', accentText: 'text-purple-400', accentBorder: 'border-purple-500/50' },
+  PIVOT:            { label: 'PIVOT',      accentBg: 'bg-purple-500/10', accentText: 'text-purple-400', accentBorder: 'border-purple-500/50' },
+  MICROALPHA:       { label: 'MICROALPHA', accentBg: 'bg-cyan-500/10',   accentText: 'text-cyan-400',   accentBorder: 'border-cyan-500/50' },
+};
+
+export function getStrategyConfig(strategyId: string) {
+  return STRATEGY_CONFIGS[strategyId] || { label: strategyId, accentBg: 'bg-gray-500/10', accentText: 'text-gray-400', accentBorder: 'border-gray-500/50' };
+}
+
+export function calculateRR(direction: string, entry: number, sl: number, target: number): number {
+  if (direction === 'LONG' || direction === 'BULLISH') {
+    const risk = entry - sl;
+    const reward = target - entry;
+    return risk > 0 ? reward / risk : 0;
+  } else {
+    const risk = sl - entry;
+    const reward = entry - target;
+    return risk > 0 ? reward / risk : 0;
+  }
+}
+
+export function calculateRAchieved(direction: string, entry: number, current: number, sl: number): number {
+  if (direction === 'LONG' || direction === 'BULLISH') {
+    const risk = entry - sl;
+    const pnl = current - entry;
+    return risk > 0 ? pnl / risk : 0;
+  } else {
+    const risk = sl - entry;
+    const pnl = entry - current;
+    return risk > 0 ? pnl / risk : 0;
+  }
+}
+
+export function matchesStrategy(strategyId: string, tabStrategy: string): boolean {
+  if (tabStrategy === 'PIVOT') return strategyId === 'PIVOT' || strategyId === 'PIVOT_CONFLUENCE';
+  return strategyId === tabStrategy;
 }

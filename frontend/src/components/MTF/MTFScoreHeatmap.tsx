@@ -6,14 +6,14 @@ interface MTFScoreHeatmapProps {
 }
 
 const SCORE_CATEGORIES = [
-  { key: 'greeksScore', label: 'Greeks', max: 15 },
-  { key: 'ivSurfaceScore', label: 'IV Surface', max: 12 },
-  { key: 'microstructureScore', label: 'Microstructure', max: 18 },
-  { key: 'optionsFlowScore', label: 'Options Flow', max: 15 },
-  { key: 'priceActionScore', label: 'Price Action', max: 12 },
-  { key: 'volumeProfileScore', label: 'Volume', max: 8 },
-  { key: 'crossInstrumentScore', label: 'Cross-Instr', max: 10 },
-  { key: 'confluenceScore', label: 'Confluence', max: 10 },
+  { key: 'greeksScore', pctKey: 'greeksPct', label: 'Greeks', max: 15 },
+  { key: 'ivSurfaceScore', pctKey: 'ivSurfacePct', label: 'IV Surface', max: 12 },
+  { key: 'microstructureScore', pctKey: 'microstructurePct', label: 'Microstructure', max: 18 },
+  { key: 'optionsFlowScore', pctKey: 'optionsFlowPct', label: 'Options Flow', max: 15 },
+  { key: 'priceActionScore', pctKey: 'priceActionPct', label: 'Price Action', max: 12 },
+  { key: 'volumeProfileScore', pctKey: 'volumeProfilePct', label: 'Volume', max: 8 },
+  { key: 'crossInstrumentScore', pctKey: 'crossInstrumentPct', label: 'Cross-Instr', max: 10 },
+  { key: 'confluenceScore', pctKey: 'confluencePct', label: 'Confluence', max: 10 },
 ] as const
 
 export function MTFScoreHeatmap({ scores }: MTFScoreHeatmapProps) {
@@ -50,6 +50,13 @@ export function MTFScoreHeatmap({ scores }: MTFScoreHeatmapProps) {
   const getBreakdownScore = (breakdown: QuantScoreBreakdown | undefined, key: string): number => {
     if (!breakdown) return 0
     return (breakdown as unknown as Record<string, number>)[key] || 0
+  }
+
+  // Helper to get pct sentinel from breakdown (-1 = N/A, -2 = DM, >= 0 = real)
+  const getBreakdownPct = (breakdown: QuantScoreBreakdown | undefined, pctKey: string): number | null => {
+    if (!breakdown) return null
+    const val = (breakdown as unknown as Record<string, number>)[pctKey]
+    return val !== undefined ? val : null
   }
 
   // Calculate consensus for each category
@@ -167,11 +174,20 @@ export function MTFScoreHeatmap({ scores }: MTFScoreHeatmapProps) {
                 {TIMEFRAMES.map(tf => {
                   const s = scoreMap.get(tf)
                   const score = getBreakdownScore(s?.breakdown, cat.key)
+                  const pct = getBreakdownPct(s?.breakdown, cat.pctKey)
+                  const isNA = pct !== null && pct === -1
+                  const isDM = pct !== null && pct === -2
                   return (
                     <td key={tf} className="text-center py-1.5 px-1">
-                      <span className={`inline-block w-8 py-0.5 rounded ${getScoreColor(score, cat.max)}`}>
-                        {score.toFixed(1)}
-                      </span>
+                      {isNA ? (
+                        <span className="inline-block w-8 py-0.5 rounded bg-slate-700/30 text-slate-500">N/A</span>
+                      ) : isDM ? (
+                        <span className="inline-block w-8 py-0.5 rounded bg-amber-500/20 text-amber-400 animate-pulse">DM</span>
+                      ) : (
+                        <span className={`inline-block w-8 py-0.5 rounded ${getScoreColor(score, cat.max)}`}>
+                          {score.toFixed(1)}
+                        </span>
+                      )}
                     </td>
                   )
                 })}

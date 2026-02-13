@@ -3,6 +3,7 @@ package com.kotsin.dashboard.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.PositionDTO;
 import com.kotsin.dashboard.model.dto.WalletDTO;
+import com.kotsin.dashboard.repository.ScripGroupRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,7 +34,13 @@ public class WalletService {
     @Autowired
     private RedisTemplate<String, String> redisTemplate;
 
+    @Autowired
+    private ScripGroupRepository scripGroupRepository;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // In-memory cache loaded once from ScripGroup collection
+    private volatile Map<String, String> scripNameCache;
 
     // FIX BUG #28: Add synchronization to prevent race conditions
     private volatile WalletDTO cachedWallet;
@@ -143,7 +150,7 @@ public class WalletService {
                     String value = redisTemplate.opsForValue().get(key);
                     if (value != null) {
                         PositionDTO pos = parseRedisPosition(key, value);
-                        if (pos != null && pos.getQuantity() > 0) {
+                        if (pos != null) {
                             positions.add(pos);
                         }
                     }
@@ -200,8 +207,24 @@ public class WalletService {
             // FIX: Read realized P&L
             double realizedPnl = data.get("realizedPnl") != null ? ((Number) data.get("realizedPnl")).doubleValue() : 0;
 
+            // Read unrealized P&L from trade execution (updated every 500ms)
+            double storedUnrealizedPnl = data.get("unrealizedPnl") != null ?
+                ((Number) data.get("unrealizedPnl")).doubleValue() : 0;
+
             // FIX: Read signal ID for linking
             String signalId = (String) data.get("signalId");
+
+            // Extract strategy with fallback chain: signalSource -> strategy -> signalType -> UNKNOWN
+            String strategy = data.get("signalSource") != null ? data.get("signalSource").toString() : null;
+            if (strategy == null || strategy.isEmpty()) {
+                strategy = data.get("strategy") != null ? data.get("strategy").toString() : null;
+            }
+            if (strategy == null || strategy.isEmpty()) {
+                strategy = data.get("signalType") != null ? data.get("signalType").toString() : null;
+            }
+            if (strategy == null || strategy.isEmpty()) {
+                strategy = "UNKNOWN";
+            }
 
             // FIX: Read timestamps
             long openedAtMs = data.get("openedAt") != null ? ((Number) data.get("openedAt")).longValue() : System.currentTimeMillis();
@@ -224,48 +247,46 @@ public class WalletService {
             double unrealizedPnl = 0;
             double unrealizedPnlPercent = 0;
 
-            // Priority: 1) Stored currentPrice, 2) Trailing stop estimate, 3) Entry price (worst case)
+            // Priority: 1) Stored currentPrice, 2) Live tick from Redis, 3) Trailing stop estimate, 4) Entry price
             if (storedCurrentPrice != null && storedCurrentPrice > 0) {
-                // Best case: we have actual current price from Redis
                 currentPrice = storedCurrentPrice;
-            } else if (trailingStop != null && trailingStop > 0) {
-                // Second best: estimate from trailing stop
-                // For LONG, trailing stop trails below price, so currentPrice >= trailingStop
-                // For SHORT, trailing stop trails above price, so currentPrice <= trailingStop
-                if ("LONG".equals(normalizedSide)) {
-                    // Estimate current price is slightly above trailing stop (assume 1% buffer)
-                    currentPrice = trailingStop * 1.01;
-                } else {
-                    // For SHORT, estimate current price is slightly below trailing stop
-                    currentPrice = trailingStop * 0.99;
-                }
             } else {
-                // Fallback: use entry price (P&L will be 0, but at least not wrong)
-                currentPrice = avgEntry;
-                log.debug("No live price for {} - using entry price as fallback", scripCode);
+                // Try to get live price from tick data in Redis (streaming candle stores this)
+                Double tickPrice = getLatestTickPrice(scripCode);
+                if (tickPrice != null && tickPrice > 0) {
+                    currentPrice = tickPrice;
+                } else if (trailingStop != null && trailingStop > 0) {
+                    if ("LONG".equals(normalizedSide)) {
+                        currentPrice = trailingStop * 1.01;
+                    } else {
+                        currentPrice = trailingStop * 0.99;
+                    }
+                } else {
+                    currentPrice = avgEntry;
+                    log.debug("No live price for {} - using entry price as fallback", scripCode);
+                }
             }
 
-            // FIX BUG #1: Calculate unrealized P&L WITHOUT the 0.5 multiplier
+            // Calculate unrealized P&L - prefer trade execution's value, fallback to our calculation
             if (qtyOpen > 0 && avgEntry > 0) {
-                if ("LONG".equals(normalizedSide)) {
-                    // LONG profit = (currentPrice - entry) * quantity
+                if (storedUnrealizedPnl != 0) {
+                    // Use the value from trade execution (updated every 500ms with real LTP)
+                    unrealizedPnl = storedUnrealizedPnl;
+                } else if ("LONG".equals(normalizedSide)) {
                     unrealizedPnl = (currentPrice - avgEntry) * qtyOpen;
                 } else {
-                    // SHORT profit = (entry - currentPrice) * quantity
                     unrealizedPnl = (avgEntry - currentPrice) * qtyOpen;
                 }
-                // Calculate percentage based on position cost
-                unrealizedPnlPercent = ((currentPrice - avgEntry) / avgEntry) * 100;
-                if ("SHORT".equals(normalizedSide)) {
-                    unrealizedPnlPercent = -unrealizedPnlPercent; // Invert for shorts
-                }
+                // P&L percent: positive means profit for both LONG and SHORT
+                double positionCost = avgEntry * qtyOpen;
+                unrealizedPnlPercent = positionCost > 0 ? (unrealizedPnl / positionCost) * 100 : 0;
             }
 
             return PositionDTO.builder()
                     .positionId(key)
                     .signalId(signalId)
                     .scripCode(scripCode)
-                    .companyName(scripCode) // Will be enriched by company name service
+                    .companyName(resolveCompanyName(scripCode))
                     .side(normalizedSide) // FIX BUG #6: Use normalized side (LONG/SHORT)
                     .quantity(qtyOpen)
                     .avgEntryPrice(avgEntry)
@@ -282,6 +303,7 @@ public class WalletService {
                     .trailingStop(trailingStop)
                     .openedAt(openedAt)
                     .lastUpdated(lastUpdated)
+                    .strategy(strategy)
                     .build();
 
         } catch (Exception e) {
@@ -366,7 +388,7 @@ public class WalletService {
                 stats.totalTrades = redisOrderCount;
                 stats.totalPnl = redisRealizedPnl;
                 stats.wins = redisWins;
-                stats.losses = Math.max(0, (positionKeys != null ? positionKeys.size() : 0) - redisWins);
+                stats.losses = Math.max(0, closedPositionCount - redisWins);
 
                 log.debug("Redis stats: {} orders, {} realized P&L from {} positions",
                     redisOrderCount, redisRealizedPnl, positionKeys != null ? positionKeys.size() : 0);
@@ -505,6 +527,36 @@ public class WalletService {
     }
 
     /**
+     * Get latest price from tick candle data in Redis.
+     * Streaming candle stores latest 1m candle at tick:{scripCode}:1m:latest
+     * Format: ["com.kotsin.consumer.model.TickCandle", { "close": 320.25, ... }]
+     */
+    private Double getLatestTickPrice(String scripCode) {
+        try {
+            String tickKey = "tick:" + scripCode + ":1m:latest";
+            String tickJson = redisTemplate.opsForValue().get(tickKey);
+            if (tickJson != null && !tickJson.isEmpty()) {
+                // Parse Jackson polymorphic array: [className, {data}]
+                Object parsed = objectMapper.readValue(tickJson, Object.class);
+                if (parsed instanceof List) {
+                    List<?> arr = (List<?>) parsed;
+                    if (arr.size() >= 2 && arr.get(1) instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> tickData = (Map<String, Object>) arr.get(1);
+                        Object closeVal = tickData.get("close");
+                        if (closeVal instanceof Number) {
+                            return ((Number) closeVal).doubleValue();
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Could not get tick price for {}: {}", scripCode, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
      * FIX BUG #6: Normalize side from BUY/SELL to LONG/SHORT
      * This ensures consistent handling regardless of how the side was stored.
      */
@@ -533,5 +585,28 @@ public class WalletService {
         double winRate = 0;
         double totalPnl = 0;
         double dayPnl = 0;
+    }
+
+    private String resolveCompanyName(String scripCode) {
+        if (scripCode == null || scripCode.isEmpty()) return scripCode;
+        return getScripNameCache().getOrDefault(scripCode, scripCode);
+    }
+
+    private Map<String, String> getScripNameCache() {
+        if (scripNameCache == null) {
+            synchronized (this) {
+                if (scripNameCache == null) {
+                    Map<String, String> cache = new HashMap<>();
+                    scripGroupRepository.findAll().forEach(sg -> {
+                        if (sg.getCompanyName() != null && !sg.getCompanyName().isEmpty()) {
+                            cache.put(sg.getId(), sg.getCompanyName());
+                        }
+                    });
+                    log.info("Loaded {} scrip name mappings from ScripGroup", cache.size());
+                    scripNameCache = cache;
+                }
+            }
+        }
+        return scripNameCache;
     }
 }

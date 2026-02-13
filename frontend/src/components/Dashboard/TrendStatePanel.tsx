@@ -1,32 +1,4 @@
-interface ACLData {
-  aclState: 'EARLY_TREND' | 'MID_TREND' | 'LATE_TREND' | 'EXHAUSTION' | 'TRANSITION' | 'UNKNOWN'
-  exhaustionNear: boolean
-  trendDirection: number
-  aclMultiplier: number
-  agreementScore: number
-  trendAge30m: number
-  trendAge2H: number
-  trendAge4H: number
-  trendAge1D: number
-  flow30m?: number
-  flow2H?: number
-  flow4H?: number
-  flow1D?: number
-}
-
-interface FUDKIIData {
-  scripCode: string
-  companyName: string
-  ignitionFlag: boolean
-  direction: 'BULLISH_IGNITION' | 'BEARISH_IGNITION' | 'NO_IGNITION'
-  fudkiiStrength: number
-  simultaneityScore: number
-  priceBreaking: boolean
-  volumeSurging: boolean
-  momentumPositive: boolean
-  atrExpanding: boolean
-  flowConfirming: boolean
-}
+import type { ACLData, FUDKIIData } from '../../types'
 
 interface TrendStatePanelProps {
   acl?: ACLData
@@ -134,58 +106,93 @@ export default function TrendStatePanel({ acl, activeIgnitions = [], indexName =
         </div>
       )}
 
-      {/* Active Ignitions */}
+      {/* FUDKII Signals - SuperTrend + BB Breakout */}
       {activeIgnitions.length > 0 && (
         <div className="border-t border-slate-700/50 pt-3 mt-3">
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-sm text-slate-400">🔥 Active Ignitions</span>
+            <span className="text-sm text-slate-400">🔥 FUDKII Signals (ST + BB)</span>
             <span className="text-xs px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded">
               {activeIgnitions.length}
             </span>
           </div>
 
           <div className="space-y-2">
-            {activeIgnitions.slice(0, 5).map((ignition) => (
+            {activeIgnitions.slice(0, 5).map((signal) => (
               <div
-                key={ignition.scripCode}
-                className={`p-2 rounded-lg border ${
-                  ignition.direction === 'BULLISH_IGNITION'
+                key={signal.scripCode}
+                className={`p-3 rounded-lg border ${
+                  signal.direction === 'BULLISH'
                     ? 'bg-emerald-500/10 border-emerald-500/30'
                     : 'bg-red-500/10 border-red-500/30'
                 }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <span className="text-lg">
-                      {ignition.direction === 'BULLISH_IGNITION' ? '🚀' : '💥'}
+                      {signal.direction === 'BULLISH' ? '🚀' : '💥'}
                     </span>
                     <div>
-                      <div className="text-sm font-medium text-white">{ignition.companyName}</div>
+                      <div className="text-sm font-medium text-white">
+                        {signal.symbol || signal.companyName || signal.scripCode}
+                      </div>
                       <div className="text-xs text-slate-400">
-                        Strength: {(ignition.fudkiiStrength * 100).toFixed(0)}% | Conditions: {ignition.simultaneityScore}/5
+                        {signal.exchange && <span className="mr-1">[{signal.exchange}]</span>}
+                        @ {signal.triggerPrice?.toFixed(2)} | Score: {signal.triggerScore?.toFixed(0)}
                       </div>
                     </div>
                   </div>
+                  <span className={`text-xs font-bold px-2 py-1 rounded ${
+                    signal.direction === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                  }`}>
+                    {signal.direction}
+                  </span>
                 </div>
 
-                {/* Condition indicators */}
-                <div className="flex gap-1 mt-2">
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${ignition.priceBreaking ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
-                    Price
+                {/* SuperTrend + BB indicator */}
+                <div className="flex gap-1 mb-2">
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    signal.trendChanged ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-700 text-slate-500'
+                  }`}>
+                    ST Flip
                   </span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${ignition.volumeSurging ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
-                    Vol
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    signal.trend === 'UP' ? 'bg-emerald-500/20 text-emerald-400' :
+                    signal.trend === 'DOWN' ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-slate-500'
+                  }`}>
+                    ST {signal.trend}
                   </span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${ignition.momentumPositive ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
-                    Mom
-                  </span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${ignition.atrExpanding ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
-                    ATR
-                  </span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${ignition.flowConfirming ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-500'}`}>
-                    Flow
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    signal.pricePosition === 'ABOVE_UPPER' ? 'bg-emerald-500/20 text-emerald-400' :
+                    signal.pricePosition === 'BELOW_LOWER' ? 'bg-red-500/20 text-red-400' : 'bg-slate-700 text-slate-500'
+                  }`}>
+                    BB {signal.pricePosition?.replace('_', ' ')}
                   </span>
                 </div>
+
+                {/* BB Levels */}
+                <div className="text-xs text-slate-500 space-y-0.5">
+                  <div className="flex justify-between">
+                    <span>BB Upper:</span>
+                    <span className="text-slate-400">{signal.bbUpper?.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>SuperTrend:</span>
+                    <span className={signal.trend === 'UP' ? 'text-emerald-400' : 'text-red-400'}>
+                      {signal.superTrend?.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>BB Lower:</span>
+                    <span className="text-slate-400">{signal.bbLower?.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Reason */}
+                {signal.reason && (
+                  <div className="mt-2 text-xs text-slate-500 truncate" title={signal.reason}>
+                    {signal.reason}
+                  </div>
+                )}
               </div>
             ))}
           </div>

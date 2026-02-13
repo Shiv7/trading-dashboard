@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import type { Position } from '../../types'
 import PositionActions from '../Trading/PositionActions'
+import { formatTimeAgo } from '../../utils/formatTime'
 
 interface PositionCardProps {
   position: Position
@@ -77,7 +78,7 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
             <span className="badge badge-warning">Trailing Active</span>
           )}
           <span className="text-xs text-slate-500 ml-auto">
-            Since {new Date(position.openedAt).toLocaleTimeString()}
+            {formatTimeAgo(position.openedAt)}
           </span>
         </div>
       </Link>

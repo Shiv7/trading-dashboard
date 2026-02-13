@@ -1,6 +1,9 @@
 package com.kotsin.dashboard.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.kafka.FUDKIIConsumer;
+import com.kotsin.dashboard.kafka.FUKAAConsumer;
 import com.kotsin.dashboard.kafka.PivotConfluenceConsumer;
 import com.kotsin.dashboard.kafka.StrategyOpportunityConsumer;
 import com.kotsin.dashboard.kafka.StrategyStateConsumer;
@@ -10,13 +13,16 @@ import com.kotsin.dashboard.model.dto.strategy.StrategyOpportunityDTO;
 import com.kotsin.dashboard.service.TradingSignalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 /**
  * REST controller for strategy state transparency.
@@ -37,8 +43,11 @@ public class StrategyStateController {
     private final StrategyStateConsumer stateConsumer;
     private final StrategyOpportunityConsumer opportunityConsumer;
     private final FUDKIIConsumer fudkiiConsumer;
+    private final FUKAAConsumer fukaaConsumer;
     private final PivotConfluenceConsumer pivotConfluenceConsumer;
     private final TradingSignalService tradingSignalService;
+    private final RedisTemplate<String, String> redisTemplate;
+    private final ObjectMapper objectMapper;
 
     /**
      * Get all tracked instrument states.
@@ -79,6 +88,30 @@ public class StrategyStateController {
         List<InstrumentStateSnapshotDTO> watching = stateConsumer.getWatchingInstruments();
         log.debug("[API] GET /strategy-state/watching | {} instruments", watching.size());
         return ResponseEntity.ok(watching);
+    }
+
+    /**
+     * Get all READY instruments (gate-validated, awaiting trade execution).
+     *
+     * @return List of instruments currently in READY state
+     */
+    @GetMapping("/ready")
+    public ResponseEntity<List<InstrumentStateSnapshotDTO>> getReadyInstruments() {
+        List<InstrumentStateSnapshotDTO> ready = stateConsumer.getReadyInstruments();
+        log.debug("[API] GET /strategy-state/ready | {} instruments", ready.size());
+        return ResponseEntity.ok(ready);
+    }
+
+    /**
+     * Get all POSITIONED instruments (active trades being monitored).
+     *
+     * @return List of instruments currently in POSITIONED state
+     */
+    @GetMapping("/positioned")
+    public ResponseEntity<List<InstrumentStateSnapshotDTO>> getPositionedInstruments() {
+        List<InstrumentStateSnapshotDTO> positioned = stateConsumer.getPositionedInstruments();
+        log.debug("[API] GET /strategy-state/positioned | {} instruments", positioned.size());
+        return ResponseEntity.ok(positioned);
     }
 
     /**
@@ -151,8 +184,11 @@ public class StrategyStateController {
         Map<String, Object> stats = new HashMap<>();
         stats.put("totalInstruments", stateConsumer.getTotalCount());
         stats.put("watchingInstruments", stateConsumer.getWatchingCount());
+        stats.put("readyInstruments", stateConsumer.getReadyCount());
+        stats.put("positionedInstruments", stateConsumer.getPositionedCount());
         stats.put("totalOpportunities", opportunityConsumer.getOpportunityCount());
         stats.put("highScoreOpportunities", opportunityConsumer.getHighScoreOpportunities(70).size());
+        stats.put("fukaaActive", fukaaConsumer.getActiveTriggerCount());
 
         log.debug("[API] GET /strategy-state/stats | {}", stats);
         return ResponseEntity.ok(stats);
@@ -200,6 +236,18 @@ public class StrategyStateController {
         }
         log.debug("[API] GET /strategy-state/fudkii/{} | ignition={}", scripCode, signal.get("ignitionFlag"));
         return ResponseEntity.ok(signal);
+    }
+
+    /**
+     * Get ALL FUDKII signals (including expired triggers) as a list.
+     * Uses the latestFUDKII cache which has no TTL.
+     */
+    @GetMapping("/fudkii/all/list")
+    public ResponseEntity<List<Map<String, Object>>> getAllFudkiiSignals() {
+        Map<String, Map<String, Object>> all = fudkiiConsumer.getAllLatestSignals();
+        List<Map<String, Object>> list = new ArrayList<>(all.values());
+        log.debug("[API] GET /strategy-state/fudkii/all/list | {} signals", list.size());
+        return ResponseEntity.ok(list);
     }
 
     /**
@@ -274,6 +322,54 @@ public class StrategyStateController {
         ));
     }
 
+    // ==================== FUKAA STRATEGY ENDPOINTS (Volume-filtered FUDKII) ====================
+
+    /**
+     * Get all active FUKAA triggers (volume-confirmed FUDKII signals).
+     */
+    @GetMapping("/fukaa/active")
+    public ResponseEntity<Map<String, Map<String, Object>>> getActiveFukaaTriggers() {
+        Map<String, Map<String, Object>> triggers = fukaaConsumer.getActiveTriggers();
+        log.debug("[API] GET /strategy-state/fukaa/active | {} active triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    /**
+     * Get active FUKAA triggers as a list.
+     */
+    @GetMapping("/fukaa/active/list")
+    public ResponseEntity<List<Map<String, Object>>> getActiveFukaaTriggersList() {
+        Map<String, Map<String, Object>> triggers = fukaaConsumer.getActiveTriggers();
+        List<Map<String, Object>> list = new ArrayList<>(triggers.values());
+        log.debug("[API] GET /strategy-state/fukaa/active/list | {} active triggers", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    /**
+     * Get FUKAA signal for a specific instrument.
+     */
+    @GetMapping("/fukaa/{scripCode}")
+    public ResponseEntity<Map<String, Object>> getFukaaSignal(@PathVariable String scripCode) {
+        Map<String, Object> signal = fukaaConsumer.getLatestFUKAA(scripCode);
+        if (signal == null) {
+            return ResponseEntity.notFound().build();
+        }
+        log.debug("[API] GET /strategy-state/fukaa/{} | outcome={}", scripCode, signal.get("fukaaOutcome"));
+        return ResponseEntity.ok(signal);
+    }
+
+    /**
+     * Get FUKAA trigger count.
+     */
+    @GetMapping("/fukaa/count")
+    public ResponseEntity<Map<String, Object>> getFukaaCount() {
+        int count = fukaaConsumer.getActiveTriggerCount();
+        return ResponseEntity.ok(Map.of(
+                "activeTriggers", count,
+                "timestamp", System.currentTimeMillis()
+        ));
+    }
+
     // ==================== COMBINED STRATEGY SIGNALS ====================
 
     /**
@@ -291,6 +387,11 @@ public class StrategyStateController {
         result.put("fudkiiSignals", new ArrayList<>(fudkiiIgnitions.values()));
         result.put("fudkiiCount", fudkiiIgnitions.size());
 
+        // FUKAA signals (Volume-confirmed FUDKII)
+        Map<String, Map<String, Object>> fukaaTriggers = fukaaConsumer.getActiveTriggers();
+        result.put("fukaaSignals", new ArrayList<>(fukaaTriggers.values()));
+        result.put("fukaaCount", fukaaTriggers.size());
+
         // Pivot Confluence signals (Strategy 2: HTF/LTF + Pivot + SMC)
         Map<String, Map<String, Object>> pivotTriggers = pivotConfluenceConsumer.getActiveTriggers();
         result.put("pivotSignals", new ArrayList<>(pivotTriggers.values()));
@@ -307,11 +408,11 @@ public class StrategyStateController {
         result.put("opportunityCount", opportunities.size());
 
         // Stats
-        result.put("totalActive", fudkiiIgnitions.size() + pivotTriggers.size() + pendingSignals.size());
+        result.put("totalActive", fudkiiIgnitions.size() + fukaaTriggers.size() + pivotTriggers.size() + pendingSignals.size());
         result.put("timestamp", System.currentTimeMillis());
 
-        log.debug("[API] GET /strategy-state/signals/active | fudkii={}, pivot={}, trading={}, opportunities={}",
-                fudkiiIgnitions.size(), pivotTriggers.size(), pendingSignals.size(), opportunities.size());
+        log.debug("[API] GET /strategy-state/signals/active | fudkii={}, fukaa={}, pivot={}, trading={}, opportunities={}",
+                fudkiiIgnitions.size(), fukaaTriggers.size(), pivotTriggers.size(), pendingSignals.size(), opportunities.size());
         return ResponseEntity.ok(result);
     }
 
@@ -364,8 +465,25 @@ public class StrategyStateController {
         Map<String, Integer> stateCounts = new HashMap<>();
         stateCounts.put("WATCHING", stateConsumer.getWatchingCount());
         stateCounts.put("FUDKII_ACTIVE", fudkiiConsumer.getActiveIgnitionCount());
+        stateCounts.put("FUKAA_ACTIVE", fukaaConsumer.getActiveTriggerCount());
+        stateCounts.put("PIVOT_ACTIVE", pivotConfluenceConsumer.getActiveTriggerCount());
         stateCounts.put("TRADING_SIGNALS", tradingSignalService.getPendingSignals().size());
         stateCounts.put("OPPORTUNITIES", opportunityConsumer.getOpportunityCount());
+
+        // Detect conflicts: instruments with FUDKII + Pivot in opposite directions
+        int conflicts = 0;
+        Map<String, Map<String, Object>> fudkiiActive = fudkiiConsumer.getActiveTriggers();
+        Map<String, Map<String, Object>> pivotActive = pivotConfluenceConsumer.getActiveTriggers();
+        for (String scripCode : fudkiiActive.keySet()) {
+            if (pivotActive.containsKey(scripCode)) {
+                String fDir = fudkiiConsumer.getDirectionForScrip(scripCode);
+                String pDir = pivotConfluenceConsumer.getDirectionForScrip(scripCode);
+                if (fDir != null && pDir != null && !fDir.equals(pDir)) {
+                    conflicts++;
+                }
+            }
+        }
+        stateCounts.put("CONFLICTS", conflicts);
 
         diagram.put("nodes", nodes);
         diagram.put("edges", edges);
@@ -374,5 +492,57 @@ public class StrategyStateController {
 
         log.debug("[API] GET /strategy-state/flow-diagram | counts={}", stateCounts);
         return ResponseEntity.ok(diagram);
+    }
+
+    // ==================== PIVOT LEVELS FOR TARGET COMPUTATION ====================
+
+    /**
+     * Get sorted pivot levels for multiple instruments.
+     * Reads multi-timeframe pivot data from Redis (key: pivot:mtf:{scripCode})
+     * and returns all unique non-zero levels sorted ascending per instrument.
+     *
+     * @param scripCodes List of scrip codes
+     * @return Map of scripCode to sorted list of unique pivot levels
+     */
+    @PostMapping("/pivots/batch")
+    public ResponseEntity<Map<String, List<Double>>> getBatchPivotLevels(@RequestBody List<String> scripCodes) {
+        Map<String, List<Double>> result = new LinkedHashMap<>();
+        for (String scripCode : scripCodes) {
+            try {
+                String json = redisTemplate.opsForValue().get("pivot:mtf:" + scripCode);
+                if (json == null || json.isEmpty()) continue;
+
+                JsonNode root = objectMapper.readTree(json);
+                JsonNode levels = root.path("allPivotLevels");
+                if (!levels.isArray()) continue;
+
+                TreeSet<Double> uniqueLevels = new TreeSet<>();
+                for (JsonNode tf : levels) {
+                    addPivotLevels(uniqueLevels, tf,
+                        "pivot", "s1", "s2", "s3", "s4", "r1", "r2", "r3", "r4",
+                        "fibS1", "fibS2", "fibS3", "fibR1", "fibR2", "fibR3",
+                        "camS1", "camS2", "camS3", "camS4", "camR1", "camR2", "camR3", "camR4",
+                        "tc", "bc");
+                }
+
+                if (!uniqueLevels.isEmpty()) {
+                    result.put(scripCode, new ArrayList<>(uniqueLevels));
+                }
+            } catch (Exception e) {
+                log.warn("Error reading pivots for {}: {}", scripCode, e.getMessage());
+            }
+        }
+        log.debug("[API] POST /strategy-state/pivots/batch | {} codes requested, {} with data",
+                scripCodes.size(), result.size());
+        return ResponseEntity.ok(result);
+    }
+
+    private void addPivotLevels(TreeSet<Double> set, JsonNode node, String... fields) {
+        for (String field : fields) {
+            double val = node.path(field).asDouble(0);
+            if (val > 0) {
+                set.add(Math.round(val * 100.0) / 100.0);
+            }
+        }
     }
 }

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ordersApi } from '../../services/api'
+import { useDashboardStore } from '../../store/dashboardStore'
 import type { CreateOrderRequest, OrderSide, OrderType, TrailingType } from '../../types'
+import WalletSelector from './WalletSelector'
 
 interface TradeModalProps {
     isOpen: boolean
@@ -37,6 +39,7 @@ export default function TradeModal({
     const [tp1, setTp1] = useState(0)
     const [tp2, setTp2] = useState(0)
     const [tp1ClosePercent, setTp1ClosePercent] = useState(50)
+    const [walletType, setWalletType] = useState<'PAPER' | 'REAL'>('PAPER')
     const [trailingType, setTrailingType] = useState<TrailingType>('NONE')
     const [trailingValue, setTrailingValue] = useState(1)
     const [submitting, setSubmitting] = useState(false)
@@ -191,24 +194,26 @@ export default function TradeModal({
             const response = await ordersApi.createOrder(order)
 
             // Check if response indicates success
-            if (response && (response.order || response.position || !response.error)) {
-                // Order placed successfully - show brief success before closing
+            if (response && !('error' in response)) {
+                // Order placed successfully
                 setError(null)
                 setShowConfirmation(false)
-
-                // Small delay to show success state
-                setTimeout(() => {
-                    onClose()
-                }, 300)
+                useDashboardStore.getState().addToast(
+                    `${side} ${qty} ${scripCode} @ ${orderType === 'LIMIT' ? `₹${limitPrice.toFixed(2)}` : 'MARKET'} placed`,
+                    'success'
+                )
+                onClose()
             } else {
                 // Response indicates failure
-                throw new Error(response?.error || 'Order creation failed - no confirmation received')
+                const errorMsg = 'error' in response ? String(response.error) : 'Order creation failed - no confirmation received'
+                throw new Error(errorMsg)
             }
         } catch (err) {
             // FIX BUG #10: Show detailed error from backend
             const errorMessage = err instanceof Error ? err.message : 'Failed to create order'
             setError(errorMessage)
             setShowConfirmation(false) // Reset confirmation on error
+            useDashboardStore.getState().addToast(`Order failed: ${errorMessage}`, 'error')
         } finally {
             setSubmitting(false)
         }
@@ -244,8 +249,8 @@ export default function TradeModal({
     if (!isOpen) return null
 
     return (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-slate-800 rounded-xl shadow-2xl w-full max-w-md mx-4 border border-slate-700">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
+            <div className="bg-slate-800 rounded-xl shadow-2xl w-full max-w-md mx-4 border border-slate-700 animate-scaleIn">
                 {/* Header */}
                 <div className="flex items-center justify-between p-4 border-b border-slate-700">
                     <div>
@@ -281,12 +286,23 @@ export default function TradeModal({
 
                 {/* Body */}
                 <div className="p-4 space-y-4">
+                    {/* Wallet Type Selector */}
+                    <div>
+                        <label className="text-sm text-slate-400 mb-2 block">Trading Mode</label>
+                        <WalletSelector value={walletType} onChange={setWalletType} compact />
+                        {walletType === 'REAL' && (
+                            <div className="mt-2 bg-amber-500/10 border border-amber-500/30 text-amber-400 px-3 py-1.5 rounded text-xs">
+                                You are placing a REAL trade. This will use your live broker account.
+                            </div>
+                        )}
+                    </div>
+
                     {/* FIX BUG #5: Confirmation step */}
                     {showConfirmation && (
                         <div className="bg-amber-500/20 border border-amber-500/50 text-amber-400 px-3 py-2 rounded-lg text-sm">
                             <div className="font-bold mb-1">⚠️ Confirm Order</div>
                             <div>
-                                {side} {qty} shares of {scripCode} at {orderType === 'LIMIT' ? `₹${limitPrice.toFixed(2)}` : 'MARKET'}
+                                [{walletType}] {side} {qty} shares of {scripCode} at {orderType === 'LIMIT' ? `₹${limitPrice.toFixed(2)}` : 'MARKET'}
                             </div>
                             <div className="mt-1 text-xs">
                                 SL: ₹{sl > 0 ? sl.toFixed(2) : 'None'} | TP1: ₹{tp1 > 0 ? tp1.toFixed(2) : 'None'}
