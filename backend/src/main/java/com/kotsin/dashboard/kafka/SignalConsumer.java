@@ -3,7 +3,10 @@ package com.kotsin.dashboard.kafka;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.kotsin.dashboard.model.dto.SignalDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,6 +19,7 @@ import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Kafka consumer for trading signals from SMTIS v2.0 enrichment pipeline.
@@ -28,12 +32,19 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SignalConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    // In-memory signal storage for REST API
-    private final Map<String, SignalDTO> signalCache = new ConcurrentHashMap<>();
-    private final Map<String, Map<String, SignalDTO>> signalsByStock = new ConcurrentHashMap<>();
+    // In-memory signal storage for REST API (bounded with TTL to prevent memory leaks)
+    private final Cache<String, SignalDTO> signalCache = Caffeine.newBuilder()
+            .expireAfterWrite(24, TimeUnit.HOURS)
+            .maximumSize(5000)
+            .build();
+    private final Cache<String, Map<String, SignalDTO>> signalsByStock = Caffeine.newBuilder()
+            .expireAfterWrite(24, TimeUnit.HOURS)
+            .maximumSize(1000)
+            .build();
 
     @KafkaListener(topics = {"trading-signals-v2"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onSignal(String payload) {
@@ -63,8 +74,13 @@ public class SignalConsumer {
                 dto.setSignalId(signalId);
             }
             signalCache.put(signalId, dto);
-            signalsByStock.computeIfAbsent(scripCode, k -> new ConcurrentHashMap<>()).put(signalId, dto);
-            
+            Map<String, SignalDTO> stockSignals = signalsByStock.getIfPresent(scripCode);
+            if (stockSignals == null) {
+                stockSignals = new ConcurrentHashMap<>();
+                signalsByStock.put(scripCode, stockSignals);
+            }
+            stockSignals.put(signalId, dto);
+
             // Broadcast to WebSocket
             sessionManager.broadcastSignal(dto);
             
@@ -97,6 +113,22 @@ public class SignalConsumer {
         double target3 = root.path("target3").asDouble(0);
         double riskReward = root.path("riskRewardRatio").asDouble(0);
 
+        // Calculate R:R ratio when not provided by upstream
+        if (riskReward == 0 && entryPrice > 0 && stopLoss > 0 && target1 > 0) {
+            String direction = determineDirection(root);
+            if ("BULLISH".equals(direction)) {
+                double denominator = entryPrice - stopLoss;
+                if (denominator > 0) {
+                    riskReward = (target1 - entryPrice) / denominator;
+                }
+            } else if ("BEARISH".equals(direction)) {
+                double denominator = stopLoss - entryPrice;
+                if (denominator > 0) {
+                    riskReward = (entryPrice - target1) / denominator;
+                }
+            }
+        }
+
         // SMTIS v2.0 uses "category" for signal type, legacy uses "signal" or "signalType"
         String signalType = root.path("category").asText();
         if (signalType == null || signalType.isEmpty() || "null".equals(signalType)) {
@@ -124,7 +156,7 @@ public class SignalConsumer {
         return SignalDTO.builder()
                 .signalId(root.path("signalId").asText(UUID.randomUUID().toString()))
                 .scripCode(root.path("scripCode").asText())
-                .companyName(root.path("companyName").asText(root.path("scripCode").asText()))
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")))
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
                 // Signal source
                 .signalSource(signalSource)
@@ -278,7 +310,12 @@ public class SignalConsumer {
         String scripCode = dto.getScripCode();
         signalCache.put(signalId, dto);
         if (scripCode != null) {
-            signalsByStock.computeIfAbsent(scripCode, k -> new ConcurrentHashMap<>()).put(signalId, dto);
+            Map<String, SignalDTO> stockSignals = signalsByStock.getIfPresent(scripCode);
+            if (stockSignals == null) {
+                stockSignals = new ConcurrentHashMap<>();
+                signalsByStock.put(scripCode, stockSignals);
+            }
+            stockSignals.put(signalId, dto);
         }
 
         // Broadcast to WebSocket
@@ -297,18 +334,19 @@ public class SignalConsumer {
     // ========== REST API Support ==========
 
     public Map<String, SignalDTO> getAllSignals() {
-        return signalCache;
+        return signalCache.asMap();
     }
 
     public Map<String, SignalDTO> getSignalsForStock(String scripCode) {
-        return signalsByStock.getOrDefault(scripCode, Map.of());
+        Map<String, SignalDTO> stockSignals = signalsByStock.getIfPresent(scripCode);
+        return stockSignals != null ? stockSignals : Map.of();
     }
 
     /**
      * Get recent signals (most recent first)
      */
     public java.util.List<SignalDTO> getRecentSignals(int limit) {
-        return signalCache.values().stream()
+        return signalCache.asMap().values().stream()
                 .sorted((a, b) -> b.getTimestamp().compareTo(a.getTimestamp()))
                 .limit(limit)
                 .collect(java.util.stream.Collectors.toList());

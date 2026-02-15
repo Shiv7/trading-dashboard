@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.WalletDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class ProfitLossConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final WalletService walletService;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -105,7 +107,7 @@ public class ProfitLossConsumer {
     private void handleTradeEntry(JsonNode root) {
         String tradeId = root.path("tradeId").asText();
         String scripCode = root.path("scripCode").asText();
-        String companyName = root.path("companyName").asText(scripCode);
+        String companyName = scripLookup.resolve(scripCode, root.path("companyName").asText(""));
         String signalType = root.path("signal").asText("UNKNOWN");
         double entryPrice = root.path("entryPrice").asDouble(0);
         int positionSize = root.path("positionSize").asInt(1);
@@ -154,7 +156,7 @@ public class ProfitLossConsumer {
     private void handleTradeExit(JsonNode root) {
         String tradeId = root.path("tradeId").asText();
         String scripCode = root.path("scripCode").asText();
-        String companyName = root.path("companyName").asText(scripCode);
+        String companyName = scripLookup.resolve(scripCode, root.path("companyName").asText(""));
         double entryPrice = root.path("entryPrice").asDouble(0);
         double exitPrice = root.path("exitPrice").asDouble(0);
         double profitLoss = root.path("profitLoss").asDouble(0);

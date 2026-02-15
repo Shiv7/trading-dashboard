@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.QuantScoreDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +35,7 @@ public class QuantScoreConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
+    private final ScripLookupService scripLookup;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -297,7 +299,7 @@ public class QuantScoreConsumer {
         QuantScoreDTO.QuantScoreDTOBuilder builder = QuantScoreDTO.builder()
                 .symbol(root.path("symbol").asText())
                 .scripCode(scripCode)
-                .companyName(root.path("companyName").asText(root.path("symbol").asText()))
+                .companyName(scripLookup.resolve(scripCode, root.path("companyName").asText("")))
                 .timestamp(timestampMillis)
                 .timeframe(root.path("timeframe").asText("5m"))
                 .humanReadableTime(humanReadableTime)

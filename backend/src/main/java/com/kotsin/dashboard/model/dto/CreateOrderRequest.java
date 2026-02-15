@@ -65,6 +65,9 @@ public class CreateOrderRequest {
     // Signal reference (for auto-executed signals)
     private String signalId;
 
+    // Strategy source: FUDKII, FUKAA, PIVOT, etc.
+    private String signalSource;
+
     /**
      * FIX BUG #3: Custom validation to check SL/TP positions relative to entry
      * Called manually in controller before sending to execution service

@@ -29,13 +29,23 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
       >
         <div className="flex items-start justify-between mb-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-white">
                 {position.companyName || position.scripCode}
               </span>
               <span className={`badge ${isLong ? 'badge-success' : 'badge-danger'}`}>
                 {position.side}
               </span>
+              {position.strategy && (
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide ${
+                  position.strategy === 'FUDKII' ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30'
+                  : position.strategy === 'FUKAA' ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                  : position.strategy === 'PIVOT' ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                  : 'bg-slate-500/15 text-slate-400 border border-slate-500/30'
+                }`}>
+                  {position.strategy}
+                </span>
+              )}
             </div>
             <div className="text-xs text-slate-400 mt-1">
               {position.quantity} shares @ {formatCurrency(position.avgEntryPrice)}
@@ -46,7 +56,7 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
               {formatCurrency(position.unrealizedPnl)}
             </div>
             <div className={`text-xs ${pnlColor}`}>
-              {position.unrealizedPnlPercent >= 0 ? '+' : ''}{position.unrealizedPnlPercent.toFixed(2)}%
+              {(position.unrealizedPnlPercent ?? 0) >= 0 ? '+' : ''}{(position.unrealizedPnlPercent ?? 0).toFixed(2)}%
             </div>
           </div>
         </div>
@@ -55,17 +65,17 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
         <div className="grid grid-cols-3 gap-2 text-xs">
           <div className="bg-slate-700/30 rounded p-2">
             <div className="text-slate-400">Entry</div>
-            <div className="text-white font-medium">{position.avgEntryPrice.toFixed(2)}</div>
+            <div className="text-white font-medium">{(position.avgEntryPrice ?? 0).toFixed(2)}</div>
           </div>
           <div className="bg-red-500/10 rounded p-2">
             <div className="text-red-400">SL</div>
             <div className="text-white font-medium">
-              {position.trailingStop ? position.trailingStop.toFixed(2) : position.stopLoss.toFixed(2)}
+              {position.trailingStop ? position.trailingStop.toFixed(2) : (position.stopLoss ?? 0).toFixed(2)}
             </div>
           </div>
           <div className="bg-emerald-500/10 rounded p-2">
             <div className="text-emerald-400">Target</div>
-            <div className="text-white font-medium">{position.target1.toFixed(2)}</div>
+            <div className="text-white font-medium">{(position.target1 ?? 0).toFixed(2)}</div>
           </div>
         </div>
 
@@ -74,7 +84,7 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
           {position.tp1Hit && (
             <span className="badge badge-success">T1 Hit</span>
           )}
-          {position.trailingType && position.trailingType !== 'NONE' && (
+          {!!position.trailingType && position.trailingType !== 'NONE' && (
             <span className="badge badge-warning">Trailing Active</span>
           )}
           <span className="text-xs text-slate-500 ml-auto">
@@ -92,7 +102,7 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
             currentTp1={position.target1}
             currentTp2={position.target2}
             currentPrice={position.currentPrice}
-            trailingActive={position.trailingType !== 'NONE' && position.trailingType !== undefined}
+            trailingActive={!!position.trailingType && position.trailingType !== 'NONE'}
             onUpdate={onUpdate}
           />
         </div>

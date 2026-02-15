@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { scoresApi, signalsApi, indicatorsApi, quantScoresApi, walletApi } from '../services/api'
+import { scoresApi, signalsApi, indicatorsApi, quantScoresApi, walletApi, ordersApi } from '../services/api'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useTimeframeScores } from '../hooks/useTimeframeScores'
@@ -221,15 +221,34 @@ export default function StockDetailPage() {
 
 
   const handleTradeExecute = async (order: { scripCode: string; direction: 'LONG' | 'SHORT'; entryPrice: number; stopLoss: number; target: number; quantity: number }) => {
-    console.log(`[${tradingMode}] Executing trade:`, order)
-    // TODO: Connect to order API
-    alert(`${tradingMode} Trade: ${order.direction} ${order.quantity} lots of ${order.scripCode} @ ${order.entryPrice}`)
+    try {
+      const result = await ordersApi.createOrder({
+        scripCode: order.scripCode,
+        side: order.direction === 'LONG' ? 'BUY' : 'SELL',
+        type: 'MARKET',
+        qty: order.quantity,
+        currentPrice: order.entryPrice,
+        sl: order.stopLoss,
+        tp1: order.target,
+      });
+      console.log(`[${tradingMode}] Order created:`, result);
+      // Refresh wallet to show new position
+      walletApi.getWallet().then(setWallet).catch(() => {});
+    } catch (err) {
+      console.error('Trade execution failed:', err);
+    }
   }
 
-  const handleClosePosition = () => {
-    console.log('Closing position:', activePosition)
-    // TODO: Connect to close position API
-    alert(`Closing position for ${activePosition?.scripCode}`)
+  const handleClosePosition = async () => {
+    if (!activePosition?.scripCode) return;
+    try {
+      await ordersApi.closePosition(activePosition.scripCode);
+      console.log('Position closed:', activePosition.scripCode);
+      // Refresh wallet
+      walletApi.getWallet().then(setWallet).catch(() => {});
+    } catch (err) {
+      console.error('Close position failed:', err);
+    }
   }
 
   // Loading state

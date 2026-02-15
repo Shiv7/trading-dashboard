@@ -3,7 +3,6 @@ package com.kotsin.dashboard.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.PositionDTO;
 import com.kotsin.dashboard.model.dto.WalletDTO;
-import com.kotsin.dashboard.repository.ScripGroupRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,12 +34,9 @@ public class WalletService {
     private RedisTemplate<String, String> redisTemplate;
 
     @Autowired
-    private ScripGroupRepository scripGroupRepository;
+    private ScripLookupService scripLookup;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-
-    // In-memory cache loaded once from ScripGroup collection
-    private volatile Map<String, String> scripNameCache;
 
     // FIX BUG #28: Add synchronization to prevent race conditions
     private volatile WalletDTO cachedWallet;
@@ -313,43 +309,22 @@ public class WalletService {
     }
 
     /**
-     * Get trade statistics from both Redis and MongoDB
-     * FIX: Now also reads from virtual:orders:* and virtual:positions:* for P&L
+     * Get trade statistics from MongoDB (backtest_trades) as single source of truth,
+     * supplemented by Redis closed positions for realized P&L.
+     *
+     * FIX BUG #1: Use MongoDB backtest_trades as the sole source for win/loss/winRate
+     *   instead of mixing Redis orders with MongoDB trades.
+     * FIX BUG #2: Count completed round-trip trades from backtest_trades (each document
+     *   is one round-trip trade), not individual order legs from virtual:orders:*.
      */
     private TradeStats getTradeStatsFromMongo() {
         TradeStats stats = new TradeStats();
 
-        // First, try to get stats from Redis (virtual:orders:* and virtual:positions:*)
+        // Get realized P&L from Redis closed positions (supplements MongoDB P&L)
+        double redisClosedPnl = 0;
         try {
             if (redisTemplate != null) {
-                // Count filled orders from Redis
-                Set<String> orderKeys = redisTemplate.keys("virtual:orders:*");
-                int redisOrderCount = 0;
-                int redisWins = 0;
-
-                if (orderKeys != null) {
-                    for (String key : orderKeys) {
-                        try {
-                            String value = redisTemplate.opsForValue().get(key);
-                            if (value != null) {
-                                @SuppressWarnings("unchecked")
-                                Map<String, Object> order = objectMapper.readValue(value, Map.class);
-                                String status = order.get("status") != null ? order.get("status").toString() : "";
-                                if ("FILLED".equals(status) || "COMPLETED".equals(status)) {
-                                    redisOrderCount++;
-                                }
-                            }
-                        } catch (Exception e) {
-                            // Skip unparseable orders
-                        }
-                    }
-                }
-
-                // FIX BUG #7: Get realized P&L from positions
-                // Note: Only count wins from CLOSED positions with realized P&L, not open positions
                 Set<String> positionKeys = redisTemplate.keys("virtual:positions:*");
-                double redisRealizedPnl = 0;
-                int closedPositionCount = 0;
                 if (positionKeys != null) {
                     for (String key : positionKeys) {
                         try {
@@ -361,19 +336,10 @@ public class WalletService {
                                 int qtyOpen = pos.get("qtyOpen") != null ? ((Number) pos.get("qtyOpen")).intValue() : 0;
                                 String status = pos.get("status") != null ? pos.get("status").toString() : "";
 
-                                // Only add realized P&L (from closed or partial positions)
-                                if (pnl != 0) {
-                                    redisRealizedPnl += pnl;
-                                }
-
-                                // FIX: Only count as win/loss if position is CLOSED (qtyOpen = 0) or has realized P&L
-                                // Don't count unrealized gains as "wins"
+                                // Only add realized P&L from closed positions
                                 boolean isClosed = qtyOpen == 0 || "CLOSED".equals(status);
-                                if (isClosed && pnl > 0) {
-                                    redisWins++;
-                                    closedPositionCount++;
-                                } else if (isClosed && pnl < 0) {
-                                    closedPositionCount++;
+                                if (isClosed && pnl != 0) {
+                                    redisClosedPnl += pnl;
                                 }
                             }
                         } catch (Exception e) {
@@ -381,24 +347,15 @@ public class WalletService {
                         }
                     }
                 }
-
-                log.debug("Redis P&L: {} from {} closed positions ({} wins)",
-                    redisRealizedPnl, closedPositionCount, redisWins);
-
-                stats.totalTrades = redisOrderCount;
-                stats.totalPnl = redisRealizedPnl;
-                stats.wins = redisWins;
-                stats.losses = Math.max(0, closedPositionCount - redisWins);
-
-                log.debug("Redis stats: {} orders, {} realized P&L from {} positions",
-                    redisOrderCount, redisRealizedPnl, positionKeys != null ? positionKeys.size() : 0);
+                log.debug("Redis closed positions realized P&L: {}", redisClosedPnl);
             }
         } catch (Exception e) {
-            log.warn("Error getting stats from Redis: {}", e.getMessage());
+            log.warn("Error getting P&L from Redis positions: {}", e.getMessage());
         }
 
-        // Then augment/fallback with MongoDB stats
+        // Use MongoDB backtest_trades as single source of truth for trade counts and win rate
         try {
+            // Each document in backtest_trades represents one completed round-trip trade
             long mongoTrades = mongoTemplate.getCollection("backtest_trades").countDocuments();
 
             long mongoWins = mongoTemplate.getCollection("backtest_trades")
@@ -407,13 +364,12 @@ public class WalletService {
                         new Document("pnl", new Document("$gt", 0))
                     )));
 
-            // Use max of Redis and MongoDB counts
-            stats.totalTrades = Math.max(stats.totalTrades, (int) mongoTrades);
-            stats.wins = Math.max(stats.wins, (int) mongoWins);
+            stats.totalTrades = (int) mongoTrades;
+            stats.wins = (int) mongoWins;
             stats.losses = Math.max(0, stats.totalTrades - stats.wins);
             stats.winRate = stats.totalTrades > 0 ? (double) stats.wins / stats.totalTrades * 100 : 0;
 
-            // Sum total P&L from MongoDB and add to Redis P&L
+            // Sum total P&L from MongoDB
             double mongoPnl = 0;
             for (Document doc : mongoTemplate.getCollection("backtest_trades").find()) {
                 Double pnl = doc.getDouble("pnl");
@@ -422,16 +378,14 @@ public class WalletService {
                 }
             }
 
-            // Use whichever P&L is non-zero (prefer Redis as it's more real-time)
-            if (stats.totalPnl == 0) {
-                stats.totalPnl = mongoPnl;
-            }
+            // Combine MongoDB P&L with Redis closed-position P&L (for trades not yet persisted to Mongo)
+            stats.totalPnl = mongoPnl + redisClosedPnl;
 
             // Calculate day P&L
             stats.dayPnl = calculateDayPnl();
 
-            log.debug("Combined stats: {} trades, {} wins, P&L={}",
-                stats.totalTrades, stats.wins, stats.totalPnl);
+            log.debug("Trade stats: {} trades, {} wins, winRate={}%, P&L={} (mongo={}, redis={})",
+                stats.totalTrades, stats.wins, stats.winRate, stats.totalPnl, mongoPnl, redisClosedPnl);
 
         } catch (Exception e) {
             log.error("Error getting trade stats from MongoDB: {}", e.getMessage());
@@ -473,6 +427,8 @@ public class WalletService {
 
     /**
      * FIX BUG #20: Calculate day P&L including both realized (closed today) and unrealized (opened today)
+     * FIX BUG #3: Include Redis-closed trades in day P&L (trades closed via virtual engine
+     *   that may not yet be persisted to MongoDB)
      */
     private double calculateDayPnl() {
         try {
@@ -483,7 +439,7 @@ public class WalletService {
 
             double dayPnl = 0;
 
-            // 1. Get realized P&L from trades closed today
+            // 1. Get realized P&L from trades closed today (MongoDB)
             Document closedTodayQuery = new Document("exitTime",
                 new Document("$gte", startOfDayMs));
 
@@ -494,7 +450,40 @@ public class WalletService {
                 }
             }
 
-            // 2. FIX: Add unrealized P&L from positions opened today
+            // 2. Get realized P&L from Redis-closed positions that closed today
+            //    These are trades closed via the virtual trading engine that may not
+            //    yet be written to MongoDB.
+            if (redisTemplate != null) {
+                Set<String> positionKeys = redisTemplate.keys("virtual:positions:*");
+                if (positionKeys != null) {
+                    for (String key : positionKeys) {
+                        try {
+                            String value = redisTemplate.opsForValue().get(key);
+                            if (value != null) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> pos = objectMapper.readValue(value, Map.class);
+                                int qtyOpen = pos.get("qtyOpen") != null ? ((Number) pos.get("qtyOpen")).intValue() : 0;
+                                String status = pos.get("status") != null ? pos.get("status").toString() : "";
+                                Double pnl = pos.get("realizedPnl") != null ? ((Number) pos.get("realizedPnl")).doubleValue() : null;
+
+                                boolean isClosed = qtyOpen == 0 || "CLOSED".equals(status);
+                                if (isClosed && pnl != null && pnl != 0) {
+                                    // Check if this position was closed today using updatedAt timestamp
+                                    long updatedAtMs = pos.get("updatedAt") != null ?
+                                            ((Number) pos.get("updatedAt")).longValue() : 0;
+                                    if (updatedAtMs >= startOfDayMs) {
+                                        dayPnl += pnl;
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            // Skip unparseable positions
+                        }
+                    }
+                }
+            }
+
+            // 3. Add unrealized P&L from positions opened today
             List<PositionDTO> positions = getPositionsFromRedis();
             for (PositionDTO pos : positions) {
                 if (pos.getQuantity() > 0 && pos.getOpenedAt() != null) {
@@ -588,25 +577,6 @@ public class WalletService {
     }
 
     private String resolveCompanyName(String scripCode) {
-        if (scripCode == null || scripCode.isEmpty()) return scripCode;
-        return getScripNameCache().getOrDefault(scripCode, scripCode);
-    }
-
-    private Map<String, String> getScripNameCache() {
-        if (scripNameCache == null) {
-            synchronized (this) {
-                if (scripNameCache == null) {
-                    Map<String, String> cache = new HashMap<>();
-                    scripGroupRepository.findAll().forEach(sg -> {
-                        if (sg.getCompanyName() != null && !sg.getCompanyName().isEmpty()) {
-                            cache.put(sg.getId(), sg.getCompanyName());
-                        }
-                    });
-                    log.info("Loaded {} scrip name mappings from ScripGroup", cache.size());
-                    scripNameCache = cache;
-                }
-            }
-        }
-        return scripNameCache;
+        return scripLookup.resolve(scripCode);
     }
 }

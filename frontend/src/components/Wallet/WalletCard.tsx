@@ -19,6 +19,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
     if (prevDayPnl.current !== null && prevDayPnl.current !== wallet.dayPnl) {
       setDayPnlFlash(wallet.dayPnl > prevDayPnl.current ? 'flash-positive' : 'flash-negative')
       const t = setTimeout(() => setDayPnlFlash(''), 600)
+      prevDayPnl.current = wallet.dayPnl
       return () => clearTimeout(t)
     }
     prevDayPnl.current = wallet.dayPnl
@@ -30,6 +31,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
     if (prevTotalPnl.current !== null && prevTotalPnl.current !== wallet.totalPnl) {
       setTotalPnlFlash(wallet.totalPnl > prevTotalPnl.current ? 'flash-positive' : 'flash-negative')
       const t = setTimeout(() => setTotalPnlFlash(''), 600)
+      prevTotalPnl.current = wallet.totalPnl
       return () => clearTimeout(t)
     }
     prevTotalPnl.current = wallet.totalPnl
@@ -53,7 +55,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
   }
 
   const formatPercent = (value: number) => {
-    return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
+    return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
   }
 
   const pnlColor = wallet.totalPnl >= 0 ? 'num-positive' : 'num-negative'
@@ -98,7 +100,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
             {formatCurrency(wallet.dayPnl)}
           </div>
           <div className={`text-xs ${dayPnlColor}`}>
-            {formatPercent((wallet.dayPnl / wallet.initialCapital) * 100)}
+            {formatPercent(wallet.initialCapital ? (wallet.dayPnl / wallet.initialCapital) * 100 : 0)}
           </div>
         </div>
 
@@ -109,7 +111,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
             {formatCurrency(wallet.totalPnl)}
           </div>
           <div className={`text-xs ${pnlColor}`}>
-            {formatPercent((wallet.totalPnl / wallet.initialCapital) * 100)}
+            {formatPercent(wallet.initialCapital ? (wallet.totalPnl / wallet.initialCapital) * 100 : 0)}
           </div>
         </div>
       </div>
@@ -130,7 +132,7 @@ export default function WalletCard({ wallet }: WalletCardProps) {
         </div>
         <div>
           <div className={`text-xl font-bold ${wallet.winRate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {wallet.winRate.toFixed(1)}%
+            {(wallet.winRate ?? 0).toFixed(1)}%
           </div>
           <div className="text-xs text-slate-400">Win Rate</div>
         </div>

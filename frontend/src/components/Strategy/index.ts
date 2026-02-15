@@ -8,3 +8,4 @@ export { PositionedCard } from './PositionedCard';
 export { StrategyTabContent } from './StrategyTabContent';
 export { FudkiiTabContent } from './FudkiiTabContent';
 export { FukaaTabContent } from './FukaaTabContent';
+export { PivotTabContent } from './PivotTabContent';

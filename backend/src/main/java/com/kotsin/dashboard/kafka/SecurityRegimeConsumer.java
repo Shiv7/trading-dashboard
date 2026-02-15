@@ -3,6 +3,7 @@ package com.kotsin.dashboard.kafka;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SecurityRegimeConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -78,7 +80,7 @@ public class SecurityRegimeConsumer {
                 Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")).toString());
 
         data.put("scripCode", root.path("scripCode").asText());
-        data.put("companyName", root.path("companyName").asText(root.path("scripCode").asText()));
+        data.put("companyName", scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")));
 
         // Trend
         data.put("trendDirection", root.path("trendDirection").asInt(0));

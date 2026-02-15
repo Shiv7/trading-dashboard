@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.IPUSignalDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class IPUSignalConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -137,7 +139,7 @@ public class IPUSignalConsumer {
 
         return IPUSignalDTO.builder()
                 .scripCode(scripCode)
-                .companyName(symbol)
+                .companyName(scripLookup.resolve(scripCode, symbol))
                 .timeframe(timeframe)
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
                 .ipuFinalScore(ipuFinalScore)

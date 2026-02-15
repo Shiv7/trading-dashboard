@@ -62,7 +62,7 @@ public class PerformanceAnalyticsService {
     /**
      * Get comprehensive performance metrics
      */
-    public PerformanceMetrics getPerformanceMetrics() {
+    public synchronized PerformanceMetrics getPerformanceMetrics() {
         if (cachedMetrics != null && System.currentTimeMillis() - lastCalculation < 60000) {
             return cachedMetrics;
         }
@@ -88,7 +88,8 @@ public class PerformanceAnalyticsService {
         int totalTrades = trades.size();
         long wins = trades.stream().filter(t -> isWin(t)).count();
         long losses = trades.stream().filter(t -> isLoss(t)).count();
-        double winRate = totalTrades > 0 ? (double) wins / totalTrades : 0;
+        long decisiveTrades = wins + losses;
+        double winRate = decisiveTrades > 0 ? (double) wins / decisiveTrades * 100 : 0;
 
         // P&L
         double totalPnl = trades.stream().mapToDouble(TradeDTO::getPnl).sum();
@@ -264,6 +265,12 @@ public class PerformanceAnalyticsService {
         LocalDateTime maxDrawdownEnd = null;
         LocalDateTime currentDrawdownStart = null;
 
+        // Initialize to first trade's exit time so it's non-null if first trade is a loss
+        List<TradeDTO> sortedTrades = trades;
+        if (!sortedTrades.isEmpty()) {
+            currentDrawdownStart = sortedTrades.get(0).getExitTime();
+        }
+
         for (TradeDTO trade : trades) {
             cumulative += trade.getPnl();
 
@@ -296,8 +303,8 @@ public class PerformanceAnalyticsService {
     private Map<String, SourcePerformance> calculateBySource(List<TradeDTO> trades) {
         Map<String, List<TradeDTO>> bySource = trades.stream()
                 .collect(Collectors.groupingBy(t -> {
-                    // Extract source from signal or use UNKNOWN
-                    return "UNKNOWN"; // Would need signal source in TradeDTO
+                    return t.getStrategy() != null && !t.getStrategy().isEmpty()
+                        ? t.getStrategy() : "UNKNOWN";
                 }));
 
         Map<String, SourcePerformance> result = new HashMap<>();
@@ -342,13 +349,15 @@ public class PerformanceAnalyticsService {
     }
 
     private Map<String, OutcomeStats> calculateByCategory(List<TradeDTO> trades) {
-        // Group by side (LONG/SHORT) as proxy for category
-        Map<String, List<TradeDTO>> bySide = trades.stream()
+        Map<String, List<TradeDTO>> byCategory = trades.stream()
                 .filter(t -> t.getSide() != null)
-                .collect(Collectors.groupingBy(TradeDTO::getSide));
+                .collect(Collectors.groupingBy(t -> {
+                    return t.getStrategy() != null && !t.getStrategy().isEmpty()
+                        ? t.getStrategy() : (t.getSide() != null ? t.getSide() : "UNKNOWN");
+                }));
 
         Map<String, OutcomeStats> result = new HashMap<>();
-        for (var entry : bySide.entrySet()) {
+        for (var entry : byCategory.entrySet()) {
             List<TradeDTO> sideTrades = entry.getValue();
             long wins = sideTrades.stream().filter(this::isWin).count();
             double pnl = sideTrades.stream().mapToDouble(TradeDTO::getPnl).sum();
@@ -386,6 +395,10 @@ public class PerformanceAnalyticsService {
                 tempWinStreak = 0;
                 maxLossStreak = Math.max(maxLossStreak, tempLossStreak);
                 lastWasWin = false;
+            } else {
+                // Breakeven/trailing trades break both streaks
+                tempWinStreak = 0;
+                tempLossStreak = 0;
             }
         }
 
@@ -429,7 +442,7 @@ public class PerformanceAnalyticsService {
                 .build();
     }
 
-    private void invalidateCache() {
+    private synchronized void invalidateCache() {
         cachedMetrics = null;
     }
 

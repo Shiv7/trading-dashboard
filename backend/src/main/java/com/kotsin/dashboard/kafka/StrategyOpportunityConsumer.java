@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.strategy.ConditionCheckDTO;
 import com.kotsin.dashboard.model.dto.strategy.StrategyOpportunityDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +34,7 @@ public class StrategyOpportunityConsumer {
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -95,7 +97,7 @@ public class StrategyOpportunityConsumer {
     private StrategyOpportunityDTO parseOpportunity(JsonNode root) {
         StrategyOpportunityDTO.StrategyOpportunityDTOBuilder builder = StrategyOpportunityDTO.builder()
                 .scripCode(root.path("scripCode").asText())
-                .companyName(root.path("companyName").asText())
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")))
                 .strategyId(root.path("strategyId").asText())
                 .direction(root.path("direction").asText())
                 .opportunityScore(root.path("opportunityScore").asDouble())

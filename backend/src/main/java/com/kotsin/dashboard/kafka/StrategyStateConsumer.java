@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.strategy.*;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,7 @@ import java.util.stream.StreamSupport;
 public class StrategyStateConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -120,7 +122,7 @@ public class StrategyStateConsumer {
     private InstrumentStateSnapshotDTO parseSnapshot(JsonNode root) {
         InstrumentStateSnapshotDTO.InstrumentStateSnapshotDTOBuilder builder = InstrumentStateSnapshotDTO.builder()
                 .scripCode(root.path("scripCode").asText())
-                .companyName(root.path("companyName").asText())
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")))
                 .state(root.path("state").asText())
                 .stateTimestamp(root.path("stateTimestamp").asLong())
                 .stateEntryTime(root.path("stateEntryTime").asLong())

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
+import com.kotsin.dashboard.service.ScripLookupService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +44,7 @@ public class PivotConfluenceConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -73,9 +75,11 @@ public class PivotConfluenceConsumer {
 
     public PivotConfluenceConsumer(
             WebSocketSessionManager sessionManager,
-            @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate) {
+            @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
+            ScripLookupService scripLookup) {
         this.sessionManager = sessionManager;
         this.redisTemplate = redisTemplate;
+        this.scripLookup = scripLookup;
     }
 
     @PostConstruct
@@ -134,8 +138,9 @@ public class PivotConfluenceConsumer {
 
                 String symbol = (String) pivotData.get("symbol");
                 String companyName = (String) pivotData.get("companyName");
-                String displayName = symbol != null && !symbol.isEmpty() ? symbol :
-                        (companyName != null && !companyName.isEmpty() ? companyName : scripCode);
+                String displayName = scripLookup.resolve(scripCode,
+                        symbol != null && !symbol.isEmpty() ? symbol :
+                        (companyName != null && !companyName.isEmpty() ? companyName : null));
 
                 log.info("PIVOT CONFLUENCE: {} ({}) direction={} score={} R:R={} [signals today: {}]",
                         displayName,
@@ -187,7 +192,7 @@ public class PivotConfluenceConsumer {
 
         data.put("scripCode", root.path("scripCode").asText());
         data.put("symbol", root.path("symbol").asText(""));
-        data.put("companyName", root.path("companyName").asText(""));
+        data.put("companyName", scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")));
         data.put("exchange", root.path("exchange").asText(""));
         data.put("triggered", root.path("triggered").asBoolean(false));
         data.put("direction", root.path("direction").asText("NEUTRAL"));
@@ -223,6 +228,27 @@ public class PivotConfluenceConsumer {
         data.put("stopLoss", root.path("stopLoss").asDouble(0));
         data.put("target", root.path("target").asDouble(0));
         data.put("riskReward", root.path("riskReward").asDouble(0));
+
+        // Retest details
+        data.put("hasConfirmedRetest", root.path("hasConfirmedRetest").asBoolean(false));
+        data.put("hasActiveBreakout", root.path("hasActiveBreakout").asBoolean(false));
+        data.put("retestLevel", root.path("retestLevel").asText(""));
+        data.put("retestQuality", root.path("retestQuality").asText(""));
+        data.put("firstRetest", root.path("firstRetest").asBoolean(false));
+
+        // ML Enrichment (from Python fastAnalayticsKotsin via Redis → StreamingCandle)
+        data.put("mlAvailable", root.path("mlAvailable").asBoolean(false));
+        if (root.path("mlAvailable").asBoolean(false)) {
+            data.put("mlPrediction", root.path("mlPrediction").asText("HOLD"));
+            data.put("mlConfidence", root.path("mlConfidence").asDouble(0));
+            data.put("mlRegime", root.path("mlRegime").asText("NEUTRAL_RANGE"));
+            data.put("mlRegimeScore", root.path("mlRegimeScore").asDouble(0));
+            data.put("mlRegimeConviction", root.path("mlRegimeConviction").asText("LOW"));
+            data.put("mlBetSignal", root.path("mlBetSignal").asDouble(0));
+            data.put("mlPositionSizeMultiplier", root.path("mlPositionSizeMultiplier").asDouble(0));
+            data.put("mlVpinToxicity", root.path("mlVpinToxicity").asDouble(0));
+            data.put("mlOrderFlowImbalance", root.path("mlOrderFlowImbalance").asDouble(0));
+        }
 
         return data;
     }

@@ -3,6 +3,7 @@ package com.kotsin.dashboard.kafka;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.TradingSignalDTO;
 import com.kotsin.dashboard.model.dto.TradingSignalDTO.ConfirmationStatus;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.service.TradingSignalService;
 import com.kotsin.dashboard.websocket.DashboardWebSocketHandler;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +27,7 @@ public class TradingSignalConsumer {
     private final TradingSignalService tradingSignalService;
     private final DashboardWebSocketHandler webSocketHandler;
     private final ObjectMapper objectMapper;
+    private final ScripLookupService scripLookup;
 
     @KafkaListener(
             topics = "${kafka.topic.trading-signals:trading-signals-v2}",
@@ -77,7 +79,7 @@ public class TradingSignalConsumer {
                 .symbol(getString(payload, "symbol"))
                 .scripCode(getString(payload, "scripCode"))
                 .exchange(getString(payload, "exchange"))
-                .companyName(getString(payload, "companyName"))
+                .companyName(scripLookup.resolve(getString(payload, "scripCode"), getString(payload, "companyName")))
                 .timeframe(getString(payload, "timeframe"))
                 .state(getString(payload, "state"))
                 .event(getString(payload, "event"))

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.FamilyScoreDTO;
 import com.kotsin.dashboard.service.ScoreExplainerService;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +40,7 @@ public class FamilyScoreConsumer {
     private final WebSocketSessionManager sessionManager;
     private final ScoreExplainerService scoreExplainerService;
     private final RedisTemplate<String, String> redisTemplate;
+    private final ScripLookupService scripLookup;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -150,7 +152,7 @@ public class FamilyScoreConsumer {
 
         FamilyScoreDTO.FamilyScoreDTOBuilder builder = FamilyScoreDTO.builder()
                 .scripCode(familyId)
-                .companyName(symbol)
+                .companyName(scripLookup.resolve(familyId, symbol))
                 .timeframe(timeframe)
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
                 .humanReadableTime(root.path("humanReadableTime").asText(""))

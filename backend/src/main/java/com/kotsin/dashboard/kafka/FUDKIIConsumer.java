@@ -7,6 +7,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import com.kotsin.dashboard.model.dto.SignalDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +50,7 @@ public class FUDKIIConsumer {
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
     private final SignalConsumer signalConsumer;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -81,10 +83,12 @@ public class FUDKIIConsumer {
     public FUDKIIConsumer(
             WebSocketSessionManager sessionManager,
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
-            SignalConsumer signalConsumer) {
+            SignalConsumer signalConsumer,
+            ScripLookupService scripLookup) {
         this.sessionManager = sessionManager;
         this.redisTemplate = redisTemplate;
         this.signalConsumer = signalConsumer;
+        this.scripLookup = scripLookup;
     }
 
     @PostConstruct
@@ -145,8 +149,9 @@ public class FUDKIIConsumer {
                 String direction = (String) fudkiiData.get("direction");
                 String symbol = (String) fudkiiData.get("symbol");
                 String companyName = (String) fudkiiData.get("companyName");
-                String displayName = symbol != null && !symbol.isEmpty() ? symbol :
-                        (companyName != null && !companyName.isEmpty() ? companyName : scripCode);
+                String displayName = scripLookup.resolve(scripCode,
+                        symbol != null && !symbol.isEmpty() ? symbol :
+                        (companyName != null && !companyName.isEmpty() ? companyName : null));
 
                 log.info("FUDKII TRIGGER: {} ({}) direction={} reason={} price={} score={} [signals today: {}]",
                         displayName,
@@ -237,7 +242,7 @@ public class FUDKIIConsumer {
         // Basic info
         data.put("scripCode", root.path("scripCode").asText());
         data.put("symbol", root.path("symbol").asText());
-        data.put("companyName", root.path("companyName").asText());
+        data.put("companyName", scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")));
         data.put("exchange", root.path("exchange").asText());
 
         // Trigger info

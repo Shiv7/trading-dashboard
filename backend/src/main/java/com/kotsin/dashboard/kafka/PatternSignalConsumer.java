@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.PatternSignalDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,7 @@ import java.util.stream.Collectors;
 public class PatternSignalConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -220,7 +222,7 @@ public class PatternSignalConsumer {
                 .patternId(patternId)
                 .signalId(root.path("signalId").asText())
                 .scripCode(root.path("scripCode").asText(root.path("familyId").asText()))
-                .companyName(root.path("companyName").asText(root.path("symbol").asText(root.path("scripCode").asText())))
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(root.path("familyId").asText()), root.path("companyName").asText("")))
                 .patternType(root.path("patternType").asText(root.path("type").asText("UNKNOWN")))
                 .direction(root.path("direction").asText("NEUTRAL"))
                 .status("ACTIVE")

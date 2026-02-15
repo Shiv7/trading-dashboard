@@ -35,19 +35,19 @@ export default function ActivePositionBar({ position, onClose, className = '' }:
                         </span>
                         <div className="flex items-center gap-2 text-sm text-slate-400">
                             <span>@</span>
-                            <span className="text-white">{position.avgEntryPrice.toFixed(2)}</span>
+                            <span className="text-white">{(position.avgEntryPrice ?? 0).toFixed(2)}</span>
                             <span>→</span>
-                            <span className="text-white">{position.currentPrice.toFixed(2)}</span>
+                            <span className="text-white">{(position.currentPrice ?? 0).toFixed(2)}</span>
                         </div>
                     </div>
 
                     {/* Center: Levels */}
                     <div className="hidden md:flex items-center gap-4 text-xs text-slate-400">
                         <span>
-                            SL: <span className="text-red-400">{position.stopLoss.toFixed(2)}</span>
+                            SL: <span className="text-red-400">{(position.stopLoss ?? 0).toFixed(2)}</span>
                         </span>
                         <span>
-                            T1: <span className="text-emerald-400">{position.target1.toFixed(2)}</span>
+                            T1: <span className="text-emerald-400">{(position.target1 ?? 0).toFixed(2)}</span>
                         </span>
                         {position.tp1Hit && (
                             <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs">
@@ -60,15 +60,15 @@ export default function ActivePositionBar({ position, onClose, className = '' }:
                     <div className="flex items-center gap-4">
                         <div className="text-right">
                             <div className={`text-xl font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(0)}
+                                {pnl > 0 ? '+' : ''}₹{pnl.toFixed(0)}
                             </div>
                             <div className="text-xs text-slate-400">
                                 <span className={pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-                                    {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
+                                    {pnlPercent > 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
                                 </span>
                                 <span className="mx-1">|</span>
                                 <span className={rMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-                                    {rMultiple >= 0 ? '+' : ''}{rMultiple.toFixed(1)}R
+                                    {rMultiple > 0 ? '+' : ''}{rMultiple.toFixed(1)}R
                                 </span>
                             </div>
                         </div>

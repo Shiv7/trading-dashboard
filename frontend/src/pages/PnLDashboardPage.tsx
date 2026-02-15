@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { fetchJson, putJson } from '../services/api'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
@@ -146,19 +146,25 @@ export default function PnLDashboardPage() {
   }
 
   const formatCurrency = (n: number) => {
-    if (Math.abs(n) >= 100000) return (n >= 0 ? '+' : '') + (n / 100000).toFixed(1) + 'L'
-    if (Math.abs(n) >= 1000) return (n >= 0 ? '+' : '') + (n / 1000).toFixed(1) + 'K'
-    return (n >= 0 ? '+' : '') + n.toFixed(0)
+    n = Number(n) || 0
+    const sign = n > 0 ? '+' : n < 0 ? '-' : ''
+    const abs = Math.abs(n)
+    if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(1) + 'L'
+    if (abs >= 1000) return sign + '₹' + (abs / 1000).toFixed(1) + 'K'
+    return sign + '₹' + abs.toFixed(0)
   }
 
-  const formatPct = (n: number) => (n >= 0 ? '+' : '') + n.toFixed(2) + '%'
+  const formatPct = (n: number) => {
+    n = Number(n) || 0
+    return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`
+  }
 
   // Summary Cards
   const statCards = summary ? [
-    { label: 'Total P&L', value: `₹${formatCurrency(summary.realizedPnl)}`, sub: formatPct((summary.realizedPnl / summary.initialCapital) * 100), positive: summary.realizedPnl >= 0 },
+    { label: 'Total P&L', value: formatCurrency(summary.realizedPnl), sub: formatPct(summary.initialCapital ? (summary.realizedPnl / summary.initialCapital) * 100 : 0), positive: summary.realizedPnl >= 0 },
     { label: 'Win Rate', value: `${summary.winRate?.toFixed(1) || 0}%`, sub: `${summary.winCount}W / ${summary.lossCount}L`, positive: (summary.winRate || 0) >= 50 },
     { label: 'Sharpe Ratio', value: metrics?.sharpeRatio?.toFixed(2) || '-', sub: '', positive: (metrics?.sharpeRatio || 0) >= 1 },
-    { label: 'Max Drawdown', value: metrics ? `${metrics.maxDrawdown?.toFixed(1)}%` : '-', sub: metrics ? `₹${formatCurrency(metrics.maxDrawdownAmount || 0)}` : '', positive: false },
+    { label: 'Max Drawdown', value: metrics ? `${metrics.maxDrawdown?.toFixed(1)}%` : '-', sub: metrics ? formatCurrency(metrics.maxDrawdownAmount || 0) : '', positive: false },
     { label: 'Profit Factor', value: metrics?.profitFactor?.toFixed(1) || '-', sub: '', positive: (metrics?.profitFactor || 0) >= 1.5 },
   ] : []
 
@@ -301,7 +307,7 @@ export default function PnLDashboardPage() {
                       />
                     </div>
                     <span className={`text-sm font-mono tabular-nums w-20 text-right ${inst.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      ₹{formatCurrency(inst.totalPnl)}
+                      {formatCurrency(inst.totalPnl)}
                     </span>
                   </div>
                 )
@@ -330,7 +336,7 @@ export default function PnLDashboardPage() {
                       />
                     </div>
                     <span className={`text-sm font-mono tabular-nums w-20 text-right ${strat.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      ₹{formatCurrency(strat.totalPnl)}
+                      {formatCurrency(strat.totalPnl)}
                     </span>
                   </div>
                 )
@@ -363,9 +369,8 @@ export default function PnLDashboardPage() {
             </thead>
             <tbody>
               {journal.map(trade => (
-                <>
+                <React.Fragment key={trade.id}>
                   <tr
-                    key={trade.id}
                     onClick={() => setExpandedTrade(expandedTrade === trade.id ? null : trade.id)}
                     className="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors cursor-pointer"
                   >
@@ -380,11 +385,11 @@ export default function PnLDashboardPage() {
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-sm text-slate-300 tabular-nums">{trade.entryPrice?.toFixed(2)}</td>
                     <td className="px-4 py-3 text-right font-mono text-sm text-slate-300 tabular-nums">{trade.exitPrice?.toFixed(2)}</td>
-                    <td className={`px-4 py-3 text-right font-mono text-sm font-medium tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {trade.pnl >= 0 ? '+' : ''}₹{trade.pnl?.toFixed(0)}
+                    <td className={`px-4 py-3 text-right font-mono text-sm font-medium tabular-nums ${(trade.pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {formatCurrency(trade.pnl ?? 0)}
                     </td>
                     <td className={`px-4 py-3 text-right font-mono text-sm tabular-nums ${(trade.rMultiple || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {trade.rMultiple?.toFixed(1)}R
+                      {(trade.rMultiple ?? 0).toFixed(1)}R
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-400">{trade.exitReason}</td>
                   </tr>
@@ -394,7 +399,7 @@ export default function PnLDashboardPage() {
                         <div className="grid grid-cols-4 gap-4 mb-4 text-sm">
                           <div><span className="text-slate-500">Duration:</span> <span className="text-white">{trade.durationMinutes}m</span></div>
                           <div><span className="text-slate-500">Strategy:</span> <span className="text-white">{trade.strategy}</span></div>
-                          <div><span className="text-slate-500">P&L %:</span> <span className={trade.pnlPercent >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent)}</span></div>
+                          <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
                           <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>
                         </div>
                         {trade.tags?.length > 0 && (
@@ -431,7 +436,7 @@ export default function PnLDashboardPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               ))}
             </tbody>
           </table>

@@ -225,8 +225,8 @@ export default function DashboardPage() {
                   />
                   <StatCard
                     label="Win Rate"
-                    value={`${tradeStats.winRate.toFixed(0)}%`}
-                    positive={tradeStats.winRate >= 50}
+                    value={`${(tradeStats.winRate ?? 0).toFixed(0)}%`}
+                    positive={(tradeStats.winRate ?? 0) >= 50}
                   />
                   <StatCard
                     label="Total P&L"
@@ -235,8 +235,8 @@ export default function DashboardPage() {
                   />
                   <StatCard
                     label="Avg R"
-                    value={`${tradeStats.avgRMultiple >= 0 ? '+' : ''}${tradeStats.avgRMultiple.toFixed(2)}R`}
-                    positive={tradeStats.avgRMultiple >= 0}
+                    value={`${(tradeStats.avgRMultiple ?? 0) >= 0 ? '+' : ''}${(tradeStats.avgRMultiple ?? 0).toFixed(2)}R`}
+                    positive={(tradeStats.avgRMultiple ?? 0) >= 0}
                   />
                 </div>
               ) : (
@@ -370,7 +370,7 @@ function SignalMiniCard({ signal }: { signal: Signal }) {
         </span>
       </div>
       <div className="flex items-center justify-between text-xs text-slate-400">
-        <span>Conf: {(signal.confidence * 100).toFixed(0)}%</span>
+        <span>Conf: {((signal.confidence ?? 0) * 100).toFixed(0)}%</span>
         <span className={signal.allGatesPassed ? 'text-emerald-400' : 'text-red-400'}>
           {signal.allGatesPassed ? '✓ Pass' : '✗ Fail'}
         </span>
@@ -393,10 +393,10 @@ function StatCard({ label, value, positive }: { label: string; value: string; po
 }
 
 function formatCurrency(amount: number): string {
-  if (Math.abs(amount) >= 100000) {
-    return `₹${(amount / 100000).toFixed(1)}L`
-  } else if (Math.abs(amount) >= 1000) {
-    return `₹${(amount / 1000).toFixed(1)}K`
-  }
-  return `₹${amount.toFixed(0)}`
+  amount = Number(amount) || 0
+  const sign = amount > 0 ? '+' : amount < 0 ? '-' : ''
+  const abs = Math.abs(amount)
+  if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(1)}L`
+  if (abs >= 1000) return `${sign}₹${(abs / 1000).toFixed(1)}K`
+  return `${sign}₹${abs.toFixed(0)}`
 }

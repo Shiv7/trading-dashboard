@@ -5,87 +5,6 @@ import {
   ConditionCheck
 } from '../../types/strategy';
 
-// ---- SAMPLE CARDS (flip SHOW_SAMPLE to false after UI review) ----
-const SHOW_SAMPLE = false;
-
-// FUDKII sample: ST bearish + BB squeeze → imagine bullish breakout
-const SAMPLE_FUDKII: StrategyOpportunity = {
-  scripCode: '535755',
-  companyName: 'CRUDEOIL25FEBFUT',
-  strategyId: 'FUDKII',
-  direction: 'BULLISH',
-  opportunityScore: 70,
-  conditions: [
-    { conditionName: 'ST Flip', passed: false, currentValue: 0.45, requiredValue: 0, comparison: '', progressPercent: 55, displayValue: '0.45% away' },
-    { conditionName: 'BB Breakout', passed: false, currentValue: 0.43, requiredValue: 1.5, comparison: '', progressPercent: 71, displayValue: '0.43% to band' },
-    { conditionName: 'BB Squeeze', passed: true, currentValue: 0.8, requiredValue: 1.2, comparison: '', progressPercent: 100, displayValue: 'Squeeze active' },
-    { conditionName: 'Volume', passed: true, currentValue: 0.4, requiredValue: 1.0, comparison: '', progressPercent: 100, displayValue: 'Dried 0.4x' },
-  ],
-  nextConditionNeeded: 'BB squeeze + dried volume (0.4x avg) — pressure building',
-  estimatedTimeframe: 'Next 30m candle',
-  currentPrice: 5842.00,
-  entryLevel: 5867.00,
-  keyLevel: 5981.00,
-  target2: 6038.00,
-  superTrendLevel: 5810.00,
-  expectedRR: 2.00,
-  timestamp: Date.now(),
-  strategyContext: 'ST below (2 bars) · Squeeze · Risk ₹57',
-};
-
-// PIVOT sample: HTF bullish, LTF approaching, near Daily R1 + Weekly P
-const SAMPLE_PIVOT: StrategyOpportunity = {
-  scripCode: '500325',
-  companyName: 'RELIANCE',
-  strategyId: 'PIVOT',
-  direction: 'BULLISH',
-  opportunityScore: 72,
-  conditions: [
-    { conditionName: 'HTF Bias', passed: true, currentValue: 85, requiredValue: 30, comparison: '', progressPercent: 100, displayValue: 'BULLISH (85%)' },
-    { conditionName: 'LTF Confirm', passed: true, currentValue: 62, requiredValue: 50, comparison: '', progressPercent: 100, displayValue: 'Aligned 62%' },
-    { conditionName: 'Pivot Levels', passed: false, currentValue: 1, requiredValue: 2, comparison: '', progressPercent: 50, displayValue: '1 level nearby' },
-    { conditionName: 'R:R', passed: false, currentValue: 1.2, requiredValue: 1.5, comparison: '', progressPercent: 80, displayValue: '1.20:1' },
-  ],
-  nextConditionNeeded: 'Pivot confluence building — 1 of 2 levels nearby',
-  estimatedTimeframe: 'Awaiting price at pivot levels',
-  currentPrice: 1285.50,
-  entryLevel: 1285.50,
-  keyLevel: 1302.00,
-  superTrendLevel: 1271.80,
-  expectedRR: 1.20,
-  timestamp: Date.now(),
-  strategyContext: 'HTF: BULLISH 85% · Daily_R1 · R:R 1.2:1',
-};
-
-// MICROALPHA sample: Conviction building, trend-following mode
-const SAMPLE_MICROALPHA: StrategyOpportunity = {
-  scripCode: '500180',
-  companyName: 'HDFCBANK',
-  strategyId: 'MICROALPHA',
-  direction: 'BEARISH',
-  opportunityScore: 58,
-  conditions: [
-    { conditionName: 'Conviction', passed: false, currentValue: 33, requiredValue: 40, comparison: '', progressPercent: 82, displayValue: '33 / 40' },
-    { conditionName: 'Mode Entry', passed: false, currentValue: 0, requiredValue: 1, comparison: '', progressPercent: 0, displayValue: 'TREND_FOLLOWING Fail' },
-    { conditionName: 'Momentum', passed: false, currentValue: 0, requiredValue: 1, comparison: '', progressPercent: 0, displayValue: 'Stalled' },
-    { conditionName: 'Direction', passed: true, currentValue: 1, requiredValue: 1, comparison: '', progressPercent: 100, displayValue: 'BEARISH' },
-  ],
-  nextConditionNeeded: 'Conviction at 33 — need 40 to trigger (mode: TREND_FOLLOWING)',
-  estimatedTimeframe: 'Next 1m candle',
-  currentPrice: 1642.30,
-  entryLevel: 1642.30,
-  keyLevel: 1618.50,
-  superTrendLevel: 1664.20,
-  expectedRR: 1.09,
-  timestamp: Date.now(),
-  strategyContext: 'Mode: TREND FOLLOWING · Conv: 33/40 · BEARISH',
-  tradingMode: 'TREND_FOLLOWING',
-};
-
-const SAMPLE_OPPORTUNITIES = [SAMPLE_FUDKII, SAMPLE_PIVOT, SAMPLE_MICROALPHA];
-
-// ---- END SAMPLES ----
-
 interface OpportunitiesPanelProps {
   opportunities: StrategyOpportunity[];
   onSelect?: (scripCode: string) => void;
@@ -137,11 +56,7 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
   onSelect,
   maxItems = 10
 }) => {
-  const allOpps = SHOW_SAMPLE
-    ? [...SAMPLE_OPPORTUNITIES, ...opportunities]
-    : opportunities;
-
-  if (!allOpps || allOpps.length === 0) {
+  if (!opportunities || opportunities.length === 0) {
     return (
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
         <h3 className="text-lg font-medium text-gray-200 mb-4 flex items-center gap-2">
@@ -155,8 +70,7 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
     );
   }
 
-  const displayedOpportunities = allOpps.slice(0, maxItems);
-  const sampleCount = SHOW_SAMPLE ? SAMPLE_OPPORTUNITIES.length : 0;
+  const displayedOpportunities = opportunities.slice(0, maxItems);
 
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
@@ -166,7 +80,7 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
           Upcoming Opportunities
         </h3>
         <span className="text-sm text-gray-500">
-          {allOpps.length} total
+          {opportunities.length} total
         </span>
       </div>
 
@@ -176,15 +90,14 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
             key={`${opp.scripCode}-${opp.strategyId}-${idx}`}
             opportunity={opp}
             rank={idx + 1}
-            isSample={SHOW_SAMPLE && idx < sampleCount}
             onClick={() => onSelect?.(opp.scripCode)}
           />
         ))}
       </div>
 
-      {allOpps.length > maxItems && (
+      {opportunities.length > maxItems && (
         <div className="mt-4 text-center text-sm text-gray-500">
-          +{allOpps.length - maxItems} more opportunities
+          +{opportunities.length - maxItems} more opportunities
         </div>
       )}
     </div>
@@ -194,7 +107,6 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
 interface OpportunityRowProps {
   opportunity: StrategyOpportunity;
   rank: number;
-  isSample?: boolean;
   onClick?: () => void;
 }
 
@@ -210,7 +122,6 @@ function getVolumeLabel(c: ConditionCheck): string {
 const OpportunityRow: React.FC<OpportunityRowProps> = ({
   opportunity: opp,
   rank,
-  isSample,
   onClick
 }) => {
   const scoreColor = opp.opportunityScore >= 80 ? 'text-green-400' :
@@ -234,16 +145,9 @@ const OpportunityRow: React.FC<OpportunityRowProps> = ({
 
   return (
     <div
-      className={`rounded-lg p-3 hover:bg-gray-700/50 transition-colors cursor-pointer ${
-        isSample ? 'bg-gray-900/50 border border-dashed border-yellow-600/40' : 'bg-gray-900/50'
-      }`}
+      className="rounded-lg p-3 hover:bg-gray-700/50 transition-colors cursor-pointer bg-gray-900/50"
       onClick={onClick}
     >
-      {/* Sample badge */}
-      {isSample && (
-        <div className="text-[10px] text-yellow-500 font-mono mb-1">SAMPLE CARD — for UI review</div>
-      )}
-
       {/* Row 1: Instrument + Strategy badge + Score */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

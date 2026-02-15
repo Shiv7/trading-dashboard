@@ -7,6 +7,7 @@ import com.kotsin.dashboard.model.dto.PositionDTO;
 import com.kotsin.dashboard.model.dto.TradeDTO;
 import com.kotsin.dashboard.model.entity.UserTrade;
 import com.kotsin.dashboard.service.UserPnLService;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class TradeOutcomeConsumer {
     private final WebSocketSessionManager sessionManager;
     private final WalletService walletService;
     private final UserPnLService userPnLService;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -164,11 +166,19 @@ public class TradeOutcomeConsumer {
             rMultiple = estimatedRisk > 0 ? pnl / estimatedRisk : 0;
         }
 
+        // If side is SHORT and upstream sent naive P&L, correct the R-multiple sign
+        String side = determineSide(root);
+        if ("SHORT".equals(side) && isWin && rMultiple < 0) {
+            rMultiple = Math.abs(rMultiple);
+        } else if ("SHORT".equals(side) && !isWin && rMultiple > 0) {
+            rMultiple = -Math.abs(rMultiple);
+        }
+
         return TradeDTO.builder()
                 .tradeId(root.path("tradeId").asText(root.path("signalId").asText()))
                 .signalId(root.path("signalId").asText())
                 .scripCode(root.path("scripCode").asText())
-                .companyName(root.path("companyName").asText(root.path("scripCode").asText()))
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")))
                 .side(determineSide(root))
                 .status(status)
                 .entryPrice(entryPrice)

@@ -10,15 +10,11 @@ import { PositionedCard } from './PositionedCard';
 interface StrategyTabContentProps {
   strategyId: string;
   states: InstrumentStateSnapshot[];
-  samples?: InstrumentStateSnapshot[];
-  showSamples?: boolean;
 }
 
 export const StrategyTabContent: React.FC<StrategyTabContentProps> = ({
   strategyId,
   states,
-  samples,
-  showSamples,
 }) => {
   const config = getStrategyConfig(strategyId);
 
@@ -31,11 +27,6 @@ export const StrategyTabContent: React.FC<StrategyTabContentProps> = ({
   const watching = strategyStates.filter(s => s.state === 'WATCHING');
   const ready = strategyStates.filter(s => s.state === 'READY');
   const positioned = strategyStates.filter(s => s.state === 'POSITIONED');
-
-  // Sample snapshots grouped by state
-  const sampleWatching = showSamples && samples ? samples.filter(s => s.state === 'WATCHING') : [];
-  const sampleReady = showSamples && samples ? samples.filter(s => s.state === 'READY') : [];
-  const samplePositioned = showSamples && samples ? samples.filter(s => s.state === 'POSITIONED') : [];
 
   const findSetup = (snapshot: InstrumentStateSnapshot) =>
     snapshot.activeSetups?.find(s => matchesStrategy(s.strategyId, strategyId)) ?? snapshot.activeSetups?.[0];
@@ -62,24 +53,20 @@ export const StrategyTabContent: React.FC<StrategyTabContentProps> = ({
       </div>
 
       {/* Empty state */}
-      {totalCount === 0 && !showSamples && (
+      {totalCount === 0 && (
         <div className="text-center py-12 text-slate-500 bg-slate-800 rounded-lg border border-slate-700">
           No active {config.label} setups
         </div>
       )}
 
       {/* POSITIONED Section */}
-      {(positioned.length > 0 || samplePositioned.length > 0) && (
+      {positioned.length > 0 && (
         <StateSection
           title="POSITIONED"
           count={positioned.length}
           color="text-blue-400"
           icon={<BarChart2 className="w-4 h-4 text-blue-400" />}
         >
-          {samplePositioned.map(s => {
-            const setup = findSetup(s);
-            return setup ? <PositionedCard key={s.scripCode} snapshot={s} setup={setup} isSample /> : null;
-          })}
           {positioned.map(s => {
             const setup = findSetup(s);
             return setup ? <PositionedCard key={s.scripCode} snapshot={s} setup={setup} /> : null;
@@ -88,17 +75,13 @@ export const StrategyTabContent: React.FC<StrategyTabContentProps> = ({
       )}
 
       {/* READY Section */}
-      {(ready.length > 0 || sampleReady.length > 0) && (
+      {ready.length > 0 && (
         <StateSection
           title="READY"
           count={ready.length}
           color="text-green-400"
           icon={<CheckCircle2 className="w-4 h-4 text-green-400" />}
         >
-          {sampleReady.map(s => {
-            const setup = findSetup(s);
-            return setup ? <ReadyCard key={s.scripCode} snapshot={s} setup={setup} isSample /> : null;
-          })}
           {ready.map(s => {
             const setup = findSetup(s);
             return setup ? <ReadyCard key={s.scripCode} snapshot={s} setup={setup} /> : null;
@@ -107,17 +90,13 @@ export const StrategyTabContent: React.FC<StrategyTabContentProps> = ({
       )}
 
       {/* WATCHING Section */}
-      {(watching.length > 0 || sampleWatching.length > 0) && (
+      {watching.length > 0 && (
         <StateSection
           title="WATCHING"
           count={watching.length}
           color="text-yellow-400"
           icon={<Eye className="w-4 h-4 text-yellow-400" />}
         >
-          {sampleWatching.map(s => {
-            const setup = findSetup(s);
-            return setup ? <WatchingCard key={s.scripCode} snapshot={s} setup={setup} isSample /> : null;
-          })}
           {watching.map(s => {
             const setup = findSetup(s);
             return setup ? <WatchingCard key={s.scripCode} snapshot={s} setup={setup} /> : null;

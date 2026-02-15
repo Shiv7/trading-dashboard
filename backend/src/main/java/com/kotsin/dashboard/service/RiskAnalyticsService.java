@@ -40,17 +40,21 @@ public class RiskAnalyticsService {
                 .filter(s -> s.getTradeStatus() != null)
                 .collect(Collectors.toList());
 
+        ConcentrationRisk concentrationRisk = calculateConcentrationRisk(activeSignals);
+        DirectionExposure directionExposure = calculateDirectionExposure(activeSignals);
+        ValueAtRisk valueAtRisk = calculateVaR(completedTrades);
+
         return RiskMetrics.builder()
                 .portfolioExposure(calculatePortfolioExposure(activeSignals))
-                .concentrationRisk(calculateConcentrationRisk(activeSignals))
+                .concentrationRisk(concentrationRisk)
                 .sectorExposure(calculateSectorExposure(activeSignals))
-                .directionExposure(calculateDirectionExposure(activeSignals))
+                .directionExposure(directionExposure)
                 .riskBreakdown(calculateRiskBreakdown(activeSignals))
-                .valueAtRisk(calculateVaR(completedTrades))
+                .valueAtRisk(valueAtRisk)
                 .maxLossExposure(calculateMaxLossExposure(activeSignals))
                 .correlationMetrics(calculateCorrelationMetrics(activeSignals))
-                .riskScore(calculateOverallRiskScore(activeSignals, completedTrades))
-                .alerts(generateRiskAlerts(activeSignals, completedTrades))
+                .riskScore(calculateOverallRiskScore(concentrationRisk, directionExposure, valueAtRisk))
+                .alerts(generateRiskAlerts(activeSignals, completedTrades, concentrationRisk, directionExposure))
                 .lastUpdated(LocalDateTime.now())
                 .build();
     }
@@ -106,9 +110,9 @@ public class RiskAnalyticsService {
         }
 
         String riskLevel;
-        if (hhi < 0.15) {
+        if (hhi < 0.25) {
             riskLevel = "LOW";
-        } else if (hhi < 0.25) {
+        } else if (hhi < 0.40) {
             riskLevel = "MODERATE";
         } else {
             riskLevel = "HIGH";
@@ -157,10 +161,12 @@ public class RiskAnalyticsService {
 
     private RiskBreakdown calculateRiskBreakdown(List<SignalDTO> activeSignals) {
         double totalRiskAmount = activeSignals.stream()
+                .filter(s -> s.getStopLoss() > 0) // Skip signals without SL
                 .mapToDouble(s -> Math.abs(s.getEntryPrice() - s.getStopLoss()) * getPositionSize(s))
                 .sum();
 
-        double avgRiskPerTrade = activeSignals.isEmpty() ? 0 : totalRiskAmount / activeSignals.size();
+        long signalsWithSL = activeSignals.stream().filter(s -> s.getStopLoss() > 0).count();
+        double avgRiskPerTrade = signalsWithSL == 0 ? 0 : totalRiskAmount / signalsWithSL;
 
         double avgRiskReward = activeSignals.stream()
                 .filter(s -> s.getRiskRewardRatio() > 0)
@@ -178,8 +184,14 @@ public class RiskAnalyticsService {
 
     private ValueAtRisk calculateVaR(List<SignalDTO> completedTrades) {
         List<Double> returns = completedTrades.stream()
-                .filter(s -> s.getRMultiple() != null)
-                .map(SignalDTO::getRMultiple)
+                .filter(s -> s.getEntryPrice() > 0 && s.getRMultiple() != null)
+                .map(s -> {
+                    // Use P&L % = rMultiple * (risk per share / entry price)
+                    double riskPct = s.getStopLoss() > 0
+                            ? Math.abs(s.getEntryPrice() - s.getStopLoss()) / s.getEntryPrice()
+                            : 0.02; // default 2% risk
+                    return s.getRMultiple() * riskPct;
+                })
                 .collect(Collectors.toList());
 
         if (returns.isEmpty()) {
@@ -210,15 +222,16 @@ public class RiskAnalyticsService {
                 .orElse(var95);
 
         return ValueAtRisk.builder()
-                .var95(Math.abs(var95))
-                .var99(Math.abs(var99))
-                .expectedShortfall(Math.abs(expectedShortfall))
+                .var95(var95 < 0 ? Math.abs(var95) : 0)
+                .var99(var99 < 0 ? Math.abs(var99) : 0)
+                .expectedShortfall(expectedShortfall < 0 ? Math.abs(expectedShortfall) : 0)
                 .sampleSize(n)
                 .build();
     }
 
     private double calculateMaxLossExposure(List<SignalDTO> activeSignals) {
         return activeSignals.stream()
+                .filter(s -> s.getStopLoss() > 0) // Skip signals without SL
                 .mapToDouble(s -> Math.abs(s.getEntryPrice() - s.getStopLoss()) * getPositionSize(s))
                 .sum();
     }
@@ -239,24 +252,18 @@ public class RiskAnalyticsService {
                 .build();
     }
 
-    private RiskScore calculateOverallRiskScore(List<SignalDTO> activeSignals, List<SignalDTO> completedTrades) {
+    private RiskScore calculateOverallRiskScore(ConcentrationRisk concentration, DirectionExposure direction, ValueAtRisk var) {
         // Calculate overall risk score (0-100, higher = more risky)
-        double concentrationScore = 0;
-        double exposureScore = 0;
-        double varScore = 0;
 
         // Concentration component
-        ConcentrationRisk concentration = calculateConcentrationRisk(activeSignals);
-        concentrationScore = concentration.getHerfindahlIndex() * 100;
+        double concentrationScore = concentration.getHerfindahlIndex() * 100;
 
         // Exposure component (based on net direction bias)
-        DirectionExposure direction = calculateDirectionExposure(activeSignals);
         double directionBias = Math.abs(direction.getBullishPercent() - direction.getBearishPercent());
-        exposureScore = directionBias;
+        double exposureScore = directionBias;
 
         // VaR component
-        ValueAtRisk var = calculateVaR(completedTrades);
-        varScore = Math.min(var.getVar95() * 20, 100); // Scale VaR to 0-100
+        double varScore = Math.min(var.getVar95() * 20, 100); // Scale VaR to 0-100
 
         double overallScore = (concentrationScore * 0.3) + (exposureScore * 0.3) + (varScore * 0.4);
 
@@ -278,11 +285,11 @@ public class RiskAnalyticsService {
                 .build();
     }
 
-    private List<RiskAlert> generateRiskAlerts(List<SignalDTO> activeSignals, List<SignalDTO> completedTrades) {
+    private List<RiskAlert> generateRiskAlerts(List<SignalDTO> activeSignals, List<SignalDTO> completedTrades,
+                                                ConcentrationRisk concentration, DirectionExposure direction) {
         List<RiskAlert> alerts = new ArrayList<>();
 
         // Check concentration
-        ConcentrationRisk concentration = calculateConcentrationRisk(activeSignals);
         if ("HIGH".equals(concentration.getRiskLevel())) {
             alerts.add(RiskAlert.builder()
                     .type("CONCENTRATION")
@@ -293,7 +300,6 @@ public class RiskAnalyticsService {
         }
 
         // Check direction bias
-        DirectionExposure direction = calculateDirectionExposure(activeSignals);
         if (direction.getBullishPercent() > 80) {
             alerts.add(RiskAlert.builder()
                     .type("DIRECTION_BIAS")
@@ -342,10 +348,10 @@ public class RiskAnalyticsService {
         return alerts;
     }
 
-    private int getPositionSize(SignalDTO signal) {
+    private double getPositionSize(SignalDTO signal) {
         // Default position size, could be enhanced with actual position data
         double multiplier = signal.getPositionSizeMultiplier();
-        return multiplier > 0 ? (int) multiplier : 1;
+        return multiplier > 0 ? multiplier : 1.0;
     }
 
     // ======================== DTOs ========================

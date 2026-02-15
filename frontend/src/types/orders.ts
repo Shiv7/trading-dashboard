@@ -18,6 +18,7 @@ export interface CreateOrderRequest {
     trailingType?: TrailingType
     trailingValue?: number
     trailingStep?: number
+    signalSource?: string  // Strategy source: FUDKII, FUKAA, PIVOT, etc.
 }
 
 export interface ModifyPositionRequest {

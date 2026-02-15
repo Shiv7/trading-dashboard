@@ -3,16 +3,13 @@ import {
   RefreshCw, Filter, Activity, Eye, Target, BarChart2,
   Zap, CheckCircle2, Volume2
 } from 'lucide-react';
-import { StrategyCard, OpportunitiesPanel, StrategyTabContent, FudkiiTabContent, FukaaTabContent } from '../components/Strategy';
+import { StrategyCard, OpportunitiesPanel, StrategyTabContent, FudkiiTabContent, FukaaTabContent, PivotTabContent } from '../components/Strategy';
 import {
   InstrumentStateSnapshot,
   StrategyOpportunity,
   StrategyStateStats
 } from '../types/strategy';
 import { fetchJson } from '../services/api';
-import {
-  SHOW_SAMPLES, PIVOT_SAMPLES, MICRO_SAMPLES, ALL_SAMPLES
-} from '../components/Strategy/sampleCardData';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
 type TabType = 'overview' | 'fudkii' | 'fukaa' | 'pivot' | 'microalpha';
@@ -193,20 +190,13 @@ export const StrategyTransparencyPage: React.FC = () => {
         )}
 
         {activeTab === 'pivot' && (
-          <StrategyTabContent
-            strategyId="PIVOT"
-            states={states}
-            samples={PIVOT_SAMPLES}
-            showSamples={SHOW_SAMPLES}
-          />
+          <PivotTabContent autoRefresh={autoRefresh} />
         )}
 
         {activeTab === 'microalpha' && (
           <StrategyTabContent
             strategyId="MICROALPHA"
             states={states}
-            samples={MICRO_SAMPLES}
-            showSamples={SHOW_SAMPLES}
           />
         )}
       </div>
@@ -223,9 +213,7 @@ const OverviewTab: React.FC<{
   loading: boolean;
   onInstrumentSelect: (scripCode: string) => void;
 }> = ({ states, opportunities, filter, setFilter, loading, onInstrumentSelect }) => {
-  const displayedStates = SHOW_SAMPLES
-    ? [...ALL_SAMPLES, ...states]
-    : states;
+  const displayedStates = states;
 
   return (
   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -266,7 +254,6 @@ const OverviewTab: React.FC<{
             <StrategyCard
               snapshot={snapshot}
               defaultExpanded={displayedStates.length <= 3}
-              isSample={SHOW_SAMPLES && idx < ALL_SAMPLES.length}
             />
           </div>
         ))

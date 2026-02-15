@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.TradeDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class TradeResultsConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final WalletService walletService;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -91,12 +93,29 @@ public class TradeResultsConsumer {
         double exitPrice = root.path("exitPrice").asDouble(0);
         double pnl = root.path("pnl").asDouble(0);
         double rMultiple = root.path("rMultiple").asDouble(0);
+        double stopLoss = root.path("stopLoss").asDouble(0);
+        int quantity = root.path("quantity").asInt(root.path("positionSize").asInt(1));
         String exitReason = root.path("exitReason").asText("UNKNOWN");
+
+        // R-multiple fallback calculation when not provided by upstream
+        if (rMultiple == 0 && entryPrice > 0 && stopLoss > 0) {
+            double riskPerShare = Math.abs(entryPrice - stopLoss);
+            double totalRisk = riskPerShare * quantity;
+            if (totalRisk > 0) {
+                rMultiple = pnl / totalRisk;
+            }
+        }
 
         // Determine status
         String status;
         if (pnl > 0) {
-            status = exitReason.contains("TARGET") ? "CLOSED_WIN" : "CLOSED_TRAILING";
+            if (exitReason.contains("TARGET")) {
+                status = "CLOSED_WIN";
+            } else if (exitReason.contains("TRAIL")) {
+                status = "CLOSED_TRAILING";
+            } else {
+                status = "CLOSED_WIN"; // Any profitable exit is a win
+            }
         } else if (pnl < 0) {
             status = "CLOSED_LOSS";
         } else {
@@ -108,7 +127,6 @@ public class TradeResultsConsumer {
             durationMinutes = ChronoUnit.MINUTES.between(entryTime, exitTime);
         }
 
-        int quantity = root.path("quantity").asInt(root.path("positionSize").asInt(1));
         double positionCost = entryPrice * quantity;
         double pnlPercent = positionCost > 0 ? (pnl / positionCost) * 100 : 0;
 
@@ -121,16 +139,16 @@ public class TradeResultsConsumer {
                 .tradeId(root.path("tradeId").asText(root.path("signalId").asText()))
                 .signalId(root.path("signalId").asText())
                 .scripCode(root.path("scripCode").asText())
-                .companyName(root.path("companyName").asText(root.path("scripCode").asText()))
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")))
                 .side(determineSide(root))
                 .status(status)
                 .entryPrice(entryPrice)
                 .entryTime(entryTime)
-                .quantity(root.path("quantity").asInt(root.path("positionSize").asInt(1)))
+                .quantity(quantity)
                 .exitPrice(exitPrice)
                 .exitTime(exitTime)
                 .exitReason(exitReason)
-                .stopLoss(root.path("stopLoss").asDouble(0))
+                .stopLoss(stopLoss)
                 .target1(root.path("target1").asDouble(root.path("target").asDouble(0)))
                 .target2(root.path("target2").isNull() ? null : root.path("target2").asDouble())
                 .pnl(pnl)
@@ -143,15 +161,18 @@ public class TradeResultsConsumer {
 
     private String determineSide(JsonNode root) {
         String side = root.path("side").asText();
-        if (side != null && !side.isEmpty()) {
+        if (side != null && !side.isEmpty() && !"null".equalsIgnoreCase(side)) {
             return side.toUpperCase().contains("BUY") || side.toUpperCase().contains("LONG")
                     ? "LONG" : "SHORT";
         }
 
-        // Infer from entry/exit prices
+        // Infer from entry/stop prices
         double entry = root.path("entryPrice").asDouble(0);
         double stop = root.path("stopLoss").asDouble(0);
-        return entry > stop ? "LONG" : "SHORT";
+        if (entry > 0 && stop > 0) {
+            return entry > stop ? "LONG" : "SHORT";
+        }
+        return "LONG"; // Safe default when data is insufficient
     }
 
     private LocalDateTime parseDateTime(JsonNode node) {

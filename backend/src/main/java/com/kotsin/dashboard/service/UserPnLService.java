@@ -1,11 +1,9 @@
 package com.kotsin.dashboard.service;
 
 import com.kotsin.dashboard.model.entity.PaperTrade;
-import com.kotsin.dashboard.model.entity.ScripGroup;
 import com.kotsin.dashboard.model.entity.UserTrade;
 import com.kotsin.dashboard.model.entity.UserWallet;
 import com.kotsin.dashboard.repository.PaperTradeRepository;
-import com.kotsin.dashboard.repository.ScripGroupRepository;
 import com.kotsin.dashboard.repository.UserTradeRepository;
 import com.kotsin.dashboard.repository.UserWalletRepository;
 import org.slf4j.Logger;
@@ -30,19 +28,16 @@ public class UserPnLService {
     private final UserTradeRepository userTradeRepository;
     private final UserWalletRepository userWalletRepository;
     private final PaperTradeRepository paperTradeRepository;
-    private final ScripGroupRepository scripGroupRepository;
-
-    // In-memory cache loaded once from ScripGroup collection
-    private volatile Map<String, String> scripNameCache;
+    private final ScripLookupService scripLookup;
 
     public UserPnLService(UserTradeRepository userTradeRepository,
                           UserWalletRepository userWalletRepository,
                           PaperTradeRepository paperTradeRepository,
-                          ScripGroupRepository scripGroupRepository) {
+                          ScripLookupService scripLookup) {
         this.userTradeRepository = userTradeRepository;
         this.userWalletRepository = userWalletRepository;
         this.paperTradeRepository = paperTradeRepository;
-        this.scripGroupRepository = scripGroupRepository;
+        this.scripLookup = scripLookup;
     }
 
     // ==================== SUMMARY ====================
@@ -125,14 +120,14 @@ public class UserPnLService {
         if ("PAPER".equals(walletType)) {
             return getPaperDailyPnl(days);
         }
-        LocalDateTime start = LocalDate.now().minusDays(days).atStartOfDay();
-        LocalDateTime end = LocalDateTime.now();
+        LocalDateTime start = LocalDate.now(IST).minusDays(days).atStartOfDay();
+        LocalDateTime end = LocalDateTime.now(IST);
         List<UserTrade> trades = userTradeRepository
                 .findByUserIdAndWalletTypeAndExitTimeBetweenOrderByExitTimeDesc(userId, walletType, start, end);
 
         Map<LocalDate, Double> dailyPnl = new TreeMap<>();
         for (int i = 0; i < days; i++) {
-            dailyPnl.put(LocalDate.now().minusDays(i), 0.0);
+            dailyPnl.put(LocalDate.now(IST).minusDays(i), 0.0);
         }
         for (UserTrade trade : trades) {
             if (trade.getExitTime() != null) {
@@ -162,7 +157,7 @@ public class UserPnLService {
         for (PaperTrade trade : trades) {
             if (trade.getExitTime() != null) {
                 LocalDate date = trade.getExitTime().atZone(IST).toLocalDate();
-                dailyPnl.merge(date, trade.getRealizedPnL(), Double::sum);
+                dailyPnl.merge(date, trade.getRealizedPnL() - trade.getCommission(), Double::sum);
             }
         }
 
@@ -197,7 +192,7 @@ public class UserPnLService {
         List<Map<String, Object>> curve = new ArrayList<>();
         double cumulative = wallet.getInitialCapital();
         Map<String, Object> startPoint = new LinkedHashMap<>();
-        startPoint.put("date", wallet.getCreatedAt() != null ? wallet.getCreatedAt().toLocalDate().toString() : LocalDate.now().toString());
+        startPoint.put("date", wallet.getCreatedAt() != null ? wallet.getCreatedAt().toLocalDate().toString() : LocalDate.now(IST).toString());
         startPoint.put("value", cumulative);
         curve.add(startPoint);
         for (UserTrade trade : trades) {
@@ -461,8 +456,8 @@ public class UserPnLService {
         metrics.put("avgLoss", Math.round(avgLoss * 100.0) / 100.0);
 
         // Largest win/loss
-        metrics.put("largestWin", closedTrades.stream().mapToDouble(PaperTrade::getRealizedPnL).max().orElse(0));
-        metrics.put("largestLoss", closedTrades.stream().mapToDouble(PaperTrade::getRealizedPnL).min().orElse(0));
+        metrics.put("largestWin", closedTrades.stream().mapToDouble(PaperTrade::getRealizedPnL).filter(p -> p > 0).max().orElse(0));
+        metrics.put("largestLoss", closedTrades.stream().mapToDouble(PaperTrade::getRealizedPnL).filter(p -> p < 0).min().orElse(0));
 
         // Average R-multiple (from riskRewardRatio and realized PnL)
         double avgR = closedTrades.stream()
@@ -486,14 +481,24 @@ public class UserPnLService {
         metrics.put("maxDrawdown", Math.round(maxDrawdown * 100.0) / 100.0);
         metrics.put("maxDrawdownPercent", peak > 0 ? Math.round((maxDrawdown / peak) * 10000.0) / 100.0 : 0);
 
-        // Sharpe ratio
-        double[] returns = closedTrades.stream().mapToDouble(t ->
-                INITIAL_CAPITAL > 0 ? t.getRealizedPnL() / INITIAL_CAPITAL : 0
-        ).toArray();
-        double meanReturn = Arrays.stream(returns).average().orElse(0);
-        double variance = Arrays.stream(returns).map(r -> Math.pow(r - meanReturn, 2)).average().orElse(0);
-        double stdDev = Math.sqrt(variance);
-        double sharpe = stdDev > 0 ? (meanReturn / stdDev) * Math.sqrt(252) : 0;
+        // Sharpe ratio (daily returns grouped by date, annualized with sqrt(252), sample std dev)
+        Map<LocalDate, Double> dailyPnlMap = chronological.stream()
+                .filter(t -> t.getExitTime() != null)
+                .collect(Collectors.groupingBy(
+                        t -> t.getExitTime().atZone(IST).toLocalDate(),
+                        Collectors.summingDouble(t -> t.getRealizedPnL() - t.getCommission())
+                ));
+        double[] dailyReturns = dailyPnlMap.values().stream()
+                .mapToDouble(pnl -> INITIAL_CAPITAL > 0 ? pnl / INITIAL_CAPITAL : 0)
+                .toArray();
+        int nDays = dailyReturns.length;
+        double meanReturn = nDays > 0 ? Arrays.stream(dailyReturns).sum() / nDays : 0;
+        double sharpe = 0;
+        if (nDays > 1) {
+            double sumSqDev = Arrays.stream(dailyReturns).map(r -> Math.pow(r - meanReturn, 2)).sum();
+            double stdDev = Math.sqrt(sumSqDev / (nDays - 1));
+            sharpe = stdDev > 0 ? (meanReturn / stdDev) * Math.sqrt(252) : 0;
+        }
         metrics.put("sharpeRatio", Math.round(sharpe * 100.0) / 100.0);
 
         // Average duration
@@ -580,26 +585,7 @@ public class UserPnLService {
     }
 
     private String resolveCompanyName(String scripCode) {
-        if (scripCode == null || scripCode.isEmpty()) return scripCode;
-        return getScripNameCache().getOrDefault(scripCode, scripCode);
-    }
-
-    private Map<String, String> getScripNameCache() {
-        if (scripNameCache == null) {
-            synchronized (this) {
-                if (scripNameCache == null) {
-                    Map<String, String> cache = new HashMap<>();
-                    scripGroupRepository.findAll().forEach(sg -> {
-                        if (sg.getCompanyName() != null && !sg.getCompanyName().isEmpty()) {
-                            cache.put(sg.getId(), sg.getCompanyName());
-                        }
-                    });
-                    log.info("Loaded {} scrip name mappings from ScripGroup", cache.size());
-                    scripNameCache = cache;
-                }
-            }
-        }
-        return scripNameCache;
+        return scripLookup.resolve(scripCode);
     }
 
     // ==================== NOTES (unchanged - only works for user_trades) ====================
@@ -617,7 +603,7 @@ public class UserPnLService {
     public void recordTrade(String userId, String walletType, UserTrade trade) {
         trade.setUserId(userId);
         trade.setWalletType(walletType);
-        trade.setCreatedAt(LocalDateTime.now());
+        trade.setCreatedAt(LocalDateTime.now(IST));
 
         if (trade.getEntryTime() != null && trade.getExitTime() != null) {
             trade.setDurationMinutes((int) ChronoUnit.MINUTES.between(trade.getEntryTime(), trade.getExitTime()));
@@ -684,12 +670,13 @@ public class UserPnLService {
         metrics.put("profitFactor", totalLoss > 0 ? Math.round((totalProfit / totalLoss) * 100.0) / 100.0 : totalProfit > 0 ? 999 : 0);
         double avgWin = trades.stream().filter(t -> t.getNetPnl() > 0).mapToDouble(UserTrade::getNetPnl).average().orElse(0);
         double avgLoss = trades.stream().filter(t -> t.getNetPnl() < 0).mapToDouble(UserTrade::getNetPnl).average().orElse(0);
-        double winProb = wallet.getTotalTradesCount() > 0 ? (double) wallet.getWinCount() / wallet.getTotalTradesCount() : 0;
+        int totalDecided = wallet.getWinCount() + wallet.getLossCount();
+        double winProb = totalDecided > 0 ? (double) wallet.getWinCount() / totalDecided : 0;
         metrics.put("expectancy", Math.round((winProb * avgWin + (1 - winProb) * avgLoss) * 100.0) / 100.0);
         metrics.put("avgWin", Math.round(avgWin * 100.0) / 100.0);
         metrics.put("avgLoss", Math.round(avgLoss * 100.0) / 100.0);
-        metrics.put("largestWin", trades.stream().mapToDouble(UserTrade::getNetPnl).max().orElse(0));
-        metrics.put("largestLoss", trades.stream().mapToDouble(UserTrade::getNetPnl).min().orElse(0));
+        metrics.put("largestWin", trades.stream().mapToDouble(UserTrade::getNetPnl).filter(p -> p > 0).max().orElse(0));
+        metrics.put("largestLoss", trades.stream().mapToDouble(UserTrade::getNetPnl).filter(p -> p < 0).min().orElse(0));
         metrics.put("avgRMultiple", Math.round(trades.stream().mapToDouble(UserTrade::getRMultiple).average().orElse(0) * 100.0) / 100.0);
         Collections.reverse(trades);
         double peak = wallet.getInitialCapital();
@@ -703,13 +690,25 @@ public class UserPnLService {
         }
         metrics.put("maxDrawdown", Math.round(maxDrawdown * 100.0) / 100.0);
         metrics.put("maxDrawdownPercent", peak > 0 ? Math.round((maxDrawdown / peak) * 10000.0) / 100.0 : 0);
-        double[] dailyReturns = trades.stream().mapToDouble(t ->
-                wallet.getInitialCapital() > 0 ? t.getNetPnl() / wallet.getInitialCapital() : 0
-        ).toArray();
-        double meanReturn = Arrays.stream(dailyReturns).average().orElse(0);
-        double variance = Arrays.stream(dailyReturns).map(r -> Math.pow(r - meanReturn, 2)).average().orElse(0);
-        double stdDev = Math.sqrt(variance);
-        metrics.put("sharpeRatio", Math.round((stdDev > 0 ? (meanReturn / stdDev) * Math.sqrt(252) : 0) * 100.0) / 100.0);
+        // Sharpe ratio (daily returns grouped by date, annualized with sqrt(252), sample std dev)
+        Map<LocalDate, Double> dailyPnlMap = trades.stream()
+                .filter(t -> t.getExitTime() != null)
+                .collect(Collectors.groupingBy(
+                        t -> t.getExitTime().toLocalDate(),
+                        Collectors.summingDouble(UserTrade::getNetPnl)
+                ));
+        double[] dailyReturns = dailyPnlMap.values().stream()
+                .mapToDouble(pnl -> wallet.getInitialCapital() > 0 ? pnl / wallet.getInitialCapital() : 0)
+                .toArray();
+        int nDays = dailyReturns.length;
+        double meanReturn = nDays > 0 ? Arrays.stream(dailyReturns).sum() / nDays : 0;
+        double sharpeRatio = 0;
+        if (nDays > 1) {
+            double sumSqDev = Arrays.stream(dailyReturns).map(r -> Math.pow(r - meanReturn, 2)).sum();
+            double stdDev = Math.sqrt(sumSqDev / (nDays - 1));
+            sharpeRatio = stdDev > 0 ? (meanReturn / stdDev) * Math.sqrt(252) : 0;
+        }
+        metrics.put("sharpeRatio", Math.round(sharpeRatio * 100.0) / 100.0);
         metrics.put("avgDuration", Math.round(trades.stream().filter(t -> t.getDurationMinutes() > 0).mapToInt(UserTrade::getDurationMinutes).average().orElse(0)));
         return metrics;
     }
@@ -730,7 +729,7 @@ public class UserPnLService {
         wallet.setDayPnl(wallet.getDayPnl() + trade.getNetPnl());
         wallet.setWeekPnl(wallet.getWeekPnl() + trade.getNetPnl());
         wallet.setMonthPnl(wallet.getMonthPnl() + trade.getNetPnl());
-        wallet.setLastUpdated(LocalDateTime.now());
+        wallet.setLastUpdated(LocalDateTime.now(IST));
         userWalletRepository.save(wallet);
     }
 

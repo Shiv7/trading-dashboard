@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.FinalOpportunityScoreDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FinalOpportunityScoreConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -134,7 +136,7 @@ public class FinalOpportunityScoreConsumer {
 
         FinalOpportunityScoreDTO.FinalOpportunityScoreDTOBuilder builder = FinalOpportunityScoreDTO.builder()
                 .scripCode(root.path("scripCode").asText())
-                .companyName(root.path("companyName").asText(root.path("scripCode").asText()))
+                .companyName(scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")))
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
                 // Component scores
                 .indexContextScore(root.path("indexContextScore").asDouble(0))

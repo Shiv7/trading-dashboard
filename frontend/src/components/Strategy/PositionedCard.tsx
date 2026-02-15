@@ -40,12 +40,12 @@ export const PositionedCard: React.FC<PositionedCardProps> = ({ snapshot, setup,
   // Price ruler percentages (position of current price between SL and Target)
   const totalRange = Math.abs(target - sl);
   const entryFromSl = Math.abs(entry - sl);
-  const currentFromSl = isLong
-    ? (current - sl) / totalRange * 100
-    : (sl - current) / totalRange * 100;
-  const entryPercent = isLong
-    ? (entryFromSl / totalRange) * 100
-    : ((sl - entry) / totalRange) * 100;
+  const currentFromSl = totalRange > 0
+    ? (isLong ? (current - sl) / totalRange * 100 : (sl - current) / totalRange * 100)
+    : 50;
+  const entryPercent = totalRange > 0
+    ? (isLong ? (entryFromSl / totalRange) * 100 : ((sl - entry) / totalRange) * 100)
+    : 50;
 
   const glowColor = isProfitable
     ? 'shadow-[0_0_15px_rgba(59,130,246,0.15)]'
@@ -149,7 +149,7 @@ export const PositionedCard: React.FC<PositionedCardProps> = ({ snapshot, setup,
           <div>
             <div className="text-gray-500 text-[10px] mb-1">P&L</div>
             <div className={`font-mono text-sm font-bold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
-              {isProfitable ? '+' : ''}{pnl.toFixed(2)}
+              {pnl > 0 ? '+' : ''}{pnl.toFixed(2)}
             </div>
           </div>
           <div>

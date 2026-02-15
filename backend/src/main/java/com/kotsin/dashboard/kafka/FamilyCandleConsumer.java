@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.FamilyScoreDTO;
+import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ import java.util.Map;
 public class FamilyCandleConsumer {
 
     private final WebSocketSessionManager sessionManager;
+    private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -81,7 +83,7 @@ public class FamilyCandleConsumer {
 
         FamilyScoreDTO.FamilyScoreDTOBuilder builder = FamilyScoreDTO.builder()
                 .scripCode(scripCode)
-                .companyName(equity.path("companyName").asText(scripCode))
+                .companyName(scripLookup.resolve(scripCode, equity.path("companyName").asText("")))
                 .timeframe(timeframe)
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.of("Asia/Kolkata")))
                 .open(Double.isNaN(openPrice) ? 0 : openPrice)
