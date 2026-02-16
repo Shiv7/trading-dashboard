@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { fetchJson, ordersApi } from '../../services/api';
 import type { CreateOrderRequest } from '../../types/orders';
 
-type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume';
+type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 
@@ -486,6 +486,7 @@ const FilterDropdown: React.FC<{
    ═══════════════════════════════════════════════════════════════ */
 
 const SORT_OPTIONS: { key: SortField; label: string }[] = [
+  { key: 'timestamp', label: 'Recent' },
   { key: 'strength', label: 'Strength' },
   { key: 'confidence', label: 'Confidence %' },
   { key: 'rr', label: 'R:R' },
@@ -728,7 +729,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   const navigate = useNavigate();
   const [triggers, setTriggers] = useState<FukaaTrigger[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sortField, setSortField] = useState<SortField>('volume');
+  const [sortField, setSortField] = useState<SortField>('timestamp');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL');
   const [showFilter, setShowFilter] = useState(false);
@@ -741,8 +742,9 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
   const fetchFukaa = useCallback(async () => {
     try {
-      const data = await fetchJson<FukaaTrigger[]>('/strategy-state/fukaa/active/list');
-      if (data && data.length > 0) {
+      // Use history endpoint — returns ALL triggered signals for today, persisted in Redis
+      const data = await fetchJson<FukaaTrigger[]>('/strategy-state/fukaa/history/list');
+      if (data) {
         setTriggers(data);
       }
     } catch (err) {
@@ -803,12 +805,14 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         return computeIVChange(b.sig) - computeIVChange(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
       case 'volume':
         return b.sig.surgeT - a.sig.surgeT || getEpoch(b.sig) - getEpoch(a.sig);
+      case 'timestamp':
+        return getEpoch(b.sig) - getEpoch(a.sig);
       default:
         return 0;
     }
   });
 
-  const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Volume Surge';
+  const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Recent';
 
   /* ── BUY HANDLER — dispatches to trade execution module ── */
   const handleBuy = useCallback(async (sig: FukaaTrigger, plan: TradePlan) => {

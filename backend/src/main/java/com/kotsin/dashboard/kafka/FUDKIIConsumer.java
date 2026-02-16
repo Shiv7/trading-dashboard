@@ -22,7 +22,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,6 +58,7 @@ public class FUDKIIConsumer {
 
     private static final String REDIS_KEY = "dashboard:fudkii:active-triggers";
     private static final String REDIS_KEY_ALL = "dashboard:fudkii:all-latest";
+    private static final String REDIS_KEY_HISTORY = "dashboard:fudkii:signal-history";
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     @Value("${signal.fudkii.ttl.minutes:30}")
@@ -69,6 +72,10 @@ public class FUDKIIConsumer {
 
     // Cache latest FUDKII signals (no TTL needed - informational only)
     private final Map<String, Map<String, Object>> latestFUDKII = new ConcurrentHashMap<>();
+
+    // Signal history: key = "scripCode-triggerTimeEpoch", stores ALL triggered signals for today
+    // This is the immutable history — entries are never overwritten or removed (except daily reset)
+    private final Map<String, Map<String, Object>> todaySignalHistory = new ConcurrentHashMap<>();
 
     // Dedup cache: key = scripCode|timestamp, prevents replay duplicates
     private final Cache<String, Boolean> dedupCache = Caffeine.newBuilder()
@@ -163,8 +170,17 @@ public class FUDKIIConsumer {
                         todayCount + 1);
 
                 // Cache active trigger (with TTL)
-                fudkiiData.put("cachedAt", Instant.now().toEpochMilli());
+                long cachedAtMs = Instant.now().toEpochMilli();
+                fudkiiData.put("cachedAt", cachedAtMs);
                 activeTriggers.put(scripCode, fudkiiData);
+
+                // Append to today's signal history (immutable — never overwritten)
+                long epoch = fudkiiData.containsKey("triggerTimeEpoch")
+                        ? ((Number) fudkiiData.get("triggerTimeEpoch")).longValue()
+                        : cachedAtMs;
+                String historyKey = scripCode + "-" + epoch;
+                fudkiiData.put("signalSource", "FUDKII");
+                todaySignalHistory.put(historyKey, fudkiiData);
 
                 // Send notification
                 String emoji = "BULLISH".equals(direction) ? "^" : "v";
@@ -215,13 +231,13 @@ public class FUDKIIConsumer {
 
                 signalConsumer.addExternalSignal(signalDTO);
                 log.info("FUDKII signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
+                // Update latest (only triggered signals update the latest map)
+                latestFUDKII.put(scripCode, fudkiiData);
             } else {
                 // Remove from active triggers if no longer triggered
                 activeTriggers.invalidate(scripCode);
+                // NOTE: Do NOT overwrite latestFUDKII — preserve the last triggered state
             }
-
-            // Cache latest
-            latestFUDKII.put(scripCode, fudkiiData);
 
             // Broadcast to WebSocket
             sessionManager.broadcastSignal(Map.of(
@@ -336,8 +352,20 @@ public class FUDKIIConsumer {
                 redisTemplate.expire(REDIS_KEY_ALL, 24 * 60, TimeUnit.MINUTES);
             }
 
-            log.info("FUDKII persisted {} active triggers, {} all-latest to Redis",
-                    snapshot.size(), allSnapshot.size());
+            // Persist today's signal history (immutable records — survives restart)
+            String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
+            Map<String, Map<String, Object>> historySnapshot = new HashMap<>(todaySignalHistory);
+            if (!historySnapshot.isEmpty()) {
+                for (Map.Entry<String, Map<String, Object>> entry : historySnapshot.entrySet()) {
+                    String json = objectMapper.writeValueAsString(entry.getValue());
+                    redisTemplate.opsForHash().put(historyRedisKey, entry.getKey(), json);
+                }
+                // Expire after 24h (auto-cleanup old days)
+                redisTemplate.expire(historyRedisKey, 24 * 60, TimeUnit.MINUTES);
+            }
+
+            log.info("FUDKII persisted {} active triggers, {} all-latest, {} history to Redis",
+                    snapshot.size(), allSnapshot.size(), historySnapshot.size());
         } catch (Exception e) {
             log.error("Failed to persist FUDKII triggers to Redis: {}", e.getMessage());
         }
@@ -386,8 +414,30 @@ public class FUDKIIConsumer {
                 }
             }
 
-            log.info("FUDKII restored {} active triggers + {} all-latest from Redis",
-                    restoredActive, restoredAll);
+            // Restore today's signal history
+            String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
+            Map<Object, Object> historyEntries = redisTemplate.opsForHash().entries(historyRedisKey);
+            int restoredHistory = 0;
+            if (historyEntries != null && !historyEntries.isEmpty()) {
+                for (Map.Entry<Object, Object> entry : historyEntries.entrySet()) {
+                    try {
+                        Map<String, Object> data = objectMapper.readValue(
+                                (String) entry.getValue(), Map.class);
+                        todaySignalHistory.putIfAbsent((String) entry.getKey(), data);
+                        // Also ensure latestFUDKII has this triggered signal
+                        String sc = (String) data.get("scripCode");
+                        if (sc != null && Boolean.TRUE.equals(data.get("triggered"))) {
+                            latestFUDKII.putIfAbsent(sc, data);
+                        }
+                        restoredHistory++;
+                    } catch (Exception e) {
+                        log.warn("Failed to restore FUDKII history {}: {}", entry.getKey(), e.getMessage());
+                    }
+                }
+            }
+
+            log.info("FUDKII restored {} active triggers + {} all-latest + {} history from Redis",
+                    restoredActive, restoredAll, restoredHistory);
         } catch (Exception e) {
             log.error("Failed to restore FUDKII triggers from Redis: {}", e.getMessage());
         }
@@ -403,8 +453,10 @@ public class FUDKIIConsumer {
         LocalDate today = LocalDate.now(IST);
         if (!today.equals(currentTradeDate)) {
             dailySignalCount.clear();
+            todaySignalHistory.clear();
+            latestFUDKII.clear();
             currentTradeDate = today;
-            log.info("FUDKII daily signal counters reset for {}", today);
+            log.info("FUDKII daily counters, history and latest reset for {}", today);
         }
     }
 
@@ -442,5 +494,17 @@ public class FUDKIIConsumer {
     public int getDailySignalCount(String scripCode) {
         String dailyKey = scripCode + "|" + currentTradeDate;
         return dailySignalCount.getOrDefault(dailyKey, 0);
+    }
+
+    /**
+     * Get today's full signal history — ALL triggered signals, never overwritten.
+     * Survives restart via Redis persistence.
+     */
+    public List<Map<String, Object>> getTodaySignalHistory() {
+        return new ArrayList<>(todaySignalHistory.values());
+    }
+
+    public int getTodaySignalHistoryCount() {
+        return todaySignalHistory.size();
     }
 }

@@ -754,6 +754,64 @@ export const analysisApi = {
   getPrediction: (scripCode: string) => fetchJson<Record<string, unknown>>(`/analysis/${scripCode}/prediction`),
 }
 
+// ===== STRATEGY WALLETS API =====
+export interface StrategyWalletSummary {
+  strategy: string
+  displayName: string
+  initialCapital: number
+  currentCapital: number
+  totalPnl: number
+  totalPnlPercent: number
+  totalTrades: number
+  wins: number
+  losses: number
+  winRate: number
+}
+
+export interface StrategyWalletTrade {
+  tradeId: string
+  scripCode: string
+  companyName: string
+  side: string
+  direction: string
+  entryPrice: number
+  exitPrice: number
+  exitReason: string
+  target1Hit: boolean
+  target2Hit: boolean
+  target3Hit: boolean
+  target4Hit: boolean
+  stopHit: boolean
+  pnl: number
+  pnlPercent: number
+  entryTime: string
+  exitTime: string
+  strategy: string
+  exchange: string
+}
+
+export const strategyWalletsApi = {
+  getSummaries: () =>
+    fetchJson<StrategyWalletSummary[]>('/strategy-wallets/summary'),
+
+  getWeeklyTrades: (params?: {
+    strategy?: string
+    direction?: string
+    exchange?: string
+    sortBy?: string
+    limit?: number
+  }) => {
+    const p = new URLSearchParams()
+    if (params?.strategy) p.set('strategy', params.strategy)
+    if (params?.direction) p.set('direction', params.direction)
+    if (params?.exchange) p.set('exchange', params.exchange)
+    if (params?.sortBy) p.set('sortBy', params.sortBy)
+    if (params?.limit) p.set('limit', String(params.limit))
+    const qs = p.toString()
+    return fetchJson<StrategyWalletTrade[]>(`/strategy-wallets/trades${qs ? '?' + qs : ''}`)
+  },
+}
+
 // Export helpers for use in other service files
 export { fetchJson, postJson, putJson, deleteJson, patchJson, API_BASE }
 

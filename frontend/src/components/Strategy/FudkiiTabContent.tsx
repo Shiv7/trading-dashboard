@@ -70,7 +70,7 @@ interface ExecutionState {
   orderId?: string;
 }
 
-type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume';
+type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 
@@ -93,17 +93,6 @@ function getEpoch(sig: FudkiiSignal): number {
 
 function fmt(v: number): string {
   return Number(v.toFixed(2)).toString();
-}
-
-function getTodayIST(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-}
-
-function isFromToday(sig: FudkiiSignal): boolean {
-  if (!sig.triggerTime) return false;
-  const d = new Date(sig.triggerTime);
-  if (isNaN(d.getTime())) return false;
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) === getTodayIST();
 }
 
 /** Derive option strike interval from price */
@@ -450,6 +439,7 @@ const FilterDropdown: React.FC<{
    ═══════════════════════════════════════════════════════════════ */
 
 const SORT_OPTIONS: { key: SortField; label: string }[] = [
+  { key: 'timestamp', label: 'Recent' },
   { key: 'strength', label: 'Strength' },
   { key: 'confidence', label: 'Confidence %' },
   { key: 'rr', label: 'R:R' },
@@ -739,7 +729,7 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
   const navigate = useNavigate();
   const [signals, setSignals] = useState<FudkiiSignal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sortField, setSortField] = useState<SortField>('strength');
+  const [sortField, setSortField] = useState<SortField>('timestamp');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL');
   const [showFilter, setShowFilter] = useState(false);
@@ -752,8 +742,9 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
 
   const fetchFudkii = useCallback(async () => {
     try {
-      const data = await fetchJson<FudkiiSignal[]>('/strategy-state/fudkii/all/list');
-      if (data && data.length > 0) {
+      // Use history endpoint — returns ALL triggered signals for today, persisted in Redis
+      const data = await fetchJson<FudkiiSignal[]>('/strategy-state/fudkii/history/list');
+      if (data) {
         setSignals(data);
       }
     } catch (err) {
@@ -788,7 +779,8 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
   /* ── FILTER ── */
   const hasActiveFilter = directionFilter !== 'ALL' || exchangeFilter !== 'ALL';
 
-  let filtered = signals.filter(s => s.triggered && isFromToday(s));
+  // History endpoint only returns triggered=true signals for today — no client-side date filter needed
+  let filtered = signals.filter(s => s.triggered);
   if (directionFilter !== 'ALL') {
     filtered = filtered.filter(s => s.direction === directionFilter);
   }
@@ -814,12 +806,14 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
         return computeIVChange(b.sig) - computeIVChange(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
       case 'volume':
         return computeVolumeSurge(b.sig) - computeVolumeSurge(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
+      case 'timestamp':
+        return getEpoch(b.sig) - getEpoch(a.sig);
       default:
         return 0;
     }
   });
 
-  const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Strength';
+  const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Recent';
 
   /* ── BUY HANDLER — dispatches to trade execution module ── */
   const handleBuy = useCallback(async (sig: FudkiiSignal, plan: TradePlan) => {

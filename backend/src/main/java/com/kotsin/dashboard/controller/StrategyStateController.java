@@ -251,6 +251,17 @@ public class StrategyStateController {
     }
 
     /**
+     * Get today's FUDKII signal history — ALL triggered signals, never lost.
+     * Persisted in Redis, survives restart.
+     */
+    @GetMapping("/fudkii/history/list")
+    public ResponseEntity<List<Map<String, Object>>> getFudkiiSignalHistory() {
+        List<Map<String, Object>> history = fudkiiConsumer.getTodaySignalHistory();
+        log.debug("[API] GET /strategy-state/fudkii/history/list | {} signals", history.size());
+        return ResponseEntity.ok(history);
+    }
+
+    /**
      * Get FUDKII ignition count.
      *
      * @return Count of active ignitions
@@ -260,6 +271,7 @@ public class StrategyStateController {
         int count = fudkiiConsumer.getActiveIgnitionCount();
         return ResponseEntity.ok(Map.of(
                 "activeIgnitions", count,
+                "historyCount", fudkiiConsumer.getTodaySignalHistoryCount(),
                 "timestamp", System.currentTimeMillis()
         ));
     }
@@ -359,6 +371,29 @@ public class StrategyStateController {
     }
 
     /**
+     * Get ALL FUKAA signals (per-instrument latest, no TTL).
+     * Same pattern as /fudkii/all/list — survives restart via Redis.
+     */
+    @GetMapping("/fukaa/all/list")
+    public ResponseEntity<List<Map<String, Object>>> getAllFukaaSignals() {
+        Map<String, Map<String, Object>> all = fukaaConsumer.getAllLatestSignals();
+        List<Map<String, Object>> list = new ArrayList<>(all.values());
+        log.debug("[API] GET /strategy-state/fukaa/all/list | {} signals", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    /**
+     * Get today's FUKAA signal history — ALL triggered signals, never lost.
+     * Persisted in Redis, survives restart.
+     */
+    @GetMapping("/fukaa/history/list")
+    public ResponseEntity<List<Map<String, Object>>> getFukaaSignalHistory() {
+        List<Map<String, Object>> history = fukaaConsumer.getTodaySignalHistory();
+        log.debug("[API] GET /strategy-state/fukaa/history/list | {} signals", history.size());
+        return ResponseEntity.ok(history);
+    }
+
+    /**
      * Get FUKAA trigger count.
      */
     @GetMapping("/fukaa/count")
@@ -366,8 +401,43 @@ public class StrategyStateController {
         int count = fukaaConsumer.getActiveTriggerCount();
         return ResponseEntity.ok(Map.of(
                 "activeTriggers", count,
+                "historyCount", fukaaConsumer.getTodaySignalHistoryCount(),
                 "timestamp", System.currentTimeMillis()
         ));
+    }
+
+    // ==================== COMBINED SIGNAL HISTORY (FUDKII + FUKAA) ====================
+
+    /**
+     * Get combined FUDKII + FUKAA signal history for today.
+     * Returns ALL triggered signals from both strategies, sorted by trigger time (newest first).
+     * Survives restart via Redis persistence.
+     */
+    @GetMapping("/signals/combined/list")
+    public ResponseEntity<List<Map<String, Object>>> getCombinedSignalHistory() {
+        List<Map<String, Object>> combined = new ArrayList<>();
+
+        // Add all FUDKII history
+        combined.addAll(fudkiiConsumer.getTodaySignalHistory());
+
+        // Add all FUKAA history
+        combined.addAll(fukaaConsumer.getTodaySignalHistory());
+
+        // Sort by trigger time (newest first)
+        combined.sort((a, b) -> {
+            long epochA = a.containsKey("triggerTimeEpoch")
+                    ? ((Number) a.get("triggerTimeEpoch")).longValue()
+                    : (a.containsKey("cachedAt") ? ((Number) a.get("cachedAt")).longValue() : 0);
+            long epochB = b.containsKey("triggerTimeEpoch")
+                    ? ((Number) b.get("triggerTimeEpoch")).longValue()
+                    : (b.containsKey("cachedAt") ? ((Number) b.get("cachedAt")).longValue() : 0);
+            return Long.compare(epochB, epochA); // newest first
+        });
+
+        log.debug("[API] GET /strategy-state/signals/combined/list | {} total (fudkii={}, fukaa={})",
+                combined.size(), fudkiiConsumer.getTodaySignalHistoryCount(),
+                fukaaConsumer.getTodaySignalHistoryCount());
+        return ResponseEntity.ok(combined);
     }
 
     // ==================== COMBINED STRATEGY SIGNALS ====================

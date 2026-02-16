@@ -24,6 +24,7 @@ import AdminPage from './pages/AdminPage'
 import WatchlistPage from './pages/WatchlistPage'
 import PnLDashboardPage from './pages/PnLDashboardPage'
 import OrderManagementPage from './pages/OrderManagementPage'
+import StrategyWalletsPage from './pages/StrategyWalletsPage'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -236,6 +237,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <PnLDashboardPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/wallets"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <StrategyWalletsPage />
               </Layout>
             </ProtectedRoute>
           }
