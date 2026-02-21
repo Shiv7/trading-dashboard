@@ -247,8 +247,13 @@ body {
 }
 
 /* Custom scrollbar for specific containers */
+.custom-scrollbar {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
+  height: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -303,6 +308,44 @@ body {
 
 .flash-negative {
   animation: flash-red 0.6s ease-out;
+}
+
+/* Bottom sheet slide-up animation */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+/* Safe area padding for iPhone notch/home indicator */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Mobile page bottom padding — clears the fixed MobileTabBar (64px + safe area) */
+@media (max-width: 1023px) {
+  .mobile-page-bottom {
+    padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Mobile filter/sort dropdown — prevent viewport overflow */
+@media (max-width: 640px) {
+  .mobile-dropdown-full {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
 }
 
 /* Mobile nav scroll fade hint */

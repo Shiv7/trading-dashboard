@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
   RefreshCw, Filter, Activity, Eye, Target, BarChart2,
-  Zap, CheckCircle2, Volume2
+  Zap, CheckCircle2, Volume2, TrendingUp
 } from 'lucide-react';
-import { StrategyCard, OpportunitiesPanel, StrategyTabContent, FudkiiTabContent, FukaaTabContent, PivotTabContent } from '../components/Strategy';
+import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent } from '../components/Strategy';
 import {
   InstrumentStateSnapshot,
   StrategyOpportunity,
@@ -12,7 +12,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'pivot' | 'microalpha';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'pivot' | 'microalpha' | 'mere';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -82,32 +82,32 @@ export const StrategyTransparencyPage: React.FC = () => {
   const positionedCount = states.filter(s => s.state === 'POSITIONED').length;
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100">
+    <div className="min-h-screen bg-slate-900 text-slate-100 mobile-page-bottom">
       {/* Header */}
       <div className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Activity className="w-6 h-6 text-blue-400" />
-              <h1 className="text-xl font-bold">Strategy Transparency</h1>
+        <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <Activity className="w-5 h-5 sm:w-6 sm:h-6 text-blue-400 shrink-0" />
+              <h1 className="text-base sm:text-xl font-bold truncate">Kotsin Strategies</h1>
             </div>
 
-            <div className="flex items-center gap-4">
-              {/* State Counts */}
-              <div className="flex items-center gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-yellow-400" />
-                  <span className="text-slate-400">Watching:</span>
+            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+              {/* State Counts — compact on mobile */}
+              <div className="flex items-center gap-2 sm:gap-4 text-xs sm:text-sm">
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-yellow-400" />
+                  <span className="hidden sm:inline text-slate-400">Watching:</span>
                   <span className="font-mono text-yellow-400">{watchingCount}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-green-400" />
-                  <span className="text-slate-400">Ready:</span>
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-green-400" />
+                  <span className="hidden sm:inline text-slate-400">Ready:</span>
                   <span className="font-mono text-green-400">{readyCount}</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <BarChart2 className="w-4 h-4 text-blue-400" />
-                  <span className="text-slate-400">Positioned:</span>
+                <div className="flex items-center gap-1 sm:gap-2">
+                  <BarChart2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-400" />
+                  <span className="hidden sm:inline text-slate-400">Positioned:</span>
                   <span className="font-mono text-blue-400">{positionedCount}</span>
                 </div>
               </div>
@@ -115,45 +115,47 @@ export const StrategyTransparencyPage: React.FC = () => {
               {/* Auto-refresh toggle */}
               <button
                 onClick={() => setAutoRefresh(!autoRefresh)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm ${
+                className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-[10px] sm:text-sm ${
                   autoRefresh ? 'bg-green-500/20 text-green-400' : 'bg-slate-700 text-slate-400'
                 }`}
               >
-                <div className={`w-2 h-2 rounded-full ${autoRefresh ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
-                Live
+                <div className={`w-1.5 sm:w-2 h-1.5 sm:h-2 rounded-full ${autoRefresh ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
+                <span className="hidden sm:inline">Live</span>
               </button>
 
               {/* Manual refresh */}
               <button
                 onClick={fetchData}
-                className="p-2 hover:bg-slate-700 rounded transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-slate-700 rounded transition-colors"
                 disabled={loading}
               >
-                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
+                <RefreshCw className={`w-4 sm:w-5 h-4 sm:h-5 ${loading ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
               </button>
             </div>
           </div>
 
-          {/* Tabs */}
-          <div className="flex gap-1 mt-4">
+          {/* Tabs — scrollable on mobile */}
+          <div className="flex gap-0.5 sm:gap-1 mt-3 sm:mt-4 overflow-x-auto">
             {[
-              { id: 'overview' as TabType, label: 'Overview', icon: BarChart2 },
-              { id: 'fudkii' as TabType, label: 'FUDKII', icon: Zap, accent: 'text-orange-400' },
-              { id: 'fukaa' as TabType, label: 'FUKAA', icon: Volume2, accent: 'text-amber-400' },
-              { id: 'pivot' as TabType, label: 'PIVOT', icon: Target, accent: 'text-purple-400' },
-              { id: 'microalpha' as TabType, label: 'MICROALPHA', icon: Activity, accent: 'text-cyan-400' },
+              { id: 'overview' as TabType, label: 'Overview', shortLabel: 'Overview', icon: BarChart2 },
+              { id: 'fudkii' as TabType, label: 'FUDKII', shortLabel: 'FUDKII', icon: Zap, accent: 'text-orange-400' },
+              { id: 'fukaa' as TabType, label: 'FUKAA', shortLabel: 'FUKAA', icon: Volume2, accent: 'text-amber-400' },
+              { id: 'mere' as TabType, label: 'MERE', shortLabel: 'MERE', icon: TrendingUp, accent: 'text-teal-400' },
+              { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
+              { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
             ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-t text-sm font-medium transition-colors ${
+                className={`flex items-center gap-1 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-t text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === tab.id
                     ? 'bg-slate-900 text-white border-t border-l border-r border-slate-700'
                     : 'bg-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700'
                 }`}
               >
-                <tab.icon className={`w-4 h-4 ${activeTab === tab.id && tab.accent ? tab.accent : ''}`} />
-                {tab.label}
+                <tab.icon className={`w-3.5 sm:w-4 h-3.5 sm:h-4 ${activeTab === tab.id && tab.accent ? tab.accent : ''}`} />
+                <span className="sm:hidden">{tab.shortLabel}</span>
+                <span className="hidden sm:inline">{tab.label}</span>
               </button>
             ))}
           </div>
@@ -161,7 +163,7 @@ export const StrategyTransparencyPage: React.FC = () => {
       </div>
 
       {/* Main Content */}
-      <div className="container mx-auto px-4 py-6">
+      <div className="container mx-auto px-1.5 sm:px-4 py-3 sm:py-6">
         {/* Error */}
         {error && (
           <div className="bg-red-500/10 border border-red-500/50 rounded-lg p-4 mb-6 text-red-400">
@@ -194,10 +196,11 @@ export const StrategyTransparencyPage: React.FC = () => {
         )}
 
         {activeTab === 'microalpha' && (
-          <StrategyTabContent
-            strategyId="MICROALPHA"
-            states={states}
-          />
+          <MicroAlphaTabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'mere' && (
+          <MereTabContent autoRefresh={autoRefresh} />
         )}
       </div>
     </div>
@@ -216,20 +219,20 @@ const OverviewTab: React.FC<{
   const displayedStates = states;
 
   return (
-  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
     {/* Left Column - Instrument States */}
-    <div className="lg:col-span-2 space-y-4">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-medium text-slate-300 flex items-center gap-2">
-          <BarChart2 className="w-5 h-5" />
-          {filter === 'WATCHING' ? 'Watching Instruments' : `Instruments (${filter})`}
+    <div className="lg:col-span-2 space-y-3 sm:space-y-4">
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <h2 className="text-sm sm:text-lg font-medium text-slate-300 flex items-center gap-1.5 sm:gap-2 min-w-0">
+          <BarChart2 className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+          <span className="truncate">{filter === 'WATCHING' ? 'Watching' : `Instruments (${filter})`}</span>
         </h2>
-        <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-slate-500" />
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <Filter className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-500" />
           <select
             value={filter}
             onChange={(e) => setFilter(e.target.value as FilterState)}
-            className="bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm"
+            className="bg-slate-700 border border-slate-600 rounded px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm"
           >
             <option value="ALL">All</option>
             <option value="WATCHING">Watching</option>
@@ -249,7 +252,7 @@ const OverviewTab: React.FC<{
           No instruments in {filter} state
         </div>
       ) : (
-        displayedStates.map((snapshot, idx) => (
+        displayedStates.map((snapshot) => (
           <div key={snapshot.scripCode} id={`strategy-card-${snapshot.scripCode}`}>
             <StrategyCard
               snapshot={snapshot}

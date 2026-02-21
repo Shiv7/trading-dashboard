@@ -85,6 +85,16 @@ public class PatternController {
     }
 
     /**
+     * Clear all active and completed patterns (remove stale entries)
+     */
+    @DeleteMapping("/clear")
+    public ResponseEntity<Map<String, Object>> clearAllPatterns() {
+        int cleared = patternConsumer.clearAllPatterns();
+        log.info("Cleared all patterns via API: {} active patterns removed", cleared);
+        return ResponseEntity.ok(Map.of("cleared", cleared, "status", "ok"));
+    }
+
+    /**
      * Update pattern outcome (for manual outcome recording)
      */
     @PostMapping("/{patternId}/outcome")

@@ -72,7 +72,7 @@ public class WalletService {
      */
     public void refreshWallet() {
         try {
-            // Get positions from Redis
+            // Get positions from Redis (single source of truth for live positions)
             List<PositionDTO> positions = getPositionsFromRedis();
 
             int openPositions = (int) positions.stream()
@@ -278,11 +278,44 @@ public class WalletService {
                 unrealizedPnlPercent = positionCost > 0 ? (unrealizedPnl / positionCost) * 100 : 0;
             }
 
+            // Read dual equity/option levels for strategy trades
+            Double equitySl = data.get("equitySl") != null ? ((Number) data.get("equitySl")).doubleValue() : null;
+            Double equityT1 = data.get("equityT1") != null ? ((Number) data.get("equityT1")).doubleValue() : null;
+            Double equityT2 = data.get("equityT2") != null ? ((Number) data.get("equityT2")).doubleValue() : null;
+            Double equityT3 = data.get("equityT3") != null ? ((Number) data.get("equityT3")).doubleValue() : null;
+            Double equityT4 = data.get("equityT4") != null ? ((Number) data.get("equityT4")).doubleValue() : null;
+            Double optionSl = data.get("optionSl") != null ? ((Number) data.get("optionSl")).doubleValue() : null;
+            Double optionT1 = data.get("optionT1") != null ? ((Number) data.get("optionT1")).doubleValue() : null;
+            Double optionT2 = data.get("optionT2") != null ? ((Number) data.get("optionT2")).doubleValue() : null;
+            Double optionT3 = data.get("optionT3") != null ? ((Number) data.get("optionT3")).doubleValue() : null;
+            Double optionT4 = data.get("optionT4") != null ? ((Number) data.get("optionT4")).doubleValue() : null;
+            Double target3 = data.get("target3") != null ? ((Number) data.get("target3")).doubleValue() : null;
+            Double target4 = data.get("target4") != null ? ((Number) data.get("target4")).doubleValue() : null;
+            Boolean t1HitFlag = data.get("t1Hit") != null ? Boolean.TRUE.equals(data.get("t1Hit")) : null;
+            Boolean t2Hit = data.get("t2Hit") != null ? Boolean.TRUE.equals(data.get("t2Hit")) : null;
+            Boolean t3Hit = data.get("t3Hit") != null ? Boolean.TRUE.equals(data.get("t3Hit")) : null;
+            Boolean t4Hit = data.get("t4Hit") != null ? Boolean.TRUE.equals(data.get("t4Hit")) : null;
+            Boolean slHit = data.get("slHit") != null ? Boolean.TRUE.equals(data.get("slHit")) : null;
+            String instrumentType = data.get("instrumentType") != null ? data.get("instrumentType").toString() : null;
+            Double delta = data.get("delta") != null ? ((Number) data.get("delta")).doubleValue() : null;
+            String exitReason = data.get("exitReason") != null ? data.get("exitReason").toString() : null;
+            Double equityLtp = data.get("equityLtp") != null ? ((Number) data.get("equityLtp")).doubleValue() : null;
+
+            // Exit history: per-target exit events
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> exitHistory = data.get("exitHistory") != null
+                ? (List<Map<String, Object>>) data.get("exitHistory") : null;
+
+            // Use instrumentSymbol for display if available (strategy trades)
+            String displayName = data.get("instrumentSymbol") != null
+                ? data.get("instrumentSymbol").toString()
+                : resolveCompanyName(scripCode);
+
             return PositionDTO.builder()
                     .positionId(key)
                     .signalId(signalId)
                     .scripCode(scripCode)
-                    .companyName(resolveCompanyName(scripCode))
+                    .companyName(displayName)
                     .side(normalizedSide) // FIX BUG #6: Use normalized side (LONG/SHORT)
                     .quantity(qtyOpen)
                     .avgEntryPrice(avgEntry)
@@ -300,6 +333,29 @@ public class WalletService {
                     .openedAt(openedAt)
                     .lastUpdated(lastUpdated)
                     .strategy(strategy)
+                    // Strategy trade dual levels
+                    .equitySl(equitySl)
+                    .equityT1(equityT1)
+                    .equityT2(equityT2)
+                    .equityT3(equityT3)
+                    .equityT4(equityT4)
+                    .optionSl(optionSl)
+                    .optionT1(optionT1)
+                    .optionT2(optionT2)
+                    .optionT3(optionT3)
+                    .optionT4(optionT4)
+                    .target3(target3)
+                    .target4(target4)
+                    .t1Hit(t1HitFlag)
+                    .t2Hit(t2Hit)
+                    .t3Hit(t3Hit)
+                    .t4Hit(t4Hit)
+                    .slHit(slHit)
+                    .instrumentType(instrumentType)
+                    .delta(delta)
+                    .exitReason(exitReason)
+                    .equityLtp(equityLtp)
+                    .exitHistory(exitHistory)
                     .build();
 
         } catch (Exception e) {
@@ -395,7 +451,7 @@ public class WalletService {
     }
 
     /**
-     * Get all positions (for API)
+     * Get all positions from Redis (single source of truth)
      */
     public List<PositionDTO> getPositions() {
         return getPositionsFromRedis();

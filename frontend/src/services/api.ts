@@ -3,7 +3,8 @@ import type {
   QuantScore, QuantScoreStats, CreateOrderRequest, ModifyPositionRequest, VirtualOrder, VirtualPosition,
   PerformanceMetrics, PatternSignal, PatternSummary, PatternStats,
   RiskMetrics, RiskScore, RiskAlert,
-  AlertHistory, AlertStats, AlertSummary
+  AlertHistory, AlertStats, AlertSummary,
+  StrategyTradeRequest, StrategyTradeResponse
 } from '../types'
 import type {
   TechnicalIndicatorDTO,
@@ -782,6 +783,8 @@ export interface StrategyWalletTrade {
   target3Hit: boolean
   target4Hit: boolean
   stopHit: boolean
+  quantity: number
+  capitalEmployed: number
   pnl: number
   pnlPercent: number
   entryTime: string
@@ -793,6 +796,11 @@ export interface StrategyWalletTrade {
 export const strategyWalletsApi = {
   getSummaries: () =>
     fetchJson<StrategyWalletSummary[]>('/strategy-wallets/summary'),
+
+  getCapital: (strategy: string) =>
+    fetchJson<{ strategy: string; currentCapital: number; initialCapital: number; totalPnl: number }>(
+      `/strategy-wallets/capital/${encodeURIComponent(strategy)}`
+    ),
 
   getWeeklyTrades: (params?: {
     strategy?: string
@@ -810,6 +818,18 @@ export const strategyWalletsApi = {
     const qs = p.toString()
     return fetchJson<StrategyWalletTrade[]>(`/strategy-wallets/trades${qs ? '?' + qs : ''}`)
   },
+}
+
+// ===== STRATEGY TRADES API (Virtual option/futures trade execution) =====
+export const strategyTradesApi = {
+  create: (req: StrategyTradeRequest) =>
+    postJson<StrategyTradeResponse>('/strategy-trades', req),
+
+  getActive: () =>
+    fetchJson<Record<string, unknown>[]>('/strategy-trades/active'),
+
+  close: (scripCode: string) =>
+    postJson<StrategyTradeResponse>(`/strategy-trades/${scripCode}/close`, {}),
 }
 
 // Export helpers for use in other service files

@@ -85,3 +85,53 @@ export interface OrderResponse {
     error?: string
     message?: string
 }
+
+// Strategy trade request for option/futures execution
+export interface StrategyTradeRequest {
+    scripCode: string
+    instrumentSymbol: string
+    instrumentType: 'OPTION' | 'FUTURES'
+    underlyingScripCode: string
+    underlyingSymbol: string
+    side: 'BUY'
+    quantity: number
+    lots: number
+    lotSize: number
+    multiplier: number
+    entryPrice: number
+    sl: number
+    t1: number
+    t2: number
+    t3: number
+    t4: number
+    equitySpot: number
+    equitySl: number
+    equityT1: number
+    equityT2: number
+    equityT3: number
+    equityT4: number
+    delta: number
+    optionType?: 'CE' | 'PE'
+    strike: number
+    strategy: string
+    exchange: string
+    direction: 'BULLISH' | 'BEARISH'
+    confidence: number
+}
+
+export interface StrategyTradeResponse {
+    success: boolean
+    tradeId?: string
+    scripCode?: string
+    instrumentSymbol?: string
+    entryPrice?: number
+    quantity?: number
+    lots?: number
+    sl?: number
+    t1?: number
+    t2?: number
+    t3?: number
+    t4?: number
+    strategy?: string
+    error?: string
+}

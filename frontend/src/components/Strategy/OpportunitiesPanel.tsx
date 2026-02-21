@@ -58,12 +58,12 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
 }) => {
   if (!opportunities || opportunities.length === 0) {
     return (
-      <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-        <h3 className="text-lg font-medium text-gray-200 mb-4 flex items-center gap-2">
-          <Target className="w-5 h-5" />
-          Upcoming Opportunities
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 sm:p-4">
+        <h3 className="text-sm sm:text-lg font-medium text-gray-200 mb-3 sm:mb-4 flex items-center gap-1.5 sm:gap-2">
+          <Target className="w-4 h-4 sm:w-5 sm:h-5" />
+          Opportunities
         </h3>
-        <div className="text-gray-500 text-center py-8">
+        <div className="text-gray-500 text-center py-8 text-sm">
           No near-signal opportunities detected
         </div>
       </div>
@@ -73,13 +73,14 @@ export const OpportunitiesPanel: React.FC<OpportunitiesPanelProps> = ({
   const displayedOpportunities = opportunities.slice(0, maxItems);
 
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-medium text-gray-200 flex items-center gap-2">
-          <Target className="w-5 h-5" />
-          Upcoming Opportunities
+    <div className="bg-gray-800 rounded-lg border border-gray-700 p-3 sm:p-4">
+      <div className="flex items-center justify-between mb-3 sm:mb-4 gap-2">
+        <h3 className="text-sm sm:text-lg font-medium text-gray-200 flex items-center gap-1.5 sm:gap-2">
+          <Target className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+          <span className="sm:hidden">Opportunities</span>
+          <span className="hidden sm:inline">Upcoming Opportunities</span>
         </h3>
-        <span className="text-sm text-gray-500">
+        <span className="text-xs sm:text-sm text-gray-500 shrink-0">
           {opportunities.length} total
         </span>
       </div>
@@ -149,41 +150,38 @@ const OpportunityRow: React.FC<OpportunityRowProps> = ({
       onClick={onClick}
     >
       {/* Row 1: Instrument + Strategy badge + Score */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-gray-500 text-sm font-mono w-6">#{rank}</span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 sm:gap-3 min-w-0">
+          <span className="text-gray-500 text-xs sm:text-sm font-mono w-5 sm:w-6 shrink-0 mt-0.5">#{rank}</span>
           {isBullish(opp.direction) ? (
-            <TrendingUp className="w-5 h-5 text-green-400" />
+            <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-green-400 shrink-0 mt-0.5" />
           ) : (
-            <TrendingDown className="w-5 h-5 text-red-400" />
+            <TrendingDown className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 shrink-0 mt-0.5" />
           )}
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-200">
-                {opp.companyName || opp.scripCode}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className={`text-xs px-1.5 py-0.5 rounded ${strategyBg(opp.strategyId)} ${strategyColor(opp.strategyId)}`}>
+          <div className="min-w-0">
+            <span className="font-medium text-gray-200 text-sm sm:text-base truncate block">
+              {opp.companyName || opp.scripCode}
+            </span>
+            <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 flex-wrap">
+              <span className={`text-[10px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded ${strategyBg(opp.strategyId)} ${strategyColor(opp.strategyId)}`}>
                 {opp.strategyId}
               </span>
-              <span className={`text-xs px-1.5 py-0.5 rounded ${dirBg(opp.direction)} ${dirColor(opp.direction)}`}>
+              <span className={`text-[10px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded ${dirBg(opp.direction)} ${dirColor(opp.direction)}`}>
                 {dirLabel(opp.direction)}
               </span>
-              {/* Trading mode badge for MicroAlpha */}
               {opp.tradingMode && (
-                <span className="text-[10px] px-1 py-0.5 rounded bg-cyan-500/10 text-cyan-400">
+                <span className="text-[9px] sm:text-[10px] px-1 py-0.5 rounded bg-cyan-500/10 text-cyan-400">
                   {formatTradingMode(opp.tradingMode)}
                 </span>
               )}
             </div>
           </div>
         </div>
-        <div className="text-right">
-          <div className={`text-lg font-bold ${scoreColor}`}>
+        <div className="text-right shrink-0">
+          <div className={`text-base sm:text-lg font-bold ${scoreColor}`}>
             {opp.opportunityScore.toFixed(0)}%
           </div>
-          <div className="text-xs text-gray-500">score</div>
+          <div className="text-[10px] sm:text-xs text-gray-500">score</div>
         </div>
       </div>
 
@@ -202,8 +200,8 @@ const OpportunityRow: React.FC<OpportunityRowProps> = ({
         </div>
       )}
 
-      {/* Row 4: Price levels grid */}
-      <div className="mt-2 grid grid-cols-6 gap-x-1.5 text-xs">
+      {/* Row 4: Price levels grid — 3-col on mobile, 6-col on sm+ */}
+      <div className="mt-2 grid grid-cols-3 sm:grid-cols-6 gap-x-1.5 gap-y-1 text-xs">
         <div>
           <div className="text-gray-600 text-[10px]">LTP</div>
           <div className="font-mono text-gray-300">{opp.currentPrice.toFixed(2)}</div>

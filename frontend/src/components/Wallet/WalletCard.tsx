@@ -70,71 +70,71 @@ export default function WalletCard({ wallet }: WalletCardProps) {
         </span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-4">
         {/* Capital */}
-        <div className="bg-slate-700/30 rounded-lg p-3">
-          <div className="text-xs text-slate-400 mb-1">Capital</div>
-          <div className="text-lg font-semibold text-white">
+        <div className="bg-slate-700/30 rounded-lg p-2.5 sm:p-3">
+          <div className="text-[10px] sm:text-xs text-slate-400 mb-0.5 sm:mb-1">Capital</div>
+          <div className="text-sm sm:text-lg font-semibold text-white truncate">
             {formatCurrency(wallet.currentCapital)}
           </div>
-          <div className="text-xs text-slate-500">
+          <div className="text-[10px] sm:text-xs text-slate-500 truncate">
             Initial: {formatCurrency(wallet.initialCapital)}
           </div>
         </div>
 
         {/* Available */}
-        <div className="bg-slate-700/30 rounded-lg p-3">
-          <div className="text-xs text-slate-400 mb-1">Available</div>
-          <div className="text-lg font-semibold text-white">
+        <div className="bg-slate-700/30 rounded-lg p-2.5 sm:p-3">
+          <div className="text-[10px] sm:text-xs text-slate-400 mb-0.5 sm:mb-1">Available</div>
+          <div className="text-sm sm:text-lg font-semibold text-white truncate">
             {formatCurrency(wallet.availableMargin)}
           </div>
-          <div className="text-xs text-slate-500">
-            {wallet.openPositionsCount} open positions
+          <div className="text-[10px] sm:text-xs text-slate-500">
+            {wallet.openPositionsCount} open
           </div>
         </div>
 
         {/* Day P&L */}
-        <div className={`bg-slate-700/30 rounded-lg p-3 ${dayPnlFlash}`}>
-          <div className="text-xs text-slate-400 mb-1">Day P&L</div>
-          <div className={`text-lg font-semibold ${dayPnlColor}`}>
+        <div className={`bg-slate-700/30 rounded-lg p-2.5 sm:p-3 ${dayPnlFlash}`}>
+          <div className="text-[10px] sm:text-xs text-slate-400 mb-0.5 sm:mb-1">Day P&L</div>
+          <div className={`text-sm sm:text-lg font-semibold ${dayPnlColor} truncate`}>
             {formatCurrency(wallet.dayPnl)}
           </div>
-          <div className={`text-xs ${dayPnlColor}`}>
+          <div className={`text-[10px] sm:text-xs ${dayPnlColor}`}>
             {formatPercent(wallet.initialCapital ? (wallet.dayPnl / wallet.initialCapital) * 100 : 0)}
           </div>
         </div>
 
         {/* Total P&L */}
-        <div className={`bg-slate-700/30 rounded-lg p-3 ${totalPnlFlash}`}>
-          <div className="text-xs text-slate-400 mb-1">Total P&L</div>
-          <div className={`text-lg font-semibold ${pnlColor}`}>
+        <div className={`bg-slate-700/30 rounded-lg p-2.5 sm:p-3 ${totalPnlFlash}`}>
+          <div className="text-[10px] sm:text-xs text-slate-400 mb-0.5 sm:mb-1">Total P&L</div>
+          <div className={`text-sm sm:text-lg font-semibold ${pnlColor} truncate`}>
             {formatCurrency(wallet.totalPnl)}
           </div>
-          <div className={`text-xs ${pnlColor}`}>
+          <div className={`text-[10px] sm:text-xs ${pnlColor}`}>
             {formatPercent(wallet.initialCapital ? (wallet.totalPnl / wallet.initialCapital) * 100 : 0)}
           </div>
         </div>
       </div>
 
-      {/* Stats row */}
-      <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-4 gap-4 text-center">
+      {/* Stats row - 2x2 on mobile, 4-col on sm+ */}
+      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-slate-700/50 grid grid-cols-4 gap-2 sm:gap-4 text-center">
         <div>
-          <div className="text-xl font-bold text-white">{wallet.totalTradesCount}</div>
-          <div className="text-xs text-slate-400">Total Trades</div>
+          <div className="text-base sm:text-xl font-bold text-white">{wallet.totalTradesCount}</div>
+          <div className="text-[10px] sm:text-xs text-slate-400">Trades</div>
         </div>
         <div>
-          <div className="text-xl font-bold text-emerald-400">{wallet.winCount}</div>
-          <div className="text-xs text-slate-400">Wins</div>
+          <div className="text-base sm:text-xl font-bold text-emerald-400">{wallet.winCount}</div>
+          <div className="text-[10px] sm:text-xs text-slate-400">Wins</div>
         </div>
         <div>
-          <div className="text-xl font-bold text-red-400">{wallet.lossCount}</div>
-          <div className="text-xs text-slate-400">Losses</div>
+          <div className="text-base sm:text-xl font-bold text-red-400">{wallet.lossCount}</div>
+          <div className="text-[10px] sm:text-xs text-slate-400">Losses</div>
         </div>
         <div>
-          <div className={`text-xl font-bold ${wallet.winRate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
+          <div className={`text-base sm:text-xl font-bold ${wallet.winRate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
             {(wallet.winRate ?? 0).toFixed(1)}%
           </div>
-          <div className="text-xs text-slate-400">Win Rate</div>
+          <div className="text-[10px] sm:text-xs text-slate-400">Win Rate</div>
         </div>
       </div>
     </div>

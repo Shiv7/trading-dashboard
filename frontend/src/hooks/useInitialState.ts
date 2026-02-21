@@ -35,16 +35,7 @@ export function useInitialState() {
     setError(null)
 
     try {
-      console.log('[InitialState] Fetching initial state from backend...')
       const state = await initialStateApi.getInitialState()
-
-      console.log('[InitialState] Received:', {
-        scores: state.scores?.length || 0,
-        quantScores: state.quantScores?.length || 0,
-        narratives: Object.keys(state.narratives || {}).length,
-        intelligence: Object.keys(state.intelligence || {}).length,
-        signals: state.signals?.length || 0,
-      })
 
       // Populate scores
       if (state.scores && state.scores.length > 0) {
@@ -53,13 +44,11 @@ export function useInitialState() {
             updateScore(score)
           }
         })
-        console.log(`[InitialState] Loaded ${state.scores.length} family scores`)
       }
 
       // Populate quant scores
       if (state.quantScores && state.quantScores.length > 0) {
         bulkUpdateQuantScores(state.quantScores)
-        console.log(`[InitialState] Loaded ${state.quantScores.length} quant scores`)
       }
 
       // Populate narratives
@@ -70,7 +59,6 @@ export function useInitialState() {
             ...(narrative as Omit<MarketNarrative, 'familyId'>)
           })
         })
-        console.log(`[InitialState] Loaded ${Object.keys(state.narratives).length} narratives`)
       }
 
       // Populate intelligence
@@ -81,7 +69,6 @@ export function useInitialState() {
             ...(intel as Omit<MarketIntelligence, 'familyId'>)
           })
         })
-        console.log(`[InitialState] Loaded ${Object.keys(state.intelligence).length} intelligence entries`)
       }
 
       // Populate recent signals
@@ -90,11 +77,9 @@ export function useInitialState() {
         state.signals.reverse().forEach(signal => {
           addSignal(signal)
         })
-        console.log(`[InitialState] Loaded ${state.signals.length} recent signals`)
       }
 
       setDataLoaded(state.dataAvailable)
-      console.log('[InitialState] Initial state loaded successfully')
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load initial state'

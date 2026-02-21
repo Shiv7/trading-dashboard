@@ -39,6 +39,7 @@ export function useWebSocket() {
 
   const {
     updateWallet,
+    updatePosition,
     updateScore,
     addSignal,
     updateTrade,
@@ -131,6 +132,18 @@ export function useWebSocket() {
             }
           } catch (e) {
             handleParseError('wallet', e)
+          }
+        })
+
+        // Subscribe to real-time position updates (option LTP, equity LTP, PnL, exit reasons)
+        client.subscribe('/topic/positions', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            if (isValidObject(data) && 'scripCode' in data) {
+              updatePosition(data as Record<string, unknown>)
+            }
+          } catch (e) {
+            handleParseError('positions', e)
           }
         })
 

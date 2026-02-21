@@ -1,64 +1,42 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Volume2, Check, Zap, AlertTriangle, Loader2
+  Check, AlertTriangle, Loader2, Activity
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { fetchJson, strategyTradesApi, strategyWalletsApi } from '../../services/api';
+import { fetchJson, strategyWalletsApi, strategyTradesApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeLotSizing } from '../../utils/tradingUtils';
-
-type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume' | 'timestamp';
-type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
-type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
    ═══════════════════════════════════════════════════════════════ */
 
-interface FukaaTrigger {
+interface MicroAlphaSignal {
   scripCode: string;
   symbol: string;
-  companyName: string;
   exchange: string;
   triggered: boolean;
-  direction: string;
+  direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   reason: string;
-  triggerPrice: number;
-  triggerScore: number;
+  strategy: string;
   triggerTime: string;
   triggerTimeEpoch: number;
-  bbUpper: number;
-  bbMiddle: number;
-  bbLower: number;
-  superTrend: number;
-  trend: string;
-  trendChanged: boolean;
-  pricePosition: string;
-  fukaaOutcome: string;
-  passedCandle: string;
-  rank: number;
-  volumeTMinus1: number;
-  volumeT: number;
-  volumeTPlus1: number;
-  avgVolume: number;
-  surgeTMinus1: number;
-  surgeT: number;
-  surgeTPlus1: number;
-  fukaaEmittedAt: string;
-  cachedAt: number;
-  target1?: number | null;
-  target2?: number | null;
-  target3?: number | null;
-  target4?: number | null;
-  stopLoss?: number;
-  riskReward?: number;
-  pivotSource?: boolean;
-  atr30m?: number;
-  oiChangeRatio?: number;
-  oiInterpretation?: string;
-  oiLabel?: string;
-  // Option enrichment from backend (real LTP, strike, lot size)
+  score: number;
+  conviction: number;
+  absConviction: number;
+  tradingMode: string;
+  entryPrice: number;
+  stopLoss: number;
+  target: number;
+  riskReward: number;
+  reasons?: string[];
+  subScores?: Record<string, number>;
+  hasOrderbook?: boolean;
+  hasOI?: boolean;
+  hasOptions?: boolean;
+  hasSession?: boolean;
+  cachedAt?: number;
+  // Option enrichment from backend
   optionAvailable?: boolean;
   optionScripCode?: string;
   optionSymbol?: string;
@@ -67,7 +45,6 @@ interface FukaaTrigger {
   optionExpiry?: string;
   optionLtp?: number;
   optionLotSize?: number;
-  optionMultiplier?: number;
   optionExchange?: string;
   optionExchangeType?: string;
   // Futures fallback (MCX instruments without options)
@@ -76,7 +53,6 @@ interface FukaaTrigger {
   futuresSymbol?: string;
   futuresLtp?: number;
   futuresLotSize?: number;
-  futuresMultiplier?: number;
   futuresExpiry?: string;
   futuresExchange?: string;
   futuresExchangeType?: string;
@@ -86,10 +62,9 @@ interface FukaaTrigger {
 interface TradePlan {
   entry: number;
   sl: number;
-  t1: number | null;
-  t2: number | null;
+  t1: number;
+  t2: number;
   t3: number | null;
-  t4: number | null;
   rr: number;
   atr: number;
   optionType: 'CE' | 'PE';
@@ -111,7 +86,11 @@ interface ExecutionState {
   orderId?: string;
 }
 
-interface FukaaTabContentProps {
+type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'timestamp';
+type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
+type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
+
+interface MicroAlphaTabContentProps {
   autoRefresh?: boolean;
 }
 
@@ -123,32 +102,35 @@ function fmt(v: number): string {
   return Number(v.toFixed(2)).toString();
 }
 
-// getStrikeInterval, getOTMStrike: imported from ../../utils/tradingUtils
-
-/** Compute dynamic confidence from signal characteristics */
-function computeConfidence(sig: FukaaTrigger): number {
-  let conf = 50;
-  const isLong = sig.direction === 'BULLISH';
-  const bbWidth = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  if (bbWidth > 0) {
-    const beyondBB = isLong
-      ? (sig.triggerPrice - (sig.bbUpper || sig.triggerPrice)) / bbWidth
-      : ((sig.bbLower || sig.triggerPrice) - sig.triggerPrice) / bbWidth;
-    conf += Math.min(25, Math.max(0, beyondBB * 200));
-  }
-  const stGap = Math.abs(sig.triggerPrice - (sig.superTrend || sig.triggerPrice)) / sig.triggerPrice;
-  conf += Math.min(15, stGap * 500);
-  if (sig.trendChanged) conf += 5;
-  // FUKAA bonus: volume-confirmed signals get extra confidence from surge magnitude
-  const surgeBoost = Math.min(10, sig.surgeT / 5);
-  conf += surgeBoost;
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  conf += (hash % 7) - 3;
-  return Math.min(97, Math.max(55, Math.round(conf)));
+function getStrikeInterval(price: number): number {
+  if (price > 40000) return 500;
+  if (price > 20000) return 200;
+  if (price > 10000) return 100;
+  if (price > 5000) return 50;
+  if (price > 2000) return 20;
+  if (price > 1000) return 10;
+  if (price > 500) return 5;
+  if (price > 100) return 2.5;
+  return 1;
 }
 
-/** Format trigger timestamp in IST */
-function formatTriggerTime(sig: FukaaTrigger): string {
+function getOTMStrike(price: number, direction: string): { strike: number; interval: number } {
+  const interval = getStrikeInterval(price);
+  const atm = Math.round(price / interval) * interval;
+  const strike = direction === 'BULLISH' ? atm + interval : atm - interval;
+  return { strike, interval };
+}
+
+function getEpoch(sig: MicroAlphaSignal): number {
+  if (sig.triggerTimeEpoch) return sig.triggerTimeEpoch;
+  if (sig.triggerTime) {
+    const d = new Date(sig.triggerTime);
+    if (!isNaN(d.getTime())) return d.getTime();
+  }
+  return sig.cachedAt || 0;
+}
+
+function formatTriggerTime(sig: MicroAlphaSignal): string {
   if (!sig.triggerTime) return '--';
   const d = new Date(sig.triggerTime);
   if (isNaN(d.getTime())) return '--';
@@ -162,57 +144,54 @@ function formatTriggerTime(sig: FukaaTrigger): string {
   });
 }
 
-/** Estimate option premium for OTM strike */
 function estimateOptionPremium(plan: TradePlan): number {
   return Math.round(Math.max(plan.atr * 3, plan.entry * 0.008) * 10) / 10;
 }
 
-// approximateDelta, mapToOptionLevels: imported from ../../utils/tradingUtils
+/** Approximate option delta from moneyness using logistic function */
+function approximateDelta(spot: number, strike: number, optionType: 'CE' | 'PE'): number {
+  const moneyness = (spot - strike) / strike;
+  const ceDelta = 1 / (1 + Math.exp(-10 * moneyness));
+  return optionType === 'CE' ? ceDelta : 1 - ceDelta;
+}
 
-/** Extract trade plan from FUKAA signal — uses backend pivot targets when available */
-function extractTradePlan(sig: FukaaTrigger): TradePlan {
+/** Map equity-level SL/targets to option premium levels using delta */
+function mapToOptionLevels(
+  optionEntry: number,
+  equitySpot: number,
+  equitySl: number,
+  equityTargets: (number | null)[],
+  strike: number,
+  optionType: 'CE' | 'PE'
+): { sl: number; targets: number[]; delta: number } {
+  const delta = approximateDelta(equitySpot, strike, optionType);
+  const slMove = Math.abs(equitySpot - equitySl);
+  const optionSl = Math.max(0.5, optionEntry - delta * slMove);
+  const targets = equityTargets.map(t => {
+    if (t == null) return 0;
+    const targetMove = Math.abs(t - equitySpot);
+    return Math.round((optionEntry + delta * targetMove) * 100) / 100;
+  });
+  return { sl: Math.round(optionSl * 100) / 100, targets, delta: Math.round(delta * 100) / 100 };
+}
+
+function extractTradePlan(sig: MicroAlphaSignal): TradePlan {
   const isLong = sig.direction === 'BULLISH';
   const optionType: 'CE' | 'PE' = isLong ? 'CE' : 'PE';
-  const { strike, interval } = getOTMStrike(sig.triggerPrice, sig.direction);
+  const { strike, interval } = getOTMStrike(sig.entryPrice, sig.direction);
 
-  // ATR: prefer backend-enriched, fallback to BB-derived estimate
-  const bw = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  const atr = sig.atr30m && sig.atr30m > 0
-    ? sig.atr30m
-    : bw > 0 ? bw / 2.5 : sig.triggerPrice * 0.004;
+  const risk = Math.abs(sig.entryPrice - sig.stopLoss);
+  const atr = risk > 0 ? risk : sig.entryPrice * 0.004;
 
-  // If backend enriched targets exist (pivot-based), use them
-  if (sig.target1 != null && sig.stopLoss != null) {
-    return {
-      entry: sig.triggerPrice,
-      sl: sig.stopLoss,
-      t1: sig.target1 ?? null,
-      t2: sig.target2 ?? null,
-      t3: sig.target3 ?? null,
-      t4: sig.target4 ?? null,
-      rr: sig.riskReward ?? 0,
-      atr,
-      optionType,
-      strike,
-      strikeInterval: interval,
-    };
-  }
-
-  // Fallback: SuperTrend-based SL + R-multiple targets
-  const sl = sig.superTrend || (isLong
-    ? sig.triggerPrice - atr * 2
-    : sig.triggerPrice + atr * 2);
-  const risk = Math.abs(sig.triggerPrice - sl);
-  const t1 = isLong ? sig.triggerPrice + risk * 2 : sig.triggerPrice - risk * 2;
-  const t2 = isLong ? sig.triggerPrice + risk * 3 : sig.triggerPrice - risk * 3;
-  const t3 = isLong ? sig.triggerPrice + risk * 4 : sig.triggerPrice - risk * 4;
-  const t4 = isLong ? sig.triggerPrice + risk * 5 : sig.triggerPrice - risk * 5;
-  const rr = risk > 0 ? (Math.abs(t1 - sig.triggerPrice) / risk) : 0;
+  const t1 = sig.target;
+  const t2 = isLong ? sig.entryPrice + risk * 3 : sig.entryPrice - risk * 3;
+  const t3 = isLong ? sig.entryPrice + risk * 4 : sig.entryPrice - risk * 4;
 
   return {
-    entry: sig.triggerPrice,
-    sl, t1, t2, t3, t4,
-    rr,
+    entry: sig.entryPrice,
+    sl: sig.stopLoss,
+    t1, t2, t3,
+    rr: sig.riskReward,
     atr,
     optionType,
     strike,
@@ -220,87 +199,65 @@ function extractTradePlan(sig: FukaaTrigger): TradePlan {
   };
 }
 
-/** Compute stable IV change % per signal */
-function computeIVChange(sig: FukaaTrigger): number {
-  const hash = sig.scripCode.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 1), 0);
-  const seed = ((hash * 17 + 13) % 21) - 8;
-  const isLong = sig.direction === 'BULLISH';
-  const beyondBB = isLong
-    ? sig.triggerPrice - (sig.bbUpper || sig.triggerPrice)
-    : (sig.bbLower || sig.triggerPrice) - sig.triggerPrice;
-  const bbWidth = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  const breakoutBoost = bbWidth > 0 ? (beyondBB / bbWidth) * 5 : 0;
-  return Math.round((seed + breakoutBoost) * 10) / 10;
+/** Confidence from absConviction (already 0-100 scale) */
+function computeConfidence(sig: MicroAlphaSignal): number {
+  return Math.min(97, Math.max(40, Math.round(sig.absConviction)));
 }
 
-/** Compute stable option delta per signal */
-function computeDelta(sig: FukaaTrigger, plan: TradePlan): number {
-  const otmDist = Math.abs(plan.strike - plan.entry);
-  const interval = plan.strikeInterval;
-  const baseDelta = 0.50 - (otmDist / interval) * 0.12;
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const variance = ((hash % 9) - 4) / 100;
-  const delta = Math.max(0.20, Math.min(0.48, baseDelta + variance));
-  return sig.direction === 'BEARISH' ? -delta : delta;
-}
-
-/** OI change ratio from real FUT OI data (3-window cumulative trend); falls back to 0 if unavailable */
-function computeOIChange(sig: FukaaTrigger): number {
-  if (sig.oiChangeRatio != null) return Math.round(sig.oiChangeRatio);
-  return 0;
-}
-
-/** OI label color: green for new positions (LONG_BUILDUP, SHORT_BUILDUP), orange for exits */
-function getOILabelStyle(label?: string): { text: string; color: string } {
-  switch (label) {
-    case 'LONG_BUILDUP': return { text: 'Long Buildup', color: 'text-green-400' };
-    case 'SHORT_BUILDUP': return { text: 'Short Buildup', color: 'text-green-400' };
-    case 'SHORT_COVERING': return { text: 'Short Covering', color: 'text-orange-400' };
-    case 'LONG_UNWINDING': return { text: 'Long Unwinding', color: 'text-orange-400' };
-    default: return { text: '', color: 'text-slate-500' };
-  }
-}
-
-/** OI chip accent based on whether OI confirms signal direction */
-function getOIAccent(label?: string): string {
-  if (label === 'LONG_BUILDUP' || label === 'SHORT_BUILDUP') {
-    return 'bg-green-500/15 text-green-300';
-  }
-  if (label === 'SHORT_COVERING' || label === 'LONG_UNWINDING') {
-    return 'bg-orange-500/15 text-orange-300';
-  }
-  return 'bg-slate-700/50 text-slate-300';
-}
-
-function formatVolume(vol: number): string {
-  if (vol >= 1_000_000) return (vol / 1_000_000).toFixed(1) + 'M';
-  if (vol >= 1_000) return (vol / 1_000).toFixed(1) + 'K';
-  return vol.toString();
-}
-
-function getEpoch(sig: FukaaTrigger): number {
-  if (sig.triggerTimeEpoch) return sig.triggerTimeEpoch;
-  if (sig.triggerTime) {
-    const d = new Date(sig.triggerTime);
-    if (!isNaN(d.getTime())) return d.getTime();
-  }
-  return sig.cachedAt || 0;
-}
-
-/** Compute composite strength score (0-100) */
-function computeStrength(sig: FukaaTrigger, plan: TradePlan): number {
+/** Composite strength score */
+function computeStrength(sig: MicroAlphaSignal, plan: TradePlan): number {
   const conf = computeConfidence(sig);
-  const vol = sig.surgeT;
   const rr = plan.rr;
-  const iv = computeIVChange(sig);
-  const confNorm = ((conf - 55) / 42) * 25;
-  const volNorm = Math.min(25, ((vol - 1) / 10) * 25);   // FUKAA has higher surge values
-  const rrNorm = Math.min(25, (rr / 4) * 25);
-  const ivNorm = Math.max(0, Math.min(25, ((iv + 10) / 25) * 25));
-  return Math.min(100, Math.round(confNorm + volNorm + rrNorm + ivNorm));
+  const confNorm = ((conf - 40) / 57) * 50;
+  const rrNorm = Math.min(50, (rr / 4) * 50);
+  return Math.min(100, Math.round(confNorm + rrNorm));
 }
 
-// computeLotSizing: imported from ../../utils/tradingUtils
+/** Compute lot sizing based on confidence and wallet capital */
+function computeLotSizing(
+  confidence: number,
+  walletCapital: number,
+  optionLtp: number,
+  lotSize: number
+): { lots: number; quantity: number; disabled: boolean; insufficientFunds: boolean; creditAmount: number; allocPct: number } {
+  if (confidence < 60) {
+    return { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 };
+  }
+  const allocPct = confidence > 75 ? 0.75 : 0.50;
+  const allocatedCapital = walletCapital * allocPct;
+  const costPerLot = optionLtp * lotSize;
+  if (costPerLot <= 0) {
+    return { lots: 1, quantity: lotSize, disabled: false, insufficientFunds: false, creditAmount: 0, allocPct };
+  }
+  let lots = Math.floor(allocatedCapital / costPerLot);
+  let insufficientFunds = false;
+  let creditAmount = 0;
+  if (lots < 1) {
+    lots = 1;
+    insufficientFunds = true;
+    creditAmount = Math.round((costPerLot - walletCapital) * 100) / 100;
+  }
+  return { lots, quantity: lots * lotSize, disabled: false, insufficientFunds, creditAmount, allocPct };
+}
+
+/** Trading mode badge color */
+function getModeColor(mode: string): string {
+  switch (mode) {
+    case 'TREND_FOLLOWING': return 'bg-green-500/15 text-green-400 border-green-500/30';
+    case 'MEAN_REVERSION': return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
+    case 'BREAKOUT_AWAITING': return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+    default: return 'bg-slate-700/50 text-slate-400 border-slate-600';
+  }
+}
+
+function getModeLabel(mode: string): string {
+  switch (mode) {
+    case 'TREND_FOLLOWING': return 'Trend';
+    case 'MEAN_REVERSION': return 'Reversion';
+    case 'BREAKOUT_AWAITING': return 'Breakout';
+    default: return mode;
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════
    R:R VISUAL BAR
@@ -310,7 +267,6 @@ const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
   const totalParts = 1 + Math.max(rr, 0);
   const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
   const rewardPct = 100 - riskPct;
-
   return (
     <div>
       <div className="flex h-[6px] rounded-full overflow-hidden">
@@ -321,9 +277,7 @@ const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
         <span className="text-[11px] text-slate-500">Risk</span>
         <span className={`font-mono text-xs font-bold ${
           rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-green-400/80' : rr >= 1 ? 'text-yellow-400' : 'text-red-400'
-        }`}>
-          R:R 1:{rr.toFixed(1)}
-        </span>
+        }`}>R:R 1:{rr.toFixed(1)}</span>
         <span className="text-[11px] text-slate-500">Reward</span>
       </div>
     </div>
@@ -335,9 +289,9 @@ const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
    ═══════════════════════════════════════════════════════════════ */
 
 const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
+  <div className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono
     ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
+    <span className="text-slate-500 text-[10px]">{label}</span>
     <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
   </div>
 );
@@ -352,16 +306,13 @@ const ExecutionOverlay: React.FC<{
   onViewPosition: () => void;
 }> = ({ state, onClose, onViewPosition }) => {
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
-
   useEffect(() => {
     if (state.visible && state.status === 'filled') {
       timerRef.current = setTimeout(onClose, 3000);
     }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [state.visible, state.status, onClose]);
-
   if (!state.visible) return null;
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
       <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-[340px] shadow-2xl animate-scaleIn text-center">
@@ -371,9 +322,7 @@ const ExecutionOverlay: React.FC<{
               <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
             </div>
             <h3 className="text-white font-semibold text-lg mb-1">Placing Order...</h3>
-            <p className="text-slate-400 text-sm mb-4">
-              {state.symbol} {state.strike} {state.optionType}
-            </p>
+            <p className="text-slate-400 text-sm mb-4">{state.symbol} {state.strike} {state.optionType}</p>
           </>
         )}
         {state.status === 'error' && (
@@ -382,15 +331,8 @@ const ExecutionOverlay: React.FC<{
               <AlertTriangle className="w-6 h-6 text-red-400" />
             </div>
             <h3 className="text-white font-semibold text-lg mb-1">Order Failed</h3>
-            <p className="text-red-400 text-sm mb-4">
-              {state.errorMessage || 'Could not place order. Try again.'}
-            </p>
-            <button
-              onClick={onClose}
-              className="w-full h-11 rounded-lg bg-slate-700 text-white font-semibold text-sm hover:bg-slate-600 transition-colors"
-            >
-              Close
-            </button>
+            <p className="text-red-400 text-sm mb-4">{state.errorMessage || 'Could not place order. Try again.'}</p>
+            <button onClick={onClose} className="w-full h-11 rounded-lg bg-slate-700 text-white font-semibold text-sm hover:bg-slate-600 transition-colors">Close</button>
           </>
         )}
         {state.status === 'filled' && (
@@ -399,37 +341,14 @@ const ExecutionOverlay: React.FC<{
               <Check className="w-6 h-6 text-green-400" />
             </div>
             <h3 className="text-white font-semibold text-lg mb-1">Order Sent</h3>
-            <p className="text-slate-400 text-sm mb-4">
-              {state.symbol} {state.strike} {state.optionType}
-            </p>
-
+            <p className="text-slate-400 text-sm mb-4">{state.symbol} {state.strike} {state.optionType}</p>
             <div className="grid grid-cols-3 gap-3 mb-5 text-center">
-              <div>
-                <div className="text-[11px] text-slate-500 mb-0.5">Filled</div>
-                <div className="font-mono text-white text-sm">{state.filledPrice.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-slate-500 mb-0.5">Lots</div>
-                <div className="font-mono text-white text-sm">{state.lots}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-slate-500 mb-0.5">Risk</div>
-                <div className="font-mono text-amber-400 text-sm">{state.riskPercent}%</div>
-              </div>
+              <div><div className="text-[11px] text-slate-500 mb-0.5">Filled</div><div className="font-mono text-white text-sm">{state.filledPrice.toFixed(2)}</div></div>
+              <div><div className="text-[11px] text-slate-500 mb-0.5">Lots</div><div className="font-mono text-white text-sm">{state.lots}</div></div>
+              <div><div className="text-[11px] text-slate-500 mb-0.5">Risk</div><div className="font-mono text-amber-400 text-sm">{state.riskPercent}%</div></div>
             </div>
-
-            <button
-              onClick={onViewPosition}
-              className="w-full h-11 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors mb-2"
-            >
-              View Position
-            </button>
-            <button
-              onClick={onClose}
-              className="text-slate-500 text-xs hover:text-slate-300 transition-colors"
-            >
-              Close
-            </button>
+            <button onClick={onViewPosition} className="w-full h-11 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors mb-2">View Position</button>
+            <button onClick={onClose} className="text-slate-500 text-xs hover:text-slate-300 transition-colors">Close</button>
           </>
         )}
       </div>
@@ -438,7 +357,7 @@ const ExecutionOverlay: React.FC<{
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   FILTER DROPDOWN — Anchored right, matching FUDKII style
+   FILTER DROPDOWN
    ═══════════════════════════════════════════════════════════════ */
 
 const FilterDropdown: React.FC<{
@@ -449,64 +368,41 @@ const FilterDropdown: React.FC<{
   onClose: () => void;
   onReset: () => void;
 }> = ({ direction, exchange, onDirectionChange, onExchangeChange, onClose, onReset }) => (
-  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-3 sm:p-4 min-w-[240px] sm:min-w-[260px] animate-slideDown mobile-dropdown-full">
-    {/* Direction */}
+  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[260px] animate-slideDown">
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
       <div className="flex gap-2">
         {(['ALL', 'BULLISH', 'BEARISH'] as DirectionFilter[]).map(d => (
-          <button
-            key={d}
-            onClick={() => onDirectionChange(d)}
+          <button key={d} onClick={() => onDirectionChange(d)}
             className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
               direction === d
                 ? d === 'BULLISH' ? 'bg-green-500/20 text-green-400 border border-green-500/40'
                   : d === 'BEARISH' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                  : 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                  : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
                 : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {d === 'ALL' ? 'All' : d === 'BULLISH' ? 'Bullish' : 'Bearish'}
-          </button>
+            }`}>{d === 'ALL' ? 'All' : d === 'BULLISH' ? 'Bullish' : 'Bearish'}</button>
         ))}
       </div>
     </div>
-
-    {/* Instrument / Exchange */}
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Instrument</div>
       <div className="flex gap-2">
         {([
-          { key: 'ALL', label: 'All' },
-          { key: 'N', label: 'NSE' },
-          { key: 'M', label: 'MCX' },
-          { key: 'C', label: 'Currency' },
+          { key: 'ALL', label: 'All' }, { key: 'N', label: 'NSE' },
+          { key: 'M', label: 'MCX' }, { key: 'C', label: 'Currency' },
         ] as { key: ExchangeFilter; label: string }[]).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => onExchangeChange(key)}
+          <button key={key} onClick={() => onExchangeChange(key)}
             className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
               exchange === key
-                ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
                 : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {label}
-          </button>
+            }`}>{label}</button>
         ))}
       </div>
     </div>
-
-    <button
-      onClick={onClose}
-      className="w-full h-10 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors"
-    >
-      Apply
-    </button>
+    <button onClick={onClose} className="w-full h-10 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors">Apply</button>
     <div className="text-center mt-2">
-      <button onClick={onReset} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
-        Reset Filters
-      </button>
+      <button onClick={onReset} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Reset Filters</button>
     </div>
   </div>
 );
@@ -518,11 +414,9 @@ const FilterDropdown: React.FC<{
 const SORT_OPTIONS: { key: SortField; label: string }[] = [
   { key: 'timestamp', label: 'Recent' },
   { key: 'strength', label: 'Strength' },
-  { key: 'confidence', label: 'Confidence %' },
+  { key: 'confidence', label: 'Conviction' },
   { key: 'rr', label: 'R:R' },
   { key: 'time', label: 'Latest Trigger' },
-  { key: 'iv', label: 'IV Change' },
-  { key: 'volume', label: 'Volume Surge' },
 ];
 
 const SortDropdown: React.FC<{
@@ -532,17 +426,12 @@ const SortDropdown: React.FC<{
 }> = ({ current, onSelect, onClose }) => (
   <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 py-1 min-w-[180px] animate-slideDown">
     {SORT_OPTIONS.map(({ key, label }) => (
-      <button
-        key={key}
-        onClick={() => { onSelect(key); onClose(); }}
+      <button key={key} onClick={() => { onSelect(key); onClose(); }}
         className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
-          current === key
-            ? 'text-orange-400 bg-orange-500/10'
-            : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'
-        }`}
-      >
+          current === key ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'
+        }`}>
         {label}
-        {current === key && <Check className="w-3.5 h-3.5 inline ml-2 text-orange-400" />}
+        {current === key && <Check className="w-3.5 h-3.5 inline ml-2 text-cyan-400" />}
       </button>
     ))}
   </div>
@@ -555,39 +444,33 @@ const SortDropdown: React.FC<{
 const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ hasFilters, onReset }) => (
   <div className="flex flex-col items-center justify-center py-20 text-center px-6">
     <div className="w-16 h-16 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-4">
-      <Zap className="w-7 h-7 text-slate-600" />
+      <Activity className="w-7 h-7 text-slate-600" />
     </div>
     <h3 className="text-white font-medium text-lg mb-1">No Signals Match</h3>
     <p className="text-slate-500 text-sm mb-5 max-w-xs">
       {hasFilters
-        ? 'No FUKAA signals match your current filters. Try adjusting your criteria.'
-        : 'Waiting for volume-confirmed SuperTrend + BB breakout signals...'}
+        ? 'No MicroAlpha signals match your current filters. Try adjusting your criteria.'
+        : 'Waiting for microstructure alpha signals...'}
     </p>
     {hasFilters && (
-      <button
-        onClick={onReset}
-        className="px-5 py-2.5 rounded-lg bg-[#3B82F6] text-white font-medium text-sm hover:bg-blue-600 transition-colors"
-      >
-        Reset Filters
-      </button>
+      <button onClick={onReset} className="px-5 py-2.5 rounded-lg bg-[#3B82F6] text-white font-medium text-sm hover:bg-blue-600 transition-colors">Reset Filters</button>
     )}
   </div>
 );
 
 /* ═══════════════════════════════════════════════════════════════
-   FUKAA TRADING CARD — Same layout as FUDKII
+   MICROALPHA TRADING CARD
    ═══════════════════════════════════════════════════════════════ */
 
-const FukaaCard: React.FC<{
-  trigger: FukaaTrigger;
+const MicroAlphaCard: React.FC<{
+  sig: MicroAlphaSignal;
   plan: TradePlan;
   walletCapital: number;
-  onBuy: (sig: FukaaTrigger, plan: TradePlan, lots: number) => void;
-}> = ({ trigger, plan, walletCapital, onBuy }) => {
+  onBuy: (sig: MicroAlphaSignal, plan: TradePlan, lots: number) => void;
+}> = ({ sig, plan, walletCapital, onBuy }) => {
   const [pressing, setPressing] = useState(false);
-  const isLong = trigger.direction === 'BULLISH';
+  const isLong = sig.direction === 'BULLISH';
 
-  // Colors
   const dirColor = isLong ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
   const buyBg = isLong ? 'bg-[#18C964]' : 'bg-[#FF4D6D]';
   const buyBgActive = isLong ? 'active:bg-[#15a854]' : 'active:bg-[#e6445f]';
@@ -596,129 +479,109 @@ const FukaaCard: React.FC<{
     ? 'border-green-500/20 hover:border-green-500/40'
     : 'border-red-500/20 hover:border-red-500/40';
 
-  const displayName = trigger.symbol || trigger.companyName || trigger.scripCode;
-
-  // Dynamic confidence (boosted by volume surge magnitude)
-  const confidence = computeConfidence(trigger);
+  const confidence = computeConfidence(sig);
 
   // Option: prefer real data from backend; check futures fallback for MCX
-  const hasRealOption = trigger.optionAvailable === true && trigger.optionLtp != null && trigger.optionLtp > 0;
-  const hasFutures = trigger.futuresAvailable === true && trigger.futuresLtp != null && trigger.futuresLtp > 0;
-  const noDerivatives = trigger.optionAvailable === false && !hasFutures;
+  const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
+  const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+  const noDerivatives = sig.optionAvailable === false && !hasFutures;
 
   // Determine instrument mode: OPTION, FUTURES, or NONE
   let instrumentMode: 'OPTION' | 'FUTURES' | 'NONE' = 'NONE';
   let premium = 0;
   let displayInstrumentName = '';
   let lotSize = 1;
-  let multiplier = 1;
 
   if (hasRealOption) {
     instrumentMode = 'OPTION';
-    premium = trigger.optionLtp!;
-    const displayStrike = trigger.optionStrike ?? plan.strike;
-    const displayOptionType = trigger.optionType ?? plan.optionType;
-    displayInstrumentName = `${trigger.symbol} ${displayStrike} ${displayOptionType}`;
-    lotSize = trigger.optionLotSize ?? 1;
-    multiplier = trigger.optionMultiplier ?? 1;
+    premium = sig.optionLtp!;
+    const displayStrike = sig.optionStrike ?? plan.strike;
+    const displayOptionType = sig.optionType ?? plan.optionType;
+    displayInstrumentName = `${sig.symbol || sig.scripCode} ${displayStrike} ${displayOptionType}`;
+    lotSize = sig.optionLotSize ?? 1;
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
-    premium = trigger.futuresLtp!;
-    displayInstrumentName = `${trigger.futuresSymbol ?? trigger.symbol} FUT${trigger.futuresExpiry ? ' ' + trigger.futuresExpiry : ''}`;
-    lotSize = trigger.futuresLotSize ?? 1;
-    multiplier = trigger.futuresMultiplier ?? 1;
+    premium = sig.futuresLtp!;
+    displayInstrumentName = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+    lotSize = sig.futuresLotSize ?? 1;
   } else if (!noDerivatives) {
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
+    displayInstrumentName = `${sig.symbol || sig.scripCode} ${plan.strike} ${plan.optionType}`;
     lotSize = 1;
   }
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
-    : computeLotSizing(confidence, walletCapital, premium, lotSize, multiplier);
-
-  // Metrics — use real FUKAA surge data, computed IV/Delta/OI
-  const surgeVal = trigger.surgeT.toFixed(1);
-  const ivVal = computeIVChange(trigger);
-  const ivChange = (ivVal >= 0 ? '+' : '') + ivVal.toFixed(1);
-  const delta = computeDelta(trigger, plan).toFixed(2);
-  const oiVal = computeOIChange(trigger);
-  const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
-  const oiStyle = getOILabelStyle(trigger.oiLabel);
-  const oiAccent = getOIAccent(trigger.oiLabel);
+    : computeLotSizing(confidence, walletCapital, premium, lotSize);
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
-      <div className="p-3 sm:p-4">
+      overflow-hidden transition-all duration-200 hover:shadow-lg mx-4 md:mx-0`}>
+      <div className="p-4">
 
         {/* ── TOP SECTION ── */}
         <div className="flex items-start justify-between mb-1">
           <div>
-            <h3 className="text-lg font-semibold text-white leading-tight">{displayName}</h3>
+            <h3 className="text-lg font-semibold text-white leading-tight">
+              {sig.symbol || sig.scripCode}
+            </h3>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-slate-500">
-                Confidence <span className="font-mono text-slate-400">{confidence}%</span>
+                Conviction <span className="font-mono text-slate-400">{confidence}%</span>
               </span>
               <span className="text-slate-700">|</span>
-              <span className="text-xs text-slate-500 font-mono">
-                {formatTriggerTime(trigger)}
-              </span>
+              <span className="text-xs text-slate-500 font-mono">{formatTriggerTime(sig)}</span>
             </div>
           </div>
-          <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
-            {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-            {isLong ? 'Bullish' : 'Bearish'}
-          </span>
-        </div>
-
-        {/* ── VOLUME SURGE STRIP ── */}
-        <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2">
-            <Volume2 className="w-3 h-3" />
-            Volume Surge (vs {formatVolume(trigger.avgVolume)} avg)
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            <div className="text-center">
-              <div className="text-slate-500">T-1</div>
-              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTMinus1)}</div>
-              <div className={`font-mono ${
-                trigger.surgeTMinus1 >= 10 ? 'text-amber-300 font-bold' :
-                trigger.surgeTMinus1 >= 5 ? 'text-green-400 font-semibold' :
-                trigger.surgeTMinus1 >= 2 ? 'text-green-400' : 'text-slate-400'
-              }`}>
-                {trigger.surgeTMinus1 > 0 ? trigger.surgeTMinus1.toFixed(1) + 'x' : '-'}
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-slate-500">T</div>
-              <div className="font-mono text-white font-semibold">{formatVolume(trigger.volumeT)}</div>
-              <div className={`font-mono ${
-                trigger.surgeT >= 10 ? 'text-amber-300 font-bold' :
-                trigger.surgeT >= 5 ? 'text-green-400 font-semibold' : 'text-green-400'
-              }`}>
-                {trigger.surgeT.toFixed(1)}x
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-slate-500">T+1</div>
-              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTPlus1)}</div>
-              <div className={`font-mono ${
-                trigger.surgeTPlus1 >= 10 ? 'text-amber-300 font-bold' :
-                trigger.surgeTPlus1 >= 5 ? 'text-green-400 font-semibold' :
-                trigger.surgeTPlus1 >= 2 ? 'text-green-400' : 'text-slate-400'
-              }`}>
-                {trigger.surgeTPlus1 > 0 ? trigger.surgeTPlus1.toFixed(1) + 'x' : '-'}
-              </div>
-            </div>
+          <div className="flex items-center gap-1.5">
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${getModeColor(sig.tradingMode)}`}>
+              {getModeLabel(sig.tradingMode)}
+            </span>
+            <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
+              {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+              {isLong ? 'Bullish' : 'Bearish'}
+            </span>
           </div>
         </div>
 
-        {/* ── CENTER CORE: SL / Entry / Targets Grid ── */}
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
-          {/* Row 1: SL | Entry */}
+        {/* ── SUB-SCORES BREAKDOWN ── */}
+        {sig.subScores && (
+          <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2">
+              <Activity className="w-3 h-3 text-cyan-400" />
+              Sub-Scores
+            </div>
+            <div className="grid grid-cols-5 gap-1.5 text-center">
+              {Object.entries(sig.subScores).map(([key, val]) => (
+                <div key={key}>
+                  <div className="text-[10px] text-slate-500 capitalize">{key}</div>
+                  <div className={`font-mono text-xs font-semibold ${
+                    val > 0.5 ? 'text-green-400' : val < -0.5 ? 'text-red-400' : 'text-slate-400'
+                  }`}>{typeof val === 'number' ? val.toFixed(1) : val}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── DATA QUALITY FLAGS ── */}
+        <div className="mt-2 flex gap-1.5 flex-wrap">
+          {[
+            { key: 'Orderbook', has: sig.hasOrderbook },
+            { key: 'OI', has: sig.hasOI },
+            { key: 'Options', has: sig.hasOptions },
+            { key: 'Session', has: sig.hasSession },
+          ].map(({ key, has }) => (
+            <span key={key} className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+              has ? 'bg-cyan-500/10 text-cyan-400' : 'bg-slate-700/30 text-slate-600'
+            }`}>{key}</span>
+          ))}
+        </div>
+
+        {/* ── SL / Entry / Targets ── */}
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
           <div className="flex flex-col">
             <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
             <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
@@ -727,34 +590,14 @@ const FukaaCard: React.FC<{
             <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
             <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
           </div>
-
-          {/* Row 2: T1 | T2 */}
-          {plan.t1 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
-              <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-            </div>
-          )}
-          {plan.t2 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2</span>
-              <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-            </div>
-          )}
-
-          {/* Row 3: T3 | T4 */}
-          {plan.t3 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T3</span>
-              <span className="font-mono text-sm font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-            </div>
-          )}
-          {plan.t4 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T4</span>
-              <span className="font-mono text-sm font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-            </div>
-          )}
+          <div className="flex flex-col">
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
+            <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2</span>
+            <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
+          </div>
         </div>
 
         {/* ── R:R BAR ── */}
@@ -763,22 +606,11 @@ const FukaaCard: React.FC<{
         </div>
 
         {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="Vol" value={`${surgeVal}x`} bold accent="bg-amber-500/15 text-amber-300" />
-          <MetricsChip label="IV" value={`${ivChange}%`} />
-          <MetricsChip label={'\u0394'} value={delta} />
-          <MetricsChip label="OI" value={`${oiChange}%`} accent={oiAccent} />
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1">
+          <MetricsChip label="Conv" value={`${sig.absConviction.toFixed(0)}%`} bold accent="bg-cyan-500/15 text-cyan-300" />
+          <MetricsChip label="Score" value={sig.score.toFixed(1)} />
+          <MetricsChip label="Mode" value={getModeLabel(sig.tradingMode)} />
         </div>
-
-        {/* ── OI LABEL ── */}
-        {oiStyle.text && (
-          <div className="mt-1.5 px-1">
-            <span className={`text-[10px] font-semibold uppercase tracking-wider ${oiStyle.color}`}>
-              {oiStyle.text}
-            </span>
-          </div>
-        )}
 
         {/* ── INSUFFICIENT FUNDS LABEL ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
@@ -794,18 +626,18 @@ const FukaaCard: React.FC<{
             disabled
             className="w-full h-12 rounded-xl mt-4 text-slate-500 font-semibold text-sm bg-slate-700/30 border border-slate-600/30 cursor-not-allowed"
           >
-            No Derivatives Available for {trigger.symbol || trigger.scripCode}
+            No Derivatives Available for {sig.symbol || sig.scripCode}
           </button>
         ) : sizing.disabled ? (
           <button
             disabled
             className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
           >
-            Confidence {confidence}% &lt; 60% — No Trade
+            Conviction {confidence}% &lt; 60% — No Trade
           </button>
         ) : (
           <button
-            onClick={() => onBuy(trigger, plan, sizing.lots)}
+            onClick={() => onBuy(sig, plan, sizing.lots)}
             onMouseDown={() => setPressing(true)}
             onMouseUp={() => setPressing(false)}
             onMouseLeave={() => setPressing(false)}
@@ -814,7 +646,7 @@ const FukaaCard: React.FC<{
               ${buyBg} ${buyHover} ${buyBgActive}
               ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
           >
-            BUY {displayInstrumentName} @ &#8377;{Number(premium.toFixed(2))}/-  x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+            BUY {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
           </button>
         )}
       </div>
@@ -823,12 +655,12 @@ const FukaaCard: React.FC<{
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   MAIN: FUKAA TAB CONTENT
+   MAIN: MICROALPHA TAB CONTENT
    ═══════════════════════════════════════════════════════════════ */
 
-export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = true }) => {
+export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ autoRefresh = true }) => {
   const navigate = useNavigate();
-  const [triggers, setTriggers] = useState<FukaaTrigger[]>([]);
+  const [signals, setSignals] = useState<MicroAlphaSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortField, setSortField] = useState<SortField>('timestamp');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
@@ -842,28 +674,27 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   });
   const [walletCapital, setWalletCapital] = useState<number>(100000);
 
-  const fetchFukaa = useCallback(async () => {
+  const fetchSignals = useCallback(async () => {
     try {
-      // Use history endpoint — returns ALL triggered signals for today, persisted in Redis
-      const data = await fetchJson<FukaaTrigger[]>('/strategy-state/fukaa/history/list');
+      const data = await fetchJson<MicroAlphaSignal[]>('/strategy-state/microalpha/history/list');
       if (data) {
-        setTriggers(data);
+        setSignals(data);
       }
     } catch (err) {
-      console.error('Error fetching FUKAA triggers:', err);
+      console.error('Error fetching MicroAlpha signals:', err);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchFukaa();
+    fetchSignals();
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchFukaa, 5000);
+      interval = setInterval(fetchSignals, 5000);
     }
     return () => { if (interval) clearInterval(interval); };
-  }, [autoRefresh, fetchFukaa]);
+  }, [autoRefresh, fetchSignals]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -882,7 +713,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   useEffect(() => {
     const fetchCapital = async () => {
       try {
-        const data = await strategyWalletsApi.getCapital('FUKAA');
+        const data = await strategyWalletsApi.getCapital('MICROALPHA');
         if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
       } catch { /* ignore */ }
     };
@@ -894,7 +725,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   /* ── FILTER ── */
   const hasActiveFilter = directionFilter !== 'ALL' || exchangeFilter !== 'ALL';
 
-  let filtered = triggers.filter(t => t.triggered);
+  let filtered = signals.filter(s => s.triggered);
   if (directionFilter !== 'ALL') {
     filtered = filtered.filter(s => s.direction === directionFilter);
   }
@@ -915,11 +746,6 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       case 'rr':
         return b.plan.rr - a.plan.rr || getEpoch(b.sig) - getEpoch(a.sig);
       case 'time':
-        return getEpoch(b.sig) - getEpoch(a.sig);
-      case 'iv':
-        return computeIVChange(b.sig) - computeIVChange(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
-      case 'volume':
-        return b.sig.surgeT - a.sig.surgeT || getEpoch(b.sig) - getEpoch(a.sig);
       case 'timestamp':
         return getEpoch(b.sig) - getEpoch(a.sig);
       default:
@@ -929,50 +755,57 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
   const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Recent';
 
-  /* ── BUY HANDLER — dispatches to strategy trades module ── */
-  const handleBuy = useCallback(async (sig: FukaaTrigger, plan: TradePlan, lots: number) => {
+  /* ── BUY HANDLER — dispatches to strategy trade execution ── */
+  const handleBuy = useCallback(async (sig: MicroAlphaSignal, plan: TradePlan, lots: number) => {
     const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
     const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
-    const isLong = sig.direction === 'BULLISH';
 
-    // Determine instrument details based on mode
-    let premium = 0;
-    let instrumentSymbol = '';
-    let instrumentType: 'OPTION' | 'FUTURES' = 'OPTION';
-    let lotSize = 1;
-    let multiplier = 1;
-    let tradingScripCode = sig.scripCode;
-    let strike = plan.strike;
-    let optionType: 'CE' | 'PE' = plan.optionType;
+    // Determine instrument details
+    let premium: number;
+    let instrumentType: 'OPTION' | 'FUTURES';
+    let instrumentSymbol: string;
+    let tradingScripCode: string;
+    let lotSize: number;
+    let displayStrike: number;
+    let displayOptionType: string;
+    let exchange: string;
 
     if (hasRealOption) {
+      instrumentType = 'OPTION';
       premium = sig.optionLtp!;
-      strike = sig.optionStrike ?? plan.strike;
-      optionType = (sig.optionType ?? plan.optionType) as 'CE' | 'PE';
-      instrumentSymbol = `${sig.symbol} ${strike} ${optionType}`;
+      displayStrike = sig.optionStrike ?? plan.strike;
+      displayOptionType = sig.optionType ?? plan.optionType;
+      instrumentSymbol = `${sig.symbol || sig.scripCode} ${displayStrike} ${displayOptionType}`;
       lotSize = sig.optionLotSize ?? 1;
-      multiplier = sig.optionMultiplier ?? 1;
       tradingScripCode = sig.optionScripCode ?? sig.scripCode;
-      instrumentType = 'OPTION';
+      exchange = sig.optionExchange ?? sig.exchange;
     } else if (hasFutures) {
-      premium = sig.futuresLtp!;
-      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
-      lotSize = sig.futuresLotSize ?? 1;
-      multiplier = sig.futuresMultiplier ?? 1;
-      tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
       instrumentType = 'FUTURES';
+      premium = sig.futuresLtp!;
+      displayStrike = 0;
+      displayOptionType = plan.optionType;
+      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      lotSize = sig.futuresLotSize ?? 1;
+      tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
+      exchange = sig.futuresExchange ?? sig.exchange;
     } else {
-      premium = estimateOptionPremium(plan);
-      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType}`;
+      // Legacy fallback
       instrumentType = 'OPTION';
+      premium = estimateOptionPremium(plan);
+      displayStrike = plan.strike;
+      displayOptionType = plan.optionType;
+      instrumentSymbol = `${sig.symbol || sig.scripCode} ${plan.strike} ${plan.optionType}`;
+      lotSize = 1;
+      tradingScripCode = sig.scripCode;
+      exchange = sig.exchange;
     }
 
     setExecution({
       visible: true,
       symbol: sig.symbol || sig.scripCode,
       optionName: instrumentSymbol,
-      strike,
-      optionType,
+      strike: displayStrike,
+      optionType: displayOptionType as 'CE' | 'PE',
       lots,
       filledPrice: premium,
       riskPercent: 0.8,
@@ -980,32 +813,36 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     });
 
     try {
-      // Compute delta-mapped levels for options, or use equity levels directly for futures
-      let tradeSl = plan.sl;
-      let tradeT1 = plan.t1 ?? 0;
-      let tradeT2 = plan.t2 ?? 0;
-      let tradeT3 = plan.t3 ?? 0;
-      let tradeT4 = plan.t4 ?? 0;
-      let delta = 1.0;
+      // Compute delta-mapped levels for options; for futures use delta=1.0
+      let tradeSl: number;
+      let tradeT1: number;
+      let tradeT2: number;
+      let tradeT3: number;
+      let delta: number;
 
-      if (instrumentType === 'OPTION' && hasRealOption) {
+      if (instrumentType === 'OPTION') {
+        const optType = (displayOptionType === 'CE' || displayOptionType === 'PE') ? displayOptionType : plan.optionType;
         const mapped = mapToOptionLevels(
           premium,
-          sig.triggerPrice,
+          plan.entry,
           plan.sl,
-          [plan.t1, plan.t2, plan.t3, plan.t4],
-          strike,
-          optionType
+          [plan.t1, plan.t2, plan.t3],
+          displayStrike,
+          optType
         );
         tradeSl = mapped.sl;
         tradeT1 = mapped.targets[0] ?? 0;
         tradeT2 = mapped.targets[1] ?? 0;
         tradeT3 = mapped.targets[2] ?? 0;
-        tradeT4 = mapped.targets[3] ?? 0;
         delta = mapped.delta;
+      } else {
+        // Futures: delta = 1.0, use equity levels directly
+        delta = 1.0;
+        tradeSl = plan.sl;
+        tradeT1 = plan.t1;
+        tradeT2 = plan.t2;
+        tradeT3 = plan.t3 ?? 0;
       }
-
-      const confidence = computeConfidence(sig);
 
       const req: StrategyTradeRequest = {
         scripCode: tradingScripCode,
@@ -1017,39 +854,47 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         quantity: lots * lotSize,
         lots,
         lotSize,
-        multiplier,
+        multiplier: 1,
         entryPrice: premium,
         sl: tradeSl,
         t1: tradeT1,
         t2: tradeT2,
         t3: tradeT3,
-        t4: tradeT4,
-        equitySpot: sig.triggerPrice,
+        t4: 0,
+        equitySpot: plan.entry,
         equitySl: plan.sl,
-        equityT1: plan.t1 ?? 0,
-        equityT2: plan.t2 ?? 0,
+        equityT1: plan.t1,
+        equityT2: plan.t2,
         equityT3: plan.t3 ?? 0,
-        equityT4: plan.t4 ?? 0,
+        equityT4: 0,
         delta,
-        optionType: instrumentType === 'OPTION' ? optionType : undefined,
-        strike,
-        strategy: 'FUKAA',
-        exchange: sig.exchange,
-        direction: isLong ? 'BULLISH' : 'BEARISH',
-        confidence,
+        optionType: (displayOptionType === 'CE' || displayOptionType === 'PE') ? displayOptionType : undefined,
+        strike: displayStrike,
+        strategy: 'MICROALPHA',
+        exchange,
+        direction: sig.direction as 'BULLISH' | 'BEARISH',
+        confidence: computeConfidence(sig),
       };
 
       const result = await strategyTradesApi.create(req);
 
-      setExecution(prev => ({
-        ...prev,
-        status: 'filled',
-        filledPrice: result.entryPrice ?? premium,
-        orderId: result.tradeId,
-        riskPercent: plan.sl && sig.triggerPrice
-          ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
-          : 0.8,
-      }));
+      if (result.success) {
+        setExecution(prev => ({
+          ...prev,
+          status: 'filled',
+          filledPrice: result.entryPrice ?? premium,
+          orderId: result.tradeId,
+          riskPercent: plan.sl && sig.entryPrice
+            ? Math.round(Math.abs(sig.entryPrice - plan.sl) / sig.entryPrice * 100 * 10) / 10
+            : 0.8,
+        }));
+      } else {
+        setExecution(prev => ({
+          ...prev,
+          status: 'error',
+          errorMessage: result.error || 'Trade creation failed',
+        }));
+      }
     } catch (err) {
       setExecution(prev => ({
         ...prev,
@@ -1071,13 +916,10 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
   return (
     <div className="relative">
-      {/* ── STICKY HEADER (56px) ── */}
+      {/* ── STICKY HEADER ── */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
         <div className="flex items-center justify-between h-14 px-4">
-          {/* Left: Title */}
-          <h1 className="text-lg font-semibold text-orange-400 tracking-tight">FUKAA</h1>
-
-          {/* Right: Filter + Sort icons */}
+          <h1 className="text-lg font-semibold text-cyan-400 tracking-tight">MICROALPHA</h1>
           <div className="flex items-center gap-2">
             {/* Filter */}
             <div className="relative" data-dropdown>
@@ -1085,27 +927,23 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
                 onClick={(e) => { e.stopPropagation(); setShowFilter(!showFilter); setShowSort(false); }}
                 className={`relative p-2 rounded-lg transition-colors ${
                   hasActiveFilter
-                    ? 'bg-orange-500/15 text-orange-400'
+                    ? 'bg-cyan-500/15 text-cyan-400'
                     : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
                 <Filter className="w-5 h-5" />
                 {hasActiveFilter && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-orange-400" />
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-cyan-400" />
                 )}
               </button>
               {showFilter && (
                 <FilterDropdown
-                  direction={directionFilter}
-                  exchange={exchangeFilter}
-                  onDirectionChange={setDirectionFilter}
-                  onExchangeChange={setExchangeFilter}
-                  onClose={() => setShowFilter(false)}
-                  onReset={resetFilters}
+                  direction={directionFilter} exchange={exchangeFilter}
+                  onDirectionChange={setDirectionFilter} onExchangeChange={setExchangeFilter}
+                  onClose={() => setShowFilter(false)} onReset={resetFilters}
                 />
               )}
             </div>
-
             {/* Sort */}
             <div className="relative" data-dropdown>
               <button
@@ -1120,8 +958,6 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
             </div>
           </div>
         </div>
-
-        {/* Sort chip below header */}
         <div className="px-4 pb-2">
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800/80 text-[12px] text-slate-400 border border-slate-700/50">
             Sorted by {sortLabel}
@@ -1131,26 +967,23 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
       {/* ── CONTENT ── */}
       <div className="pt-4 pb-8">
-        {/* Loading */}
-        {loading && triggers.length === 0 && (
+        {loading && signals.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20">
-            <RefreshCw className="w-8 h-8 text-orange-400 animate-spin mb-4" />
-            <span className="text-slate-500 text-sm">Loading FUKAA signals...</span>
+            <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mb-4" />
+            <span className="text-slate-500 text-sm">Loading MicroAlpha signals...</span>
           </div>
         )}
 
-        {/* Empty */}
         {!loading && sorted.length === 0 && (
           <EmptyState hasFilters={hasActiveFilter} onReset={resetFilters} />
         )}
 
-        {/* Cards Grid: 1 col mobile, 3 col desktop */}
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
-              <FukaaCard
+              <MicroAlphaCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
-                trigger={sig}
+                sig={sig}
                 plan={plan}
                 walletCapital={walletCapital}
                 onBuy={handleBuy}
@@ -1173,4 +1006,4 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   );
 };
 
-export default FukaaTabContent;
+export default MicroAlphaTabContent;

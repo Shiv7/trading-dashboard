@@ -39,7 +39,7 @@ export default function WalletPage() {
     loadWallet()
     let interval: ReturnType<typeof setInterval> | null = null
     if (autoRefresh) {
-      interval = setInterval(loadWallet, 5000)
+      interval = setInterval(loadWallet, 30000)
     }
     return () => {
       if (interval) clearInterval(interval)
@@ -64,33 +64,33 @@ export default function WalletPage() {
 
   return (
     <>
-      <div className="min-h-screen">
+      <div className="min-h-screen mobile-page-bottom">
         {/* Sticky Header */}
         <div className="bg-slate-800/95 backdrop-blur border-b border-slate-700 sticky top-0 z-10">
-          <div className="px-4 py-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="px-3 sm:px-4 py-3 sm:py-4">
+            <div className="flex items-center justify-between gap-2 sm:gap-3">
               {/* Left: Title + open count */}
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center">
-                  <Briefcase className="w-4 h-4 text-amber-400" />
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
+                  <Briefcase className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
                 </div>
-                <h1 className="text-xl font-bold text-white">Wallet</h1>
+                <h1 className="text-base sm:text-xl font-bold text-white truncate">Positions</h1>
                 {openCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400">
+                  <span className="px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium bg-blue-500/20 text-blue-400 shrink-0">
                     {openCount} open
                   </span>
                 )}
               </div>
 
               {/* Right: Controls */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
                 {/* PAPER/REAL Toggle */}
-                <div className="flex bg-slate-900/50 rounded-lg p-1">
+                <div className="flex bg-slate-900/50 rounded-lg p-0.5 sm:p-1">
                   {(['PAPER', 'REAL'] as WalletType[]).map(wt => (
                     <button
                       key={wt}
                       onClick={() => setWalletType(wt)}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-[10px] sm:text-xs font-medium transition-all ${
                         walletType === wt
                           ? wt === 'PAPER' ? 'bg-blue-500 text-white' : 'bg-amber-500 text-slate-900'
                           : 'text-slate-400 hover:text-white'
@@ -104,48 +104,49 @@ export default function WalletPage() {
                 {/* Auto-refresh toggle */}
                 <button
                   onClick={() => setAutoRefresh(!autoRefresh)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium ${
+                  className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-[10px] sm:text-xs font-medium ${
                     autoRefresh ? 'bg-green-500/20 text-green-400' : 'bg-slate-700 text-slate-400'
                   }`}
                 >
-                  <div className={`w-2 h-2 rounded-full ${autoRefresh ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
-                  Live
+                  <div className={`w-1.5 sm:w-2 h-1.5 sm:h-2 rounded-full ${autoRefresh ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
+                  <span className="hidden sm:inline">Live</span>
                 </button>
 
                 {/* Manual refresh */}
                 <button
                   onClick={loadWallet}
-                  className="p-2 hover:bg-slate-700 rounded transition-colors"
+                  className="p-1.5 sm:p-2 hover:bg-slate-700 rounded transition-colors"
                   disabled={loading}
                 >
-                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
+                  <RefreshCw className={`w-3.5 sm:w-4 h-3.5 sm:h-4 ${loading ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
                 </button>
 
                 {/* New Trade */}
                 <button
                   onClick={() => setTradeModalOpen(true)}
-                  className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-sm font-bold hover:from-blue-600 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/30 flex items-center gap-2"
+                  className="px-2.5 sm:px-4 py-1.5 sm:py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-xs sm:text-sm font-bold hover:from-blue-600 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/30 flex items-center gap-1 sm:gap-2"
                 >
                   <span>+</span>
-                  New Trade
+                  <span className="hidden sm:inline">New Trade</span>
                 </button>
               </div>
             </div>
 
             {/* Tab Bar */}
-            <div className="flex gap-1 mt-4">
+            <div className="flex gap-0.5 sm:gap-1 mt-3 sm:mt-4 overflow-x-auto">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-t text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-t text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                     activeTab === tab.id
                       ? 'bg-slate-900 text-white border-t border-l border-r border-slate-700'
                       : 'bg-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700'
                   }`}
                 >
-                  <tab.icon className={`w-4 h-4 ${activeTab === tab.id ? 'text-amber-400' : ''}`} />
-                  {tab.label}
+                  <tab.icon className={`w-3.5 sm:w-4 h-3.5 sm:h-4 ${activeTab === tab.id ? 'text-amber-400' : ''}`} />
+                  <span className="sm:hidden">{tab.id === 'positions' ? 'Positions' : tab.id === 'pnl' ? 'P&L' : 'Journal'}</span>
+                  <span className="hidden sm:inline">{tab.label}</span>
                 </button>
               ))}
             </div>

@@ -56,33 +56,33 @@ export const StrategyCard: React.FC<StrategyCardProps> = ({
       )}
       {/* Header */}
       <div
-        className="p-4 cursor-pointer hover:bg-gray-750 transition-colors"
+        className="p-3 sm:p-4 cursor-pointer hover:bg-gray-750 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {expanded ? (
-              <ChevronDown className="w-5 h-5 text-gray-400" />
+              <ChevronDown className="w-4 h-4 sm:w-5 sm:h-5 text-gray-400 shrink-0" />
             ) : (
-              <ChevronRight className="w-5 h-5 text-gray-400" />
+              <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-gray-400 shrink-0" />
             )}
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-semibold text-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="text-sm sm:text-lg font-semibold text-white truncate">
                   {snapshot.companyName || snapshot.scripCode}
                 </span>
-                <span className="text-sm text-gray-500">
+                <span className="text-xs sm:text-sm text-gray-500 shrink-0 hidden sm:inline">
                   ({snapshot.scripCode})
                 </span>
               </div>
-              <div className="flex items-center gap-3 mt-1">
-                <span className="text-lg font-mono text-white">
+              <div className="flex items-center gap-2 sm:gap-3 mt-0.5 sm:mt-1">
+                <span className="text-sm sm:text-lg font-mono text-white">
                   {snapshot.currentPrice.toFixed(2)}
                 </span>
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStateColor(snapshot.state)}`}>
+                <span className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium ${getStateColor(snapshot.state)}`}>
                   {snapshot.state}
                 </span>
-                <span className="text-xs text-gray-500 flex items-center gap-1">
+                <span className="text-[10px] sm:text-xs text-gray-500 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {formatDuration(snapshot.stateDurationMs)}
                 </span>
@@ -91,18 +91,18 @@ export const StrategyCard: React.FC<StrategyCardProps> = ({
           </div>
 
           {/* Quick indicators */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             {snapshot.superTrendBullish ? (
-              <TrendingUp className="w-5 h-5 text-green-400" aria-label="SuperTrend Bullish" />
+              <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" aria-label="SuperTrend Bullish" />
             ) : (
-              <TrendingDown className="w-5 h-5 text-red-400" aria-label="SuperTrend Bearish" />
+              <TrendingDown className="w-4 h-4 sm:w-5 sm:h-5 text-red-400" aria-label="SuperTrend Bearish" />
             )}
             {snapshot.bbSqueezing && (
-              <Activity className="w-5 h-5 text-yellow-400" aria-label="BB Squeezing" />
+              <Activity className="w-4 h-4 sm:w-5 sm:h-5 text-yellow-400" aria-label="BB Squeezing" />
             )}
             {snapshot.activeSetups && snapshot.activeSetups.length > 0 && (
-              <span className="text-sm text-gray-400">
-                {snapshot.activeSetups.length} setup(s)
+              <span className="text-xs sm:text-sm text-gray-400">
+                {snapshot.activeSetups.length} setup{snapshot.activeSetups.length > 1 ? 's' : ''}
               </span>
             )}
           </div>
@@ -111,30 +111,30 @@ export const StrategyCard: React.FC<StrategyCardProps> = ({
 
       {/* Expanded Content */}
       {expanded && (
-        <div className="border-t border-gray-700 p-4 space-y-4">
-          {/* Market Data */}
-          <div className="grid grid-cols-4 gap-4 text-sm">
-            <div className="bg-gray-900/50 rounded p-2">
-              <div className="text-gray-500 text-xs">OFI Z-Score</div>
-              <div className={`font-mono ${snapshot.ofiZscore > 0 ? 'text-green-400' : snapshot.ofiZscore < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+        <div className="border-t border-gray-700 p-3 sm:p-4 space-y-3 sm:space-y-4">
+          {/* Market Data — 2x2 on mobile, 4-col on sm+ */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 text-sm">
+            <div className="bg-gray-900/50 rounded p-1.5 sm:p-2">
+              <div className="text-gray-500 text-[10px] sm:text-xs">OFI Z-Score</div>
+              <div className={`font-mono text-xs sm:text-sm ${snapshot.ofiZscore > 0 ? 'text-green-400' : snapshot.ofiZscore < 0 ? 'text-red-400' : 'text-gray-400'}`}>
                 {typeof snapshot.ofiZscore === 'number' && !isNaN(snapshot.ofiZscore) ? snapshot.ofiZscore.toFixed(2) : 'N/A'}
               </div>
             </div>
-            <div className="bg-gray-900/50 rounded p-2">
-              <div className="text-gray-500 text-xs">ATR</div>
-              <div className="font-mono text-gray-300">
+            <div className="bg-gray-900/50 rounded p-1.5 sm:p-2">
+              <div className="text-gray-500 text-[10px] sm:text-xs">ATR</div>
+              <div className="font-mono text-xs sm:text-sm text-gray-300">
                 {typeof snapshot.atr === 'number' && !isNaN(snapshot.atr) ? snapshot.atr.toFixed(2) : 'N/A'}
               </div>
             </div>
-            <div className="bg-gray-900/50 rounded p-2">
-              <div className="text-gray-500 text-xs">BB %B</div>
-              <div className={`font-mono ${Number(snapshot.bbPercentB) > 1 ? 'text-green-400' : Number(snapshot.bbPercentB) < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+            <div className="bg-gray-900/50 rounded p-1.5 sm:p-2">
+              <div className="text-gray-500 text-[10px] sm:text-xs">BB %B</div>
+              <div className={`font-mono text-xs sm:text-sm ${Number(snapshot.bbPercentB) > 1 ? 'text-green-400' : Number(snapshot.bbPercentB) < 0 ? 'text-red-400' : 'text-gray-400'}`}>
                 {typeof snapshot.bbPercentB === 'number' && !isNaN(snapshot.bbPercentB) ? snapshot.bbPercentB.toFixed(2) : 'N/A'}
               </div>
             </div>
-            <div className="bg-gray-900/50 rounded p-2">
-              <div className="text-gray-500 text-xs">Signals Today</div>
-              <div className="font-mono text-gray-300">
+            <div className="bg-gray-900/50 rounded p-1.5 sm:p-2">
+              <div className="text-gray-500 text-[10px] sm:text-xs">Signals</div>
+              <div className="font-mono text-xs sm:text-sm text-gray-300">
                 {snapshot.signalsToday ?? 0}/{snapshot.maxSignalsPerDay ?? 3}
               </div>
             </div>
@@ -181,38 +181,38 @@ const SetupSection: React.FC<SetupSectionProps> = ({ setup, expanded, onToggle }
         className="p-3 cursor-pointer hover:bg-gray-800/50 transition-colors"
         onClick={onToggle}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-wrap">
             {expanded ? (
-              <ChevronDown className="w-4 h-4 text-gray-400" />
+              <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
             ) : (
-              <ChevronRight className="w-4 h-4 text-gray-400" />
+              <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
             )}
-            <span className="font-medium text-gray-200">{setup.strategyId}</span>
+            <span className="font-medium text-gray-200 text-sm sm:text-base">{setup.strategyId}</span>
             {setup.direction && (
-              <span className={`px-2 py-0.5 rounded text-xs ${getDirectionBgColor(setup.direction)} ${getDirectionColor(setup.direction)}`}>
+              <span className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs ${getDirectionBgColor(setup.direction)} ${getDirectionColor(setup.direction)}`}>
                 {setup.direction}
               </span>
             )}
             {setup.qualityTier && (
-              <span className={`px-2 py-0.5 rounded text-xs ${getQualityTierColor(setup.qualityTier)}`}>
+              <span className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs ${getQualityTierColor(setup.qualityTier)}`}>
                 {setup.qualityTier}
               </span>
             )}
           </div>
 
           {/* Progress */}
-          <div className="flex items-center gap-3">
-            <div className="w-24 bg-gray-700 rounded-full h-2">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="w-16 sm:w-24 bg-gray-700 rounded-full h-1.5 sm:h-2">
               <div
-                className={`h-2 rounded-full transition-all ${
+                className={`h-full rounded-full transition-all ${
                   setup.progressPercent >= 80 ? 'bg-green-500' :
                   setup.progressPercent >= 50 ? 'bg-yellow-500' : 'bg-gray-500'
                 }`}
                 style={{ width: `${setup.progressPercent}%` }}
               />
             </div>
-            <span className="text-sm font-mono text-gray-400 w-12">
+            <span className="text-xs sm:text-sm font-mono text-gray-400 w-10 sm:w-12">
               {setup.progressPercent}%
             </span>
           </div>
@@ -231,18 +231,18 @@ const SetupSection: React.FC<SetupSectionProps> = ({ setup, expanded, onToggle }
       {expanded && (
         <div className="border-t border-gray-800 p-3 space-y-4">
           {/* Setup info */}
-          <div className="grid grid-cols-3 gap-4 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-4 text-xs">
             <div>
               <span className="text-gray-500">Entry @</span>
-              <span className="ml-2 font-mono text-gray-300">{setup.keyLevel.toFixed(2)}</span>
+              <span className="ml-1 sm:ml-2 font-mono text-gray-300">{setup.keyLevel.toFixed(2)}</span>
             </div>
             <div>
               <span className="text-gray-500">Watching:</span>
-              <span className="ml-2 text-gray-300">{formatDuration(setup.watchingDurationMs)}</span>
+              <span className="ml-1 sm:ml-2 text-gray-300">{formatDuration(setup.watchingDurationMs)}</span>
             </div>
             <div>
               <span className="text-gray-500">Ready:</span>
-              <span className={`ml-2 ${setup.readyForEntry ? 'text-green-400' : 'text-gray-500'}`}>
+              <span className={`ml-1 sm:ml-2 ${setup.readyForEntry ? 'text-green-400' : 'text-gray-500'}`}>
                 {setup.readyForEntry ? 'Yes' : 'No'}
               </span>
             </div>

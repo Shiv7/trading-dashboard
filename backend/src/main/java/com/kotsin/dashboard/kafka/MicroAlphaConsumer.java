@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
-import com.kotsin.dashboard.model.dto.SignalDTO;
 import com.kotsin.dashboard.service.ScripLookupService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -26,20 +25,16 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Kafka consumer for FUDKII signals based on SuperTrend flip + Bollinger Band breakout.
+ * Kafka consumer for MicroAlpha signals.
+ * MicroAlpha is a microstructure alpha engine with regime-adaptive trading modes.
  *
- * TRIGGER CONDITIONS (from FudkiiSignalTrigger):
- * - BULLISH: SuperTrend flips from DOWN to UP AND close > BB_UPPER
- * - BEARISH: SuperTrend flips from UP to DOWN AND close < BB_LOWER
+ * Consumes from: microalpha-signals
  *
- * Consumes from: kotsin_FUDKII
- *
- * FIXES APPLIED:
+ * Features:
  * - Signal TTL: Active triggers expire after configurable duration (default 30 min)
  * - Dedup: Prevents duplicate signal processing on Kafka replays (5 min window)
  * - Daily cap: Max signals per instrument per day (default 5)
@@ -47,85 +42,79 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 @Slf4j
-public class FUDKIIConsumer {
+public class MicroAlphaConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
-    private final SignalConsumer signalConsumer;
     private final ScripLookupService scripLookup;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    private static final String REDIS_KEY = "dashboard:fudkii:active-triggers";
-    private static final String REDIS_KEY_ALL = "dashboard:fudkii:all-latest";
-    private static final String REDIS_KEY_HISTORY = "dashboard:fudkii:signal-history";
+    private static final String REDIS_KEY = "dashboard:microalpha:active-triggers";
+    private static final String REDIS_KEY_ALL = "dashboard:microalpha:all-latest";
+    private static final String REDIS_KEY_HISTORY = "dashboard:microalpha:signal-history";
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
-    @Value("${signal.fudkii.ttl.minutes:30}")
+    @Value("${signal.microalpha.ttl.minutes:30}")
     private int signalTtlMinutes;
 
-    @Value("${signal.fudkii.max.per.day:5}")
+    @Value("${signal.microalpha.max.per.day:5}")
     private int maxSignalsPerDay;
 
     // Active triggers with TTL via Caffeine
     private Cache<String, Map<String, Object>> activeTriggers;
 
-    // Cache latest FUDKII signals (no TTL needed - informational only)
-    private final Map<String, Map<String, Object>> latestFUDKII = new ConcurrentHashMap<>();
+    // Cache latest MicroAlpha signals (no TTL — informational only)
+    private final Map<String, Map<String, Object>> latestSignals = new ConcurrentHashMap<>();
 
     // Signal history: key = "scripCode-triggerTimeEpoch", stores ALL triggered signals for today
-    // This is the immutable history — entries are never overwritten or removed (except daily reset)
     private final Map<String, Map<String, Object>> todaySignalHistory = new ConcurrentHashMap<>();
 
-    // Dedup cache: key = scripCode|timestamp, prevents replay duplicates
+    // Dedup cache
     private final Cache<String, Boolean> dedupCache = Caffeine.newBuilder()
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .maximumSize(10000)
             .build();
 
-    // Daily signal counter: key = scripCode|date
+    // Daily signal counter
     private final Map<String, Integer> dailySignalCount = new ConcurrentHashMap<>();
     private volatile LocalDate currentTradeDate = LocalDate.now(IST);
 
-    public FUDKIIConsumer(
+    public MicroAlphaConsumer(
             WebSocketSessionManager sessionManager,
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
-            SignalConsumer signalConsumer,
             ScripLookupService scripLookup) {
         this.sessionManager = sessionManager;
         this.redisTemplate = redisTemplate;
-        this.signalConsumer = signalConsumer;
         this.scripLookup = scripLookup;
     }
 
     @PostConstruct
     public void init() {
-        // Build TTL cache
         activeTriggers = Caffeine.newBuilder()
                 .expireAfterWrite(signalTtlMinutes, TimeUnit.MINUTES)
                 .maximumSize(500)
                 .removalListener((key, value, cause) -> {
                     if (cause.wasEvicted()) {
-                        log.info("FUDKII signal expired: {} (TTL={}min)", key, signalTtlMinutes);
+                        log.info("MicroAlpha signal expired: {} (TTL={}min)", key, signalTtlMinutes);
                     }
                 })
                 .build();
 
-        // Restore from Redis on startup
         restoreFromRedis();
     }
 
     @KafkaListener(
-            topics = {"kotsin_FUDKII"},
+            topics = {"microalpha-signals"},
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
     )
-    public void onFUDKII(String payload) {
+    public void onMicroAlpha(String payload) {
         try {
             JsonNode root = objectMapper.readTree(payload);
 
             String scripCode = root.path("scripCode").asText();
             if (scripCode == null || scripCode.isEmpty()) {
-                log.trace("No scripCode in FUDKII message, skipping");
+                log.trace("No scripCode in MicroAlpha message, skipping");
                 return;
             }
 
@@ -133,13 +122,13 @@ public class FUDKIIConsumer {
             String triggerTimeStr = root.path("triggerTime").asText("");
             String dedupKey = scripCode + "|" + triggerTimeStr;
             if (dedupCache.getIfPresent(dedupKey) != null) {
-                log.debug("FUDKII dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
+                log.debug("MicroAlpha dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
                 return;
             }
             dedupCache.put(dedupKey, Boolean.TRUE);
 
-            Map<String, Object> fudkiiData = parseFUDKII(root);
-            boolean triggered = Boolean.TRUE.equals(fudkiiData.get("triggered"));
+            Map<String, Object> signalData = parseMicroAlpha(root);
+            boolean triggered = Boolean.TRUE.equals(signalData.get("triggered"));
 
             if (triggered) {
                 // --- DAILY CAP CHECK ---
@@ -147,134 +136,89 @@ public class FUDKIIConsumer {
                 String dailyKey = scripCode + "|" + currentTradeDate;
                 int todayCount = dailySignalCount.getOrDefault(dailyKey, 0);
                 if (todayCount >= maxSignalsPerDay) {
-                    log.warn("FUDKII daily cap reached: {} has {} signals today (max={})",
+                    log.warn("MicroAlpha daily cap reached: {} has {} signals today (max={})",
                             scripCode, todayCount, maxSignalsPerDay);
                     return;
                 }
                 dailySignalCount.merge(dailyKey, 1, Integer::sum);
 
-                String direction = (String) fudkiiData.get("direction");
-                String symbol = (String) fudkiiData.get("symbol");
-                String companyName = (String) fudkiiData.get("companyName");
+                String symbol = (String) signalData.get("symbol");
                 String displayName = scripLookup.resolve(scripCode,
-                        symbol != null && !symbol.isEmpty() ? symbol :
-                        (companyName != null && !companyName.isEmpty() ? companyName : null));
+                        symbol != null && !symbol.isEmpty() ? symbol : null);
 
-                log.info("FUDKII TRIGGER: {} ({}) direction={} reason={} price={} score={} [signals today: {}]",
+                log.info("MICROALPHA TRIGGER: {} ({}) direction={} mode={} conviction={} R:R={} [signals today: {}]",
                         displayName,
                         scripCode,
-                        direction,
-                        fudkiiData.get("reason"),
-                        fudkiiData.get("triggerPrice"),
-                        fudkiiData.get("triggerScore"),
+                        signalData.get("direction"),
+                        signalData.get("tradingMode"),
+                        String.format("%.1f", ((Number) signalData.getOrDefault("absConviction", 0)).doubleValue()),
+                        String.format("%.2f", ((Number) signalData.getOrDefault("riskReward", 0)).doubleValue()),
                         todayCount + 1);
 
                 // Cache active trigger (with TTL)
                 long cachedAtMs = Instant.now().toEpochMilli();
-                fudkiiData.put("cachedAt", cachedAtMs);
-                activeTriggers.put(scripCode, fudkiiData);
+                signalData.put("cachedAt", cachedAtMs);
+                activeTriggers.put(scripCode, signalData);
 
-                // Append to today's signal history (immutable — never overwritten)
-                long epoch = fudkiiData.containsKey("triggerTimeEpoch")
-                        ? ((Number) fudkiiData.get("triggerTimeEpoch")).longValue()
+                // Append to today's signal history (immutable)
+                long epoch = signalData.containsKey("triggerTimeEpoch")
+                        ? ((Number) signalData.get("triggerTimeEpoch")).longValue()
                         : cachedAtMs;
                 String historyKey = scripCode + "-" + epoch;
-                fudkiiData.put("signalSource", "FUDKII");
-                todaySignalHistory.put(historyKey, fudkiiData);
+                signalData.put("signalSource", "MICROALPHA");
+                todaySignalHistory.put(historyKey, signalData);
 
                 // Send notification
-                String emoji = "BULLISH".equals(direction) ? "^" : "v";
-                sessionManager.broadcastNotification("FUDKII_TRIGGER",
-                        String.format("%s %s FUDKII for %s @ %.2f | ST %s + BB %s",
+                String emoji = "BULLISH".equals(signalData.get("direction")) ? "^" : "v";
+                sessionManager.broadcastNotification("MICROALPHA_TRIGGER",
+                        String.format("%s MicroAlpha %s for %s | Mode: %s | Conv=%.0f%% | R:R=%.1f",
                                 emoji,
-                                direction,
+                                signalData.get("direction"),
                                 displayName,
-                                ((Number) fudkiiData.get("triggerPrice")).doubleValue(),
-                                fudkiiData.get("trend"),
-                                fudkiiData.get("pricePosition")));
+                                signalData.get("tradingMode"),
+                                ((Number) signalData.getOrDefault("absConviction", 0)).doubleValue(),
+                                ((Number) signalData.getOrDefault("riskReward", 0)).doubleValue()));
 
-                // Register as main trading signal on the dashboard
-                double triggerPrice = ((Number) fudkiiData.get("triggerPrice")).doubleValue();
-                double bbUpper = ((Number) fudkiiData.get("bbUpper")).doubleValue();
-                double bbLower = ((Number) fudkiiData.get("bbLower")).doubleValue();
-                double superTrend = ((Number) fudkiiData.get("superTrend")).doubleValue();
-                double triggerScore = ((Number) fudkiiData.get("triggerScore")).doubleValue();
-
-                // Calculate stop loss and target from BB/ST levels
-                double stopLoss = "BULLISH".equals(direction) ? Math.min(bbLower, superTrend) : Math.max(bbUpper, superTrend);
-                double target1 = "BULLISH".equals(direction) ? triggerPrice + 2 * (triggerPrice - stopLoss) : triggerPrice - 2 * (stopLoss - triggerPrice);
-                double riskReward = stopLoss != triggerPrice ? Math.abs((target1 - triggerPrice) / (triggerPrice - stopLoss)) : 0;
-
-                String rationale = String.format("FUDKII: ST %s + BB %s | Score=%.2f | BB[%.2f-%.2f] ST=%.2f",
-                        fudkiiData.get("trend"), fudkiiData.get("pricePosition"),
-                        triggerScore, bbLower, bbUpper, superTrend);
-
-                SignalDTO signalDTO = SignalDTO.builder()
-                        .signalId(UUID.randomUUID().toString())
-                        .scripCode(scripCode)
-                        .companyName(displayName)
-                        .timestamp(LocalDateTime.now(IST))
-                        .signalSource("FUDKII")
-                        .signalSourceLabel("FUDKII Trigger")
-                        .signalType("FUDKII")
-                        .direction(direction)
-                        .confidence(Math.min(1.0, triggerScore / 100.0))
-                        .rationale(rationale)
-                        .narrative(rationale)
-                        .entryPrice(triggerPrice)
-                        .stopLoss(stopLoss)
-                        .target1(target1)
-                        .riskRewardRatio(riskReward)
-                        .allGatesPassed(true)
-                        .positionSizeMultiplier(1.0)
-                        .build();
-
-                signalConsumer.addExternalSignal(signalDTO);
-                log.info("FUDKII signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
-                // Update latest (only triggered signals update the latest map)
-                latestFUDKII.put(scripCode, fudkiiData);
+                // Update latest
+                latestSignals.put(scripCode, signalData);
             } else {
-                // Remove from active triggers if no longer triggered
                 activeTriggers.invalidate(scripCode);
-                // NOTE: Do NOT overwrite latestFUDKII — preserve the last triggered state
             }
 
             // Broadcast to WebSocket
             sessionManager.broadcastSignal(Map.of(
-                    "type", "FUDKII_UPDATE",
+                    "type", "MICROALPHA_UPDATE",
                     "scripCode", scripCode,
                     "triggered", triggered,
-                    "data", fudkiiData
+                    "data", signalData
             ));
 
         } catch (Exception e) {
-            log.error("Error processing FUDKII: {}", e.getMessage(), e);
+            log.error("Error processing MicroAlpha: {}", e.getMessage(), e);
         }
     }
 
-    private Map<String, Object> parseFUDKII(JsonNode root) {
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseMicroAlpha(JsonNode root) {
         Map<String, Object> data = new HashMap<>();
 
         // Basic info
         data.put("scripCode", root.path("scripCode").asText());
-        data.put("symbol", root.path("symbol").asText());
-        data.put("companyName", scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")));
-        data.put("exchange", root.path("exchange").asText());
+        data.put("symbol", root.path("symbol").asText(""));
+        data.put("exchange", root.path("exchange").asText(""));
 
         // Trigger info
         data.put("triggered", root.path("triggered").asBoolean(false));
-        data.put("direction", root.path("direction").asText("NONE"));
+        data.put("direction", root.path("direction").asText("NEUTRAL"));
         data.put("reason", root.path("reason").asText(""));
-        data.put("triggerPrice", root.path("triggerPrice").asDouble(0));
-        data.put("triggerScore", root.path("triggerScore").asDouble(0));
+        data.put("strategy", root.path("strategy").asText("MICRO_ALPHA"));
 
         // Trigger time
         String triggerTimeStr = root.path("triggerTime").asText();
         if (triggerTimeStr != null && !triggerTimeStr.isEmpty()) {
             try {
                 Instant triggerTime = Instant.parse(triggerTimeStr);
-                data.put("triggerTime", LocalDateTime.ofInstant(
-                        triggerTime, IST).toString());
+                data.put("triggerTime", LocalDateTime.ofInstant(triggerTime, IST).toString());
                 data.put("triggerTimeEpoch", triggerTime.toEpochMilli());
             } catch (Exception e) {
                 data.put("triggerTime", triggerTimeStr);
@@ -285,51 +229,36 @@ public class FUDKIIConsumer {
             data.put("triggerTimeEpoch", System.currentTimeMillis());
         }
 
-        // Bollinger Bands data
-        data.put("bbUpper", root.path("bbUpper").asDouble(0));
-        data.put("bbMiddle", root.path("bbMiddle").asDouble(0));
-        data.put("bbLower", root.path("bbLower").asDouble(0));
+        // MicroAlpha-specific fields
+        data.put("score", root.path("score").asDouble(0));
+        data.put("conviction", root.path("conviction").asDouble(0));
+        data.put("absConviction", root.path("absConviction").asDouble(0));
+        data.put("tradingMode", root.path("tradingMode").asText("UNKNOWN"));
+        data.put("entryPrice", root.path("entryPrice").asDouble(0));
+        data.put("stopLoss", root.path("stopLoss").asDouble(0));
+        data.put("target", root.path("target").asDouble(0));
+        data.put("riskReward", root.path("riskReward").asDouble(0));
 
-        // SuperTrend data
-        data.put("superTrend", root.path("superTrend").asDouble(0));
-        data.put("trend", root.path("trend").asText("NONE"));
-        data.put("trendChanged", root.path("trendChanged").asBoolean(false));
-        data.put("pricePosition", root.path("pricePosition").asText("BETWEEN"));
-
-        // Enriched pivot/target fields (from FudkiiSignalTrigger.enrichWithPivotTargets)
-        if (root.has("target1") && !root.path("target1").isNull()) {
-            data.put("target1", root.path("target1").asDouble());
-        }
-        if (root.has("target2") && !root.path("target2").isNull()) {
-            data.put("target2", root.path("target2").asDouble());
-        }
-        if (root.has("target3") && !root.path("target3").isNull()) {
-            data.put("target3", root.path("target3").asDouble());
-        }
-        if (root.has("target4") && !root.path("target4").isNull()) {
-            data.put("target4", root.path("target4").asDouble());
-        }
-        if (root.has("stopLoss")) {
-            data.put("stopLoss", root.path("stopLoss").asDouble());
-        }
-        if (root.has("riskReward")) {
-            data.put("riskReward", root.path("riskReward").asDouble());
-        }
-        if (root.has("pivotSource")) {
-            data.put("pivotSource", root.path("pivotSource").asBoolean(false));
+        // Reasons list
+        if (root.has("reasons") && root.path("reasons").isArray()) {
+            List<String> reasons = new ArrayList<>();
+            root.path("reasons").forEach(r -> reasons.add(r.asText()));
+            data.put("reasons", reasons);
         }
 
-        // OI enrichment fields
-        if (root.has("oiChangeRatio")) data.put("oiChangeRatio", root.path("oiChangeRatio").asDouble(0));
-        if (root.has("oiInterpretation")) data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
-        if (root.has("oiLabel")) data.put("oiLabel", root.path("oiLabel").asText(""));
+        // Sub-scores breakdown
+        if (root.has("subScores") && root.path("subScores").isObject()) {
+            Map<String, Object> scores = new HashMap<>();
+            root.path("subScores").fields().forEachRemaining(entry ->
+                    scores.put(entry.getKey(), entry.getValue().asDouble(0)));
+            data.put("subScores", scores);
+        }
 
-        // Volume surge fields (real data from FUKAA-style calculation)
-        if (root.has("surgeT")) data.put("surgeT", root.path("surgeT").asDouble(0));
-        if (root.has("surgeTMinus1")) data.put("surgeTMinus1", root.path("surgeTMinus1").asDouble(0));
-        if (root.has("volumeT")) data.put("volumeT", root.path("volumeT").asLong(0));
-        if (root.has("volumeTMinus1")) data.put("volumeTMinus1", root.path("volumeTMinus1").asLong(0));
-        if (root.has("avgVolume")) data.put("avgVolume", root.path("avgVolume").asDouble(0));
+        // Data quality flags
+        data.put("hasOrderbook", root.path("hasOrderbook").asBoolean(false));
+        data.put("hasOI", root.path("hasOI").asBoolean(false));
+        data.put("hasOptions", root.path("hasOptions").asBoolean(false));
+        data.put("hasSession", root.path("hasSession").asBoolean(false));
 
         // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
@@ -340,20 +269,8 @@ public class FUDKIIConsumer {
         if (root.has("optionExpiry")) data.put("optionExpiry", root.path("optionExpiry").asText());
         if (root.has("optionLtp")) data.put("optionLtp", root.path("optionLtp").asDouble());
         if (root.has("optionLotSize")) data.put("optionLotSize", root.path("optionLotSize").asInt(1));
-        if (root.has("optionMultiplier")) data.put("optionMultiplier", root.path("optionMultiplier").asInt(1));
         if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
         if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
-
-        // Futures fallback fields (currency/MCX instruments without options)
-        data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
-        if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());
-        if (root.has("futuresSymbol")) data.put("futuresSymbol", root.path("futuresSymbol").asText());
-        if (root.has("futuresLtp")) data.put("futuresLtp", root.path("futuresLtp").asDouble());
-        if (root.has("futuresLotSize")) data.put("futuresLotSize", root.path("futuresLotSize").asInt(1));
-        if (root.has("futuresMultiplier")) data.put("futuresMultiplier", root.path("futuresMultiplier").asInt(1));
-        if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
-        if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
-        if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
 
         return data;
     }
@@ -363,7 +280,7 @@ public class FUDKIIConsumer {
     @PreDestroy
     public void persistToRedis() {
         try {
-            // Persist active triggers (with TTL)
+            // Persist active triggers
             Map<String, Map<String, Object>> snapshot = new HashMap<>(activeTriggers.asMap());
             if (snapshot.isEmpty()) {
                 redisTemplate.delete(REDIS_KEY);
@@ -376,19 +293,18 @@ public class FUDKIIConsumer {
                 redisTemplate.expire(REDIS_KEY, signalTtlMinutes, TimeUnit.MINUTES);
             }
 
-            // Persist all latest signals (no TTL — frontend shows today's signals)
-            Map<String, Map<String, Object>> allSnapshot = new HashMap<>(latestFUDKII);
+            // Persist all latest signals
+            Map<String, Map<String, Object>> allSnapshot = new HashMap<>(latestSignals);
             if (!allSnapshot.isEmpty()) {
                 redisTemplate.delete(REDIS_KEY_ALL);
                 for (Map.Entry<String, Map<String, Object>> entry : allSnapshot.entrySet()) {
                     String json = objectMapper.writeValueAsString(entry.getValue());
                     redisTemplate.opsForHash().put(REDIS_KEY_ALL, entry.getKey(), json);
                 }
-                // Expire at end of day (24h max)
                 redisTemplate.expire(REDIS_KEY_ALL, 24 * 60, TimeUnit.MINUTES);
             }
 
-            // Persist today's signal history (immutable records — survives restart)
+            // Persist today's signal history
             String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
             Map<String, Map<String, Object>> historySnapshot = new HashMap<>(todaySignalHistory);
             if (!historySnapshot.isEmpty()) {
@@ -396,14 +312,13 @@ public class FUDKIIConsumer {
                     String json = objectMapper.writeValueAsString(entry.getValue());
                     redisTemplate.opsForHash().put(historyRedisKey, entry.getKey(), json);
                 }
-                // Expire after 24h (auto-cleanup old days)
                 redisTemplate.expire(historyRedisKey, 24 * 60, TimeUnit.MINUTES);
             }
 
-            log.info("FUDKII persisted {} active triggers, {} all-latest, {} history to Redis",
+            log.info("MicroAlpha persisted {} active triggers, {} all-latest, {} history to Redis",
                     snapshot.size(), allSnapshot.size(), historySnapshot.size());
         } catch (Exception e) {
-            log.error("Failed to persist FUDKII triggers to Redis: {}", e.getMessage());
+            log.error("Failed to persist MicroAlpha triggers to Redis: {}", e.getMessage());
         }
     }
 
@@ -426,15 +341,15 @@ public class FUDKIIConsumer {
                             continue;
                         }
                         activeTriggers.put((String) entry.getKey(), data);
-                        latestFUDKII.put((String) entry.getKey(), data);
+                        latestSignals.put((String) entry.getKey(), data);
                         restoredActive++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUDKII trigger {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore MicroAlpha trigger {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            // Restore all latest signals (for the FUDKII tab)
+            // Restore all latest signals
             Map<Object, Object> allEntries = redisTemplate.opsForHash().entries(REDIS_KEY_ALL);
             int restoredAll = 0;
             if (allEntries != null && !allEntries.isEmpty()) {
@@ -442,10 +357,10 @@ public class FUDKIIConsumer {
                     try {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
-                        latestFUDKII.putIfAbsent((String) entry.getKey(), data);
+                        latestSignals.putIfAbsent((String) entry.getKey(), data);
                         restoredAll++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUDKII all-latest {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore MicroAlpha all-latest {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
@@ -460,26 +375,24 @@ public class FUDKIIConsumer {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
                         todaySignalHistory.putIfAbsent((String) entry.getKey(), data);
-                        // Also ensure latestFUDKII has this triggered signal
                         String sc = (String) data.get("scripCode");
                         if (sc != null && Boolean.TRUE.equals(data.get("triggered"))) {
-                            latestFUDKII.putIfAbsent(sc, data);
+                            latestSignals.putIfAbsent(sc, data);
                         }
                         restoredHistory++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUDKII history {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore MicroAlpha history {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            log.info("FUDKII restored {} active triggers + {} all-latest + {} history from Redis",
+            log.info("MicroAlpha restored {} active triggers + {} all-latest + {} history from Redis",
                     restoredActive, restoredAll, restoredHistory);
         } catch (Exception e) {
-            log.error("Failed to restore FUDKII triggers from Redis: {}", e.getMessage());
+            log.error("Failed to restore MicroAlpha triggers from Redis: {}", e.getMessage());
         }
     }
 
-    // Periodic Redis backup every 2 minutes
     @Scheduled(fixedRate = 120000)
     public void periodicPersist() {
         persistToRedis();
@@ -490,20 +403,20 @@ public class FUDKIIConsumer {
         if (!today.equals(currentTradeDate)) {
             dailySignalCount.clear();
             todaySignalHistory.clear();
-            latestFUDKII.clear();
+            latestSignals.clear();
             currentTradeDate = today;
-            log.info("FUDKII daily counters, history and latest reset for {}", today);
+            log.info("MicroAlpha daily counters, history and latest reset for {}", today);
         }
     }
 
     // --- PUBLIC ACCESSORS ---
 
-    public Map<String, Object> getLatestFUDKII(String scripCode) {
-        return latestFUDKII.get(scripCode);
+    public Map<String, Object> getLatestSignal(String scripCode) {
+        return latestSignals.get(scripCode);
     }
 
     public Map<String, Map<String, Object>> getAllLatestSignals() {
-        return new HashMap<>(latestFUDKII);
+        return new HashMap<>(latestSignals);
     }
 
     public Map<String, Map<String, Object>> getActiveTriggers() {
@@ -512,14 +425,6 @@ public class FUDKIIConsumer {
 
     public int getActiveTriggerCount() {
         return (int) activeTriggers.estimatedSize();
-    }
-
-    public Map<String, Map<String, Object>> getActiveIgnitions() {
-        return getActiveTriggers();
-    }
-
-    public int getActiveIgnitionCount() {
-        return getActiveTriggerCount();
     }
 
     public String getDirectionForScrip(String scripCode) {
@@ -532,10 +437,6 @@ public class FUDKIIConsumer {
         return dailySignalCount.getOrDefault(dailyKey, 0);
     }
 
-    /**
-     * Get today's full signal history — ALL triggered signals, never overwritten.
-     * Survives restart via Redis persistence.
-     */
     public List<Map<String, Object>> getTodaySignalHistory() {
         return new ArrayList<>(todaySignalHistory.values());
     }

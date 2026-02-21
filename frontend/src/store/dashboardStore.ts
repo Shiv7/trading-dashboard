@@ -63,6 +63,7 @@ interface DashboardState {
   // Wallet
   wallet: Wallet | null
   updateWallet: (wallet: Wallet) => void
+  updatePosition: (posData: Record<string, unknown>) => void
 
   // Scores (keyed by scripCode)
   scores: Map<string, FamilyScore>
@@ -141,6 +142,18 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   // Wallet
   wallet: null,
   updateWallet: (wallet) => set({ wallet }),
+  updatePosition: (posData) => set((state) => {
+    const wallet = state.wallet
+    if (!wallet || !wallet.positions) return state
+    const scripCode = posData.scripCode as string
+    if (!scripCode) return state
+    const idx = wallet.positions.findIndex((p) => p.scripCode === scripCode)
+    if (idx < 0) return state
+    const updated = { ...wallet.positions[idx], ...posData }
+    const positions = [...wallet.positions]
+    positions[idx] = updated
+    return { wallet: { ...wallet, positions } }
+  }),
 
   // Scores
   scores: new Map(),

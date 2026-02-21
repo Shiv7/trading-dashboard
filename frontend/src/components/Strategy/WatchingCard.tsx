@@ -32,17 +32,17 @@ export const WatchingCard: React.FC<WatchingCardProps> = ({ snapshot, setup, isS
 
       {/* Header */}
       <div className="p-3 pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${config.accentBg} ${config.accentText}`}>
+        <div className="flex items-start justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${config.accentBg} ${config.accentText}`}>
               {config.label}
             </span>
-            <span className="font-semibold text-white text-sm">{snapshot.companyName}</span>
+            <span className="font-semibold text-white text-sm truncate">{snapshot.companyName}</span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm text-gray-300">{snapshot.currentPrice.toFixed(2)}</span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/20 text-yellow-400">WATCHING</span>
-            <span className="flex items-center gap-1 text-[10px] text-gray-500">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <span className="font-mono text-xs sm:text-sm text-gray-300">{snapshot.currentPrice.toFixed(2)}</span>
+            <span className="px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] bg-yellow-500/20 text-yellow-400">WATCHING</span>
+            <span className="hidden sm:flex items-center gap-1 text-[10px] text-gray-500">
               <Clock className="w-3 h-3" />
               {formatDuration(snapshot.stateDurationMs)}
             </span>

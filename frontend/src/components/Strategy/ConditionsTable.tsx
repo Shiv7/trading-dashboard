@@ -74,96 +74,124 @@ export const ConditionsTable: React.FC<ConditionsTableProps> = ({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-gray-400 text-xs border-b border-gray-700">
-            <th className="text-left py-2 px-2">Condition</th>
-            <th className="text-left py-2 px-2">Category</th>
-            <th className="text-left py-2 px-2">Current</th>
-            <th className="text-left py-2 px-2">Required</th>
-            <th className="text-center py-2 px-2">Status</th>
-            <th className="text-right py-2 px-2 w-24">Progress</th>
-          </tr>
-        </thead>
-        <tbody>
-          {conditions.map((c, i) => (
-            <tr
-              key={i}
-              className={`border-b border-gray-800 ${
-                c.passed ? 'bg-green-500/5' : ''
-              } hover:bg-gray-800/50 transition-colors`}
-            >
-              {/* Condition Name + Explanation */}
-              <td className="py-2 px-2">
-                <div className="flex flex-col">
-                  <span className="text-gray-200 font-medium">{c.name}</span>
-                  {c.explanation && (
-                    <span className="text-gray-500 text-xs mt-0.5">
-                      {c.explanation}
-                    </span>
-                  )}
-                  {c.timeframe && (
-                    <span className="text-gray-600 text-xs">
-                      [{c.source || ''} {c.timeframe}]
-                    </span>
-                  )}
-                </div>
-              </td>
-
-              {/* Category */}
-              <td className="py-2 px-2">
-                <div className="flex items-center gap-1">
-                  {getCategoryIcon(c.category)}
-                  <span className={`text-xs ${getCategoryColor(c.category)}`}>
-                    {c.category}
-                  </span>
-                </div>
-              </td>
-
-              {/* Current Value */}
-              <td className="py-2 px-2">
-                <span className={`font-mono text-xs ${
-                  c.passed ? 'text-green-400' : 'text-gray-300'
-                }`}>
-                  {c.currentValue}
+    <>
+      {/* Mobile: compact card layout */}
+      <div className="md:hidden space-y-1.5">
+        {conditions.map((c, i) => (
+          <div
+            key={i}
+            className={`flex items-center justify-between p-2 rounded text-xs ${
+              c.passed ? 'bg-green-500/10' : 'bg-gray-800'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {c.passed ? (
+                <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />
+              ) : (
+                <XCircle className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <span className={`block truncate ${c.passed ? 'text-gray-200' : 'text-gray-400'}`}>
+                  {c.name}
                 </span>
-              </td>
-
-              {/* Required Value */}
-              <td className="py-2 px-2">
-                <span className="font-mono text-xs text-gray-400">
-                  {c.requiredValue}
-                </span>
-              </td>
-
-              {/* Status */}
-              <td className="py-2 px-2 text-center">
-                {c.passed ? (
-                  <CheckCircle className="w-5 h-5 text-green-400 mx-auto" />
-                ) : (
-                  <XCircle className="w-5 h-5 text-gray-500 mx-auto" />
+                {c.explanation && (
+                  <span className="text-gray-600 text-[10px] block truncate">{c.explanation}</span>
                 )}
-              </td>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              <div className="w-12">
+                {getProgressBar(c.progressPercent, c.passed)}
+              </div>
+              <span className={`font-mono text-[10px] w-7 text-right ${c.passed ? 'text-green-400' : 'text-gray-500'}`}>
+                {c.progressPercent}%
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
 
-              {/* Progress */}
-              <td className="py-2 px-2">
-                <div className="flex items-center gap-2">
-                  <div className="flex-1">
-                    {getProgressBar(c.progressPercent, c.passed)}
-                  </div>
-                  <span className={`font-mono text-xs w-8 text-right ${
-                    c.passed ? 'text-green-400' : 'text-gray-400'
-                  }`}>
-                    {c.progressPercent}%
-                  </span>
-                </div>
-              </td>
+      {/* Desktop: full table */}
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-gray-400 text-xs border-b border-gray-700">
+              <th className="text-left py-2 px-2">Condition</th>
+              <th className="text-left py-2 px-2">Category</th>
+              <th className="text-left py-2 px-2">Current</th>
+              <th className="text-left py-2 px-2">Required</th>
+              <th className="text-center py-2 px-2">Status</th>
+              <th className="text-right py-2 px-2 w-24">Progress</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {conditions.map((c, i) => (
+              <tr
+                key={i}
+                className={`border-b border-gray-800 ${
+                  c.passed ? 'bg-green-500/5' : ''
+                } hover:bg-gray-800/50 transition-colors`}
+              >
+                <td className="py-2 px-2">
+                  <div className="flex flex-col">
+                    <span className="text-gray-200 font-medium">{c.name}</span>
+                    {c.explanation && (
+                      <span className="text-gray-500 text-xs mt-0.5">
+                        {c.explanation}
+                      </span>
+                    )}
+                    {c.timeframe && (
+                      <span className="text-gray-600 text-xs">
+                        [{c.source || ''} {c.timeframe}]
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="py-2 px-2">
+                  <div className="flex items-center gap-1">
+                    {getCategoryIcon(c.category)}
+                    <span className={`text-xs ${getCategoryColor(c.category)}`}>
+                      {c.category}
+                    </span>
+                  </div>
+                </td>
+                <td className="py-2 px-2">
+                  <span className={`font-mono text-xs ${
+                    c.passed ? 'text-green-400' : 'text-gray-300'
+                  }`}>
+                    {c.currentValue}
+                  </span>
+                </td>
+                <td className="py-2 px-2">
+                  <span className="font-mono text-xs text-gray-400">
+                    {c.requiredValue}
+                  </span>
+                </td>
+                <td className="py-2 px-2 text-center">
+                  {c.passed ? (
+                    <CheckCircle className="w-5 h-5 text-green-400 mx-auto" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-gray-500 mx-auto" />
+                  )}
+                </td>
+                <td className="py-2 px-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      {getProgressBar(c.progressPercent, c.passed)}
+                    </div>
+                    <span className={`font-mono text-xs w-8 text-right ${
+                      c.passed ? 'text-green-400' : 'text-gray-400'
+                    }`}>
+                      {c.progressPercent}%
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 };
 

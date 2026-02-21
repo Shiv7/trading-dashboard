@@ -18,9 +18,6 @@ export default defineConfig({
         target: 'http://localhost:8085',
         changeOrigin: true,
         configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq, req) => {
-            console.log(`[PROXY] ${req.method} ${req.url} -> http://localhost:8085${req.url}`)
-          })
           proxy.on('error', (err, req) => {
             console.error(`[PROXY ERROR] ${req.url}:`, err.message)
           })

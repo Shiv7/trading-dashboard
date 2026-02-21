@@ -31,23 +31,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Kafka consumer for FUDKII signals based on SuperTrend flip + Bollinger Band breakout.
+ * Kafka consumer for MERE signals (Mean Reversion strategy).
  *
- * TRIGGER CONDITIONS (from FudkiiSignalTrigger):
- * - BULLISH: SuperTrend flips from DOWN to UP AND close > BB_UPPER
- * - BEARISH: SuperTrend flips from UP to DOWN AND close < BB_LOWER
+ * MERE detects mean reversion setups where price has deviated from BB bands
+ * and conditions favor a snap-back to the mean.
  *
- * Consumes from: kotsin_FUDKII
- *
- * FIXES APPLIED:
- * - Signal TTL: Active triggers expire after configurable duration (default 30 min)
- * - Dedup: Prevents duplicate signal processing on Kafka replays (5 min window)
- * - Daily cap: Max signals per instrument per day (default 5)
- * - Redis persistence: Survives dashboard restart via Redis backup
+ * Consumes from: kotsin_MERE
  */
 @Component
 @Slf4j
-public class FUDKIIConsumer {
+public class MereConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
@@ -56,38 +49,30 @@ public class FUDKIIConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    private static final String REDIS_KEY = "dashboard:fudkii:active-triggers";
-    private static final String REDIS_KEY_ALL = "dashboard:fudkii:all-latest";
-    private static final String REDIS_KEY_HISTORY = "dashboard:fudkii:signal-history";
+    private static final String REDIS_KEY = "dashboard:mere:active-triggers";
+    private static final String REDIS_KEY_ALL = "dashboard:mere:all-latest";
+    private static final String REDIS_KEY_HISTORY = "dashboard:mere:signal-history";
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
-    @Value("${signal.fudkii.ttl.minutes:30}")
+    @Value("${signal.mere.ttl.minutes:30}")
     private int signalTtlMinutes;
 
-    @Value("${signal.fudkii.max.per.day:5}")
+    @Value("${signal.mere.max.per.day:5}")
     private int maxSignalsPerDay;
 
-    // Active triggers with TTL via Caffeine
     private Cache<String, Map<String, Object>> activeTriggers;
-
-    // Cache latest FUDKII signals (no TTL needed - informational only)
-    private final Map<String, Map<String, Object>> latestFUDKII = new ConcurrentHashMap<>();
-
-    // Signal history: key = "scripCode-triggerTimeEpoch", stores ALL triggered signals for today
-    // This is the immutable history — entries are never overwritten or removed (except daily reset)
+    private final Map<String, Map<String, Object>> latestMERE = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> todaySignalHistory = new ConcurrentHashMap<>();
 
-    // Dedup cache: key = scripCode|timestamp, prevents replay duplicates
     private final Cache<String, Boolean> dedupCache = Caffeine.newBuilder()
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .maximumSize(10000)
             .build();
 
-    // Daily signal counter: key = scripCode|date
     private final Map<String, Integer> dailySignalCount = new ConcurrentHashMap<>();
     private volatile LocalDate currentTradeDate = LocalDate.now(IST);
 
-    public FUDKIIConsumer(
+    public MereConsumer(
             WebSocketSessionManager sessionManager,
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
             SignalConsumer signalConsumer,
@@ -100,125 +85,112 @@ public class FUDKIIConsumer {
 
     @PostConstruct
     public void init() {
-        // Build TTL cache
         activeTriggers = Caffeine.newBuilder()
                 .expireAfterWrite(signalTtlMinutes, TimeUnit.MINUTES)
                 .maximumSize(500)
                 .removalListener((key, value, cause) -> {
                     if (cause.wasEvicted()) {
-                        log.info("FUDKII signal expired: {} (TTL={}min)", key, signalTtlMinutes);
+                        log.info("MERE signal expired: {} (TTL={}min)", key, signalTtlMinutes);
                     }
                 })
                 .build();
 
-        // Restore from Redis on startup
         restoreFromRedis();
     }
 
     @KafkaListener(
-            topics = {"kotsin_FUDKII"},
+            topics = {"kotsin_MERE"},
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
     )
-    public void onFUDKII(String payload) {
+    public void onMERE(String payload) {
         try {
             JsonNode root = objectMapper.readTree(payload);
 
             String scripCode = root.path("scripCode").asText();
             if (scripCode == null || scripCode.isEmpty()) {
-                log.trace("No scripCode in FUDKII message, skipping");
+                log.trace("No scripCode in MERE message, skipping");
                 return;
             }
 
-            // --- DEDUP CHECK ---
+            // Dedup check
             String triggerTimeStr = root.path("triggerTime").asText("");
             String dedupKey = scripCode + "|" + triggerTimeStr;
             if (dedupCache.getIfPresent(dedupKey) != null) {
-                log.debug("FUDKII dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
+                log.debug("MERE dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
                 return;
             }
             dedupCache.put(dedupKey, Boolean.TRUE);
 
-            Map<String, Object> fudkiiData = parseFUDKII(root);
-            boolean triggered = Boolean.TRUE.equals(fudkiiData.get("triggered"));
+            Map<String, Object> mereData = parseMERE(root);
+            boolean triggered = Boolean.TRUE.equals(mereData.get("triggered"));
 
             if (triggered) {
-                // --- DAILY CAP CHECK ---
+                // Daily cap check
                 resetDailyCounterIfNeeded();
                 String dailyKey = scripCode + "|" + currentTradeDate;
                 int todayCount = dailySignalCount.getOrDefault(dailyKey, 0);
                 if (todayCount >= maxSignalsPerDay) {
-                    log.warn("FUDKII daily cap reached: {} has {} signals today (max={})",
+                    log.warn("MERE daily cap reached: {} has {} signals today (max={})",
                             scripCode, todayCount, maxSignalsPerDay);
                     return;
                 }
                 dailySignalCount.merge(dailyKey, 1, Integer::sum);
 
-                String direction = (String) fudkiiData.get("direction");
-                String symbol = (String) fudkiiData.get("symbol");
-                String companyName = (String) fudkiiData.get("companyName");
+                String direction = (String) mereData.get("direction");
+                String symbol = (String) mereData.get("symbol");
+                String companyName = (String) mereData.get("companyName");
                 String displayName = scripLookup.resolve(scripCode,
                         symbol != null && !symbol.isEmpty() ? symbol :
                         (companyName != null && !companyName.isEmpty() ? companyName : null));
 
-                log.info("FUDKII TRIGGER: {} ({}) direction={} reason={} price={} score={} [signals today: {}]",
-                        displayName,
-                        scripCode,
-                        direction,
-                        fudkiiData.get("reason"),
-                        fudkiiData.get("triggerPrice"),
-                        fudkiiData.get("triggerScore"),
+                log.info("MERE TRIGGER: {} ({}) direction={} score={} [L1={} L2={} L3={} bonus={}] [signals today: {}]",
+                        displayName, scripCode, direction,
+                        mereData.get("mereScore"),
+                        mereData.get("mereLayer1"),
+                        mereData.get("mereLayer2"),
+                        mereData.get("mereLayer3"),
+                        mereData.get("mereBonus"),
                         todayCount + 1);
 
-                // Cache active trigger (with TTL)
+                // Cache active trigger
                 long cachedAtMs = Instant.now().toEpochMilli();
-                fudkiiData.put("cachedAt", cachedAtMs);
-                activeTriggers.put(scripCode, fudkiiData);
+                mereData.put("cachedAt", cachedAtMs);
+                activeTriggers.put(scripCode, mereData);
 
-                // Append to today's signal history (immutable — never overwritten)
-                long epoch = fudkiiData.containsKey("triggerTimeEpoch")
-                        ? ((Number) fudkiiData.get("triggerTimeEpoch")).longValue()
+                // Append to history
+                long epoch = mereData.containsKey("triggerTimeEpoch")
+                        ? ((Number) mereData.get("triggerTimeEpoch")).longValue()
                         : cachedAtMs;
                 String historyKey = scripCode + "-" + epoch;
-                fudkiiData.put("signalSource", "FUDKII");
-                todaySignalHistory.put(historyKey, fudkiiData);
+                mereData.put("signalSource", "MERE");
+                todaySignalHistory.put(historyKey, mereData);
 
-                // Send notification
-                String emoji = "BULLISH".equals(direction) ? "^" : "v";
-                sessionManager.broadcastNotification("FUDKII_TRIGGER",
-                        String.format("%s %s FUDKII for %s @ %.2f | ST %s + BB %s",
-                                emoji,
-                                direction,
-                                displayName,
-                                ((Number) fudkiiData.get("triggerPrice")).doubleValue(),
-                                fudkiiData.get("trend"),
-                                fudkiiData.get("pricePosition")));
+                // Register as main trading signal
+                double triggerPrice = ((Number) mereData.getOrDefault("triggerPrice", 0)).doubleValue();
+                double stopLoss = ((Number) mereData.getOrDefault("stopLoss", 0)).doubleValue();
+                double target1 = ((Number) mereData.getOrDefault("target1", 0)).doubleValue();
+                double riskReward = ((Number) mereData.getOrDefault("riskReward", 0)).doubleValue();
+                double mereScore = ((Number) mereData.getOrDefault("mereScore", 0)).doubleValue();
+                boolean pivotSource = Boolean.TRUE.equals(mereData.get("pivotSource"));
 
-                // Register as main trading signal on the dashboard
-                double triggerPrice = ((Number) fudkiiData.get("triggerPrice")).doubleValue();
-                double bbUpper = ((Number) fudkiiData.get("bbUpper")).doubleValue();
-                double bbLower = ((Number) fudkiiData.get("bbLower")).doubleValue();
-                double superTrend = ((Number) fudkiiData.get("superTrend")).doubleValue();
-                double triggerScore = ((Number) fudkiiData.get("triggerScore")).doubleValue();
-
-                // Calculate stop loss and target from BB/ST levels
-                double stopLoss = "BULLISH".equals(direction) ? Math.min(bbLower, superTrend) : Math.max(bbUpper, superTrend);
-                double target1 = "BULLISH".equals(direction) ? triggerPrice + 2 * (triggerPrice - stopLoss) : triggerPrice - 2 * (stopLoss - triggerPrice);
-                double riskReward = stopLoss != triggerPrice ? Math.abs((target1 - triggerPrice) / (triggerPrice - stopLoss)) : 0;
-
-                String rationale = String.format("FUDKII: ST %s + BB %s | Score=%.2f | BB[%.2f-%.2f] ST=%.2f",
-                        fudkiiData.get("trend"), fudkiiData.get("pricePosition"),
-                        triggerScore, bbLower, bbUpper, superTrend);
+                String slSource = mereData.containsKey("mereSLSource") ? "BB" : (pivotSource ? "PIVOT" : "BB/ST");
+                String rationale = String.format("MERE: Mean Reversion | Score=%.0f [L1=%s L2=%s L3=%s B=%s] | SL=%.2f (%s) T1=%.2f RR=%.2f | %%B=%s",
+                        mereScore,
+                        mereData.get("mereLayer1"), mereData.get("mereLayer2"),
+                        mereData.get("mereLayer3"), mereData.get("mereBonus"),
+                        stopLoss, slSource, target1, riskReward,
+                        mereData.get("percentB"));
 
                 SignalDTO signalDTO = SignalDTO.builder()
                         .signalId(UUID.randomUUID().toString())
                         .scripCode(scripCode)
                         .companyName(displayName)
                         .timestamp(LocalDateTime.now(IST))
-                        .signalSource("FUDKII")
-                        .signalSourceLabel("FUDKII Trigger")
-                        .signalType("FUDKII")
+                        .signalSource("MERE")
+                        .signalSourceLabel("Mean Reversion")
+                        .signalType("MERE")
                         .direction(direction)
-                        .confidence(Math.min(1.0, triggerScore / 100.0))
+                        .confidence(Math.min(1.0, mereScore / 100.0))
                         .rationale(rationale)
                         .narrative(rationale)
                         .entryPrice(triggerPrice)
@@ -230,29 +202,32 @@ public class FUDKIIConsumer {
                         .build();
 
                 signalConsumer.addExternalSignal(signalDTO);
-                log.info("FUDKII signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
-                // Update latest (only triggered signals update the latest map)
-                latestFUDKII.put(scripCode, fudkiiData);
-            } else {
-                // Remove from active triggers if no longer triggered
-                activeTriggers.invalidate(scripCode);
-                // NOTE: Do NOT overwrite latestFUDKII — preserve the last triggered state
+                log.info("MERE signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
+
+                // Send notification
+                String emoji = "BULLISH".equals(direction) ? "^" : "v";
+                sessionManager.broadcastNotification("MERE_TRIGGER",
+                        String.format("%s %s MERE (mean reversion) for %s @ %.2f | Score=%.0f",
+                                emoji, direction, displayName, triggerPrice, mereScore));
+
+                // Update latest
+                latestMERE.put(scripCode, mereData);
             }
 
             // Broadcast to WebSocket
             sessionManager.broadcastSignal(Map.of(
-                    "type", "FUDKII_UPDATE",
+                    "type", "MERE_UPDATE",
                     "scripCode", scripCode,
                     "triggered", triggered,
-                    "data", fudkiiData
+                    "data", mereData
             ));
 
         } catch (Exception e) {
-            log.error("Error processing FUDKII: {}", e.getMessage(), e);
+            log.error("Error processing MERE: {}", e.getMessage(), e);
         }
     }
 
-    private Map<String, Object> parseFUDKII(JsonNode root) {
+    private Map<String, Object> parseMERE(JsonNode root) {
         Map<String, Object> data = new HashMap<>();
 
         // Basic info
@@ -264,7 +239,6 @@ public class FUDKIIConsumer {
         // Trigger info
         data.put("triggered", root.path("triggered").asBoolean(false));
         data.put("direction", root.path("direction").asText("NONE"));
-        data.put("reason", root.path("reason").asText(""));
         data.put("triggerPrice", root.path("triggerPrice").asDouble(0));
         data.put("triggerScore", root.path("triggerScore").asDouble(0));
 
@@ -273,8 +247,7 @@ public class FUDKIIConsumer {
         if (triggerTimeStr != null && !triggerTimeStr.isEmpty()) {
             try {
                 Instant triggerTime = Instant.parse(triggerTimeStr);
-                data.put("triggerTime", LocalDateTime.ofInstant(
-                        triggerTime, IST).toString());
+                data.put("triggerTime", LocalDateTime.ofInstant(triggerTime, IST).toString());
                 data.put("triggerTimeEpoch", triggerTime.toEpochMilli());
             } catch (Exception e) {
                 data.put("triggerTime", triggerTimeStr);
@@ -285,53 +258,55 @@ public class FUDKIIConsumer {
             data.put("triggerTimeEpoch", System.currentTimeMillis());
         }
 
+        // MERE-specific scoring
+        data.put("mereScore", root.path("mereScore").asInt(0));
+        data.put("mereLayer1", root.path("mereLayer1").asInt(0));
+        data.put("mereLayer2", root.path("mereLayer2").asInt(0));
+        data.put("mereLayer3", root.path("mereLayer3").asInt(0));
+        data.put("mereBonus", root.path("mereBonus").asInt(0));
+        data.put("merePenalty", root.path("merePenalty").asInt(0));
+        data.put("mereReasons", root.path("mereReasons").asText(""));
+
         // Bollinger Bands data
         data.put("bbUpper", root.path("bbUpper").asDouble(0));
         data.put("bbMiddle", root.path("bbMiddle").asDouble(0));
         data.put("bbLower", root.path("bbLower").asDouble(0));
+        data.put("bbWidth", root.path("bbWidth").asDouble(0));
+        data.put("percentB", root.path("percentB").asDouble(0));
 
         // SuperTrend data
         data.put("superTrend", root.path("superTrend").asDouble(0));
         data.put("trend", root.path("trend").asText("NONE"));
         data.put("trendChanged", root.path("trendChanged").asBoolean(false));
         data.put("pricePosition", root.path("pricePosition").asText("BETWEEN"));
+        data.put("isSqueezing", root.path("isSqueezing").asBoolean(false));
+        data.put("barsInTrend", root.path("barsInTrend").asInt(0));
+        data.put("trendStrength", root.path("trendStrength").asDouble(0));
 
-        // Enriched pivot/target fields (from FudkiiSignalTrigger.enrichWithPivotTargets)
-        if (root.has("target1") && !root.path("target1").isNull()) {
-            data.put("target1", root.path("target1").asDouble());
-        }
-        if (root.has("target2") && !root.path("target2").isNull()) {
-            data.put("target2", root.path("target2").asDouble());
-        }
-        if (root.has("target3") && !root.path("target3").isNull()) {
-            data.put("target3", root.path("target3").asDouble());
-        }
-        if (root.has("target4") && !root.path("target4").isNull()) {
-            data.put("target4", root.path("target4").asDouble());
-        }
-        if (root.has("stopLoss")) {
-            data.put("stopLoss", root.path("stopLoss").asDouble());
-        }
-        if (root.has("riskReward")) {
-            data.put("riskReward", root.path("riskReward").asDouble());
-        }
-        if (root.has("pivotSource")) {
-            data.put("pivotSource", root.path("pivotSource").asBoolean(false));
-        }
+        // Trade levels
+        data.put("stopLoss", root.path("stopLoss").asDouble(0));
+        data.put("target1", root.path("target1").asDouble(0));
+        data.put("target2", root.path("target2").asDouble(0));
+        data.put("target3", root.path("target3").asDouble(0));
+        data.put("target4", root.path("target4").asDouble(0));
+        data.put("riskReward", root.path("riskReward").asDouble(0));
+        data.put("pivotSource", root.path("pivotSource").asBoolean(false));
+        data.put("atr30m", root.path("atr30m").asDouble(0));
+        if (root.has("mereSLSource")) data.put("mereSLSource", root.path("mereSLSource").asText());
 
-        // OI enrichment fields
-        if (root.has("oiChangeRatio")) data.put("oiChangeRatio", root.path("oiChangeRatio").asDouble(0));
+        // Volume data
+        data.put("volumeT", root.path("volumeT").asLong(0));
+        data.put("volumeTMinus1", root.path("volumeTMinus1").asLong(0));
+        data.put("avgVolume", root.path("avgVolume").asDouble(0));
+        data.put("surgeT", root.path("surgeT").asDouble(0));
+        data.put("surgeTMinus1", root.path("surgeTMinus1").asDouble(0));
+
+        // OI enrichment
+        if (root.has("oiChangeAtT")) data.put("oiChangeAtT", root.path("oiChangeAtT").asLong(0));
         if (root.has("oiInterpretation")) data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
         if (root.has("oiLabel")) data.put("oiLabel", root.path("oiLabel").asText(""));
 
-        // Volume surge fields (real data from FUKAA-style calculation)
-        if (root.has("surgeT")) data.put("surgeT", root.path("surgeT").asDouble(0));
-        if (root.has("surgeTMinus1")) data.put("surgeTMinus1", root.path("surgeTMinus1").asDouble(0));
-        if (root.has("volumeT")) data.put("volumeT", root.path("volumeT").asLong(0));
-        if (root.has("volumeTMinus1")) data.put("volumeTMinus1", root.path("volumeTMinus1").asLong(0));
-        if (root.has("avgVolume")) data.put("avgVolume", root.path("avgVolume").asDouble(0));
-
-        // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
+        // Option enrichment
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
         if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
         if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
@@ -340,17 +315,15 @@ public class FUDKIIConsumer {
         if (root.has("optionExpiry")) data.put("optionExpiry", root.path("optionExpiry").asText());
         if (root.has("optionLtp")) data.put("optionLtp", root.path("optionLtp").asDouble());
         if (root.has("optionLotSize")) data.put("optionLotSize", root.path("optionLotSize").asInt(1));
-        if (root.has("optionMultiplier")) data.put("optionMultiplier", root.path("optionMultiplier").asInt(1));
         if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
         if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
 
-        // Futures fallback fields (currency/MCX instruments without options)
+        // Futures fallback
         data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
         if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());
         if (root.has("futuresSymbol")) data.put("futuresSymbol", root.path("futuresSymbol").asText());
         if (root.has("futuresLtp")) data.put("futuresLtp", root.path("futuresLtp").asDouble());
         if (root.has("futuresLotSize")) data.put("futuresLotSize", root.path("futuresLotSize").asInt(1));
-        if (root.has("futuresMultiplier")) data.put("futuresMultiplier", root.path("futuresMultiplier").asInt(1));
         if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
         if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
         if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
@@ -363,7 +336,6 @@ public class FUDKIIConsumer {
     @PreDestroy
     public void persistToRedis() {
         try {
-            // Persist active triggers (with TTL)
             Map<String, Map<String, Object>> snapshot = new HashMap<>(activeTriggers.asMap());
             if (snapshot.isEmpty()) {
                 redisTemplate.delete(REDIS_KEY);
@@ -376,19 +348,16 @@ public class FUDKIIConsumer {
                 redisTemplate.expire(REDIS_KEY, signalTtlMinutes, TimeUnit.MINUTES);
             }
 
-            // Persist all latest signals (no TTL — frontend shows today's signals)
-            Map<String, Map<String, Object>> allSnapshot = new HashMap<>(latestFUDKII);
+            Map<String, Map<String, Object>> allSnapshot = new HashMap<>(latestMERE);
             if (!allSnapshot.isEmpty()) {
                 redisTemplate.delete(REDIS_KEY_ALL);
                 for (Map.Entry<String, Map<String, Object>> entry : allSnapshot.entrySet()) {
                     String json = objectMapper.writeValueAsString(entry.getValue());
                     redisTemplate.opsForHash().put(REDIS_KEY_ALL, entry.getKey(), json);
                 }
-                // Expire at end of day (24h max)
                 redisTemplate.expire(REDIS_KEY_ALL, 24 * 60, TimeUnit.MINUTES);
             }
 
-            // Persist today's signal history (immutable records — survives restart)
             String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
             Map<String, Map<String, Object>> historySnapshot = new HashMap<>(todaySignalHistory);
             if (!historySnapshot.isEmpty()) {
@@ -396,21 +365,19 @@ public class FUDKIIConsumer {
                     String json = objectMapper.writeValueAsString(entry.getValue());
                     redisTemplate.opsForHash().put(historyRedisKey, entry.getKey(), json);
                 }
-                // Expire after 24h (auto-cleanup old days)
                 redisTemplate.expire(historyRedisKey, 24 * 60, TimeUnit.MINUTES);
             }
 
-            log.info("FUDKII persisted {} active triggers, {} all-latest, {} history to Redis",
+            log.info("MERE persisted {} active, {} all-latest, {} history to Redis",
                     snapshot.size(), allSnapshot.size(), historySnapshot.size());
         } catch (Exception e) {
-            log.error("Failed to persist FUDKII triggers to Redis: {}", e.getMessage());
+            log.error("Failed to persist MERE triggers to Redis: {}", e.getMessage());
         }
     }
 
     @SuppressWarnings("unchecked")
     private void restoreFromRedis() {
         try {
-            // Restore active triggers
             Map<Object, Object> entries = redisTemplate.opsForHash().entries(REDIS_KEY);
             int restoredActive = 0;
             if (entries != null && !entries.isEmpty()) {
@@ -422,19 +389,16 @@ public class FUDKIIConsumer {
                                 (String) entry.getValue(), Map.class);
                         long cachedAt = data.containsKey("cachedAt")
                                 ? ((Number) data.get("cachedAt")).longValue() : 0;
-                        if (cachedAt > 0 && (now - cachedAt) > maxAgeMs) {
-                            continue;
-                        }
+                        if (cachedAt > 0 && (now - cachedAt) > maxAgeMs) continue;
                         activeTriggers.put((String) entry.getKey(), data);
-                        latestFUDKII.put((String) entry.getKey(), data);
+                        latestMERE.put((String) entry.getKey(), data);
                         restoredActive++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUDKII trigger {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore MERE trigger {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            // Restore all latest signals (for the FUDKII tab)
             Map<Object, Object> allEntries = redisTemplate.opsForHash().entries(REDIS_KEY_ALL);
             int restoredAll = 0;
             if (allEntries != null && !allEntries.isEmpty()) {
@@ -442,15 +406,14 @@ public class FUDKIIConsumer {
                     try {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
-                        latestFUDKII.putIfAbsent((String) entry.getKey(), data);
+                        latestMERE.putIfAbsent((String) entry.getKey(), data);
                         restoredAll++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUDKII all-latest {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore MERE all-latest {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            // Restore today's signal history
             String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
             Map<Object, Object> historyEntries = redisTemplate.opsForHash().entries(historyRedisKey);
             int restoredHistory = 0;
@@ -460,26 +423,24 @@ public class FUDKIIConsumer {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
                         todaySignalHistory.putIfAbsent((String) entry.getKey(), data);
-                        // Also ensure latestFUDKII has this triggered signal
                         String sc = (String) data.get("scripCode");
                         if (sc != null && Boolean.TRUE.equals(data.get("triggered"))) {
-                            latestFUDKII.putIfAbsent(sc, data);
+                            latestMERE.putIfAbsent(sc, data);
                         }
                         restoredHistory++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUDKII history {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore MERE history {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            log.info("FUDKII restored {} active triggers + {} all-latest + {} history from Redis",
+            log.info("MERE restored {} active + {} all-latest + {} history from Redis",
                     restoredActive, restoredAll, restoredHistory);
         } catch (Exception e) {
-            log.error("Failed to restore FUDKII triggers from Redis: {}", e.getMessage());
+            log.error("Failed to restore MERE triggers from Redis: {}", e.getMessage());
         }
     }
 
-    // Periodic Redis backup every 2 minutes
     @Scheduled(fixedRate = 120000)
     public void periodicPersist() {
         persistToRedis();
@@ -490,20 +451,16 @@ public class FUDKIIConsumer {
         if (!today.equals(currentTradeDate)) {
             dailySignalCount.clear();
             todaySignalHistory.clear();
-            latestFUDKII.clear();
+            latestMERE.clear();
             currentTradeDate = today;
-            log.info("FUDKII daily counters, history and latest reset for {}", today);
+            log.info("MERE daily counters, history and latest reset for {}", today);
         }
     }
 
     // --- PUBLIC ACCESSORS ---
 
-    public Map<String, Object> getLatestFUDKII(String scripCode) {
-        return latestFUDKII.get(scripCode);
-    }
-
-    public Map<String, Map<String, Object>> getAllLatestSignals() {
-        return new HashMap<>(latestFUDKII);
+    public Map<String, Object> getLatestMERE(String scripCode) {
+        return latestMERE.get(scripCode);
     }
 
     public Map<String, Map<String, Object>> getActiveTriggers() {
@@ -514,28 +471,10 @@ public class FUDKIIConsumer {
         return (int) activeTriggers.estimatedSize();
     }
 
-    public Map<String, Map<String, Object>> getActiveIgnitions() {
-        return getActiveTriggers();
+    public Map<String, Map<String, Object>> getAllLatestSignals() {
+        return new HashMap<>(latestMERE);
     }
 
-    public int getActiveIgnitionCount() {
-        return getActiveTriggerCount();
-    }
-
-    public String getDirectionForScrip(String scripCode) {
-        Map<String, Object> data = activeTriggers.getIfPresent(scripCode);
-        return data != null ? (String) data.get("direction") : null;
-    }
-
-    public int getDailySignalCount(String scripCode) {
-        String dailyKey = scripCode + "|" + currentTradeDate;
-        return dailySignalCount.getOrDefault(dailyKey, 0);
-    }
-
-    /**
-     * Get today's full signal history — ALL triggered signals, never overwritten.
-     * Survives restart via Redis persistence.
-     */
     public List<Map<String, Object>> getTodaySignalHistory() {
         return new ArrayList<>(todaySignalHistory.values());
     }

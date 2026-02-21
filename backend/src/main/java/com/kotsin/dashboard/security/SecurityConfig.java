@@ -44,6 +44,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/indicators/**").permitAll()
                 .requestMatchers("/api/signals/**").permitAll()
                 .requestMatchers("/api/candles/**").permitAll()
+                .requestMatchers("/api/patterns/**").permitAll()
                 .requestMatchers("/technical-indicators/**").permitAll()
                 // Admin-only
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")

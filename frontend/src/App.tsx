@@ -92,7 +92,7 @@ function App() {
           }
         />
         <Route
-          path="/wallet"
+          path="/positions"
           element={
             <ProtectedRoute>
               <Layout>

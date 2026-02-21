@@ -75,68 +75,68 @@ export const ReadyCard: React.FC<ReadyCardProps> = ({ snapshot, setup, isSample 
 
       {/* Header */}
       <div className="p-3 pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <span className="px-2 py-0.5 rounded text-xs font-bold bg-green-500/20 text-green-400 border border-green-500/40">
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
+            <div className="relative shrink-0">
+              <span className="px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold bg-green-500/20 text-green-400 border border-green-500/40">
                 READY
               </span>
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full animate-ping" />
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full" />
             </div>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${config.accentBg} ${config.accentText}`}>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${config.accentBg} ${config.accentText}`}>
               {config.label}
             </span>
             {setup.qualityTier && (
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${getQualityTierColor(setup.qualityTier)}`}>
+              <span className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold shrink-0 ${getQualityTierColor(setup.qualityTier)}`}>
                 {setup.qualityTier === 'A_PLUS' ? 'A+' : setup.qualityTier}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${getDirectionBgColor(setup.direction)} ${getDirectionColor(setup.direction)}`}>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium ${getDirectionBgColor(setup.direction)} ${getDirectionColor(setup.direction)}`}>
               {isLong ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
               {setup.direction}
             </span>
           </div>
         </div>
-        <div className="flex items-center justify-between mt-1">
-          <span className="text-sm font-semibold text-white">{snapshot.companyName}</span>
-          <span className="flex items-center gap-1 text-[10px] text-gray-500">
+        <div className="flex items-center justify-between mt-1 gap-2">
+          <span className="text-sm font-semibold text-white truncate">{snapshot.companyName}</span>
+          <span className="flex items-center gap-1 text-[10px] text-gray-500 shrink-0">
             <Clock className="w-3 h-3" />
-            Ready for {formatDuration(snapshot.stateDurationMs)}
+            <span className="hidden sm:inline">Ready for </span>{formatDuration(snapshot.stateDurationMs)}
           </span>
         </div>
       </div>
 
       {/* Price Grid — THE dominant element */}
-      <div className="bg-slate-900/60 px-4 py-3">
-        <div className="grid grid-cols-4 gap-3 text-center">
+      <div className="bg-slate-900/60 px-3 sm:px-4 py-2.5 sm:py-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 text-center">
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">Entry</div>
-            <div className="font-mono text-base font-bold text-white">{entry.toFixed(2)}</div>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">Entry</div>
+            <div className="font-mono text-sm sm:text-base font-bold text-white">{entry.toFixed(2)}</div>
           </div>
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">SL</div>
-            <div className="font-mono text-base font-bold text-red-400">{sl.toFixed(2)}</div>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">SL</div>
+            <div className="font-mono text-sm sm:text-base font-bold text-red-400">{sl.toFixed(2)}</div>
           </div>
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">Target</div>
-            <div className="font-mono text-base font-bold text-green-400">{target.toFixed(2)}</div>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">Target</div>
+            <div className="font-mono text-sm sm:text-base font-bold text-green-400">{target.toFixed(2)}</div>
           </div>
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">R:R</div>
-            <div className={`font-mono text-base font-bold ${rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-yellow-400' : 'text-orange-400'}`}>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">R:R</div>
+            <div className={`font-mono text-sm sm:text-base font-bold ${rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-yellow-400' : 'text-orange-400'}`}>
               {rr.toFixed(1)}:1
             </div>
           </div>
         </div>
-        <div className="flex items-center justify-between mt-2 text-xs">
+        <div className="flex items-center justify-between mt-1.5 sm:mt-2 text-[10px] sm:text-xs">
           <span className="text-gray-500">
-            Current: <span className="font-mono text-gray-300">{snapshot.currentPrice.toFixed(2)}</span>
+            <span className="hidden sm:inline">Current: </span><span className="font-mono text-gray-300">{snapshot.currentPrice.toFixed(2)}</span>
           </span>
           <span className="text-gray-500">
-            Distance to entry: <span className={`font-mono ${distToEntry > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+            <span className="hidden sm:inline">Distance to entry: </span><span className="sm:hidden">Dist: </span><span className={`font-mono ${distToEntry > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
               {Math.abs(distToEntry).toFixed(2)}%
             </span>
           </span>

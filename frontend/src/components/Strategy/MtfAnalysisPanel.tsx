@@ -32,65 +32,65 @@ export const MtfAnalysisPanel: React.FC<MtfAnalysisPanelProps> = ({ analysis }) 
   const position = analysis.rangePositionPercent;
 
   return (
-    <div className="bg-gray-800/50 rounded-lg p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium text-gray-300 flex items-center gap-2">
-          <Activity className="w-4 h-4" />
+    <div className="bg-gray-800/50 rounded-lg p-3 sm:p-4 space-y-3 sm:space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-xs sm:text-sm font-medium text-gray-300 flex items-center gap-1.5 sm:gap-2">
+          <Activity className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
           MTF Analysis
         </h4>
-        <span className={`text-xs px-2 py-0.5 rounded ${getQualityTierColor(analysis.qualityTierDisplay)}`}>
+        <span className={`text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded ${getQualityTierColor(analysis.qualityTierDisplay)}`}>
           {analysis.qualityTierDisplay} Tier
         </span>
       </div>
 
-      {/* Hierarchical Bias */}
-      <div className="bg-gray-900/50 rounded p-3">
-        <div className="text-xs text-gray-500 mb-2">Hierarchical Bias</div>
-        <div className="flex items-center justify-center gap-4">
+      {/* Hierarchical Bias — stacked on mobile, row on sm+ */}
+      <div className="bg-gray-900/50 rounded p-2.5 sm:p-3">
+        <div className="text-[10px] sm:text-xs text-gray-500 mb-2">Hierarchical Bias</div>
+        <div className="flex items-center justify-center gap-3 sm:gap-4 flex-wrap">
           <div className="text-center">
-            <div className="text-xs text-gray-500">HTF ({analysis.htfTimeframe})</div>
-            <div className={`text-lg font-bold ${getBiasColor(analysis.htfBias)}`}>
+            <div className="text-[10px] sm:text-xs text-gray-500">HTF ({analysis.htfTimeframe})</div>
+            <div className={`text-base sm:text-lg font-bold ${getBiasColor(analysis.htfBias)}`}>
               {analysis.htfBias === 'BULLISH' ? (
-                <TrendingUp className="w-6 h-6 mx-auto" />
+                <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 mx-auto" />
               ) : analysis.htfBias === 'BEARISH' ? (
-                <TrendingDown className="w-6 h-6 mx-auto" />
+                <TrendingDown className="w-5 h-5 sm:w-6 sm:h-6 mx-auto" />
               ) : (
                 <span className="text-gray-500">?</span>
               )}
             </div>
-            <div className={`text-sm ${getBiasColor(analysis.htfBias)}`}>
+            <div className={`text-xs sm:text-sm ${getBiasColor(analysis.htfBias)}`}>
               {analysis.htfBias}
             </div>
           </div>
 
-          <ArrowRight className="w-5 h-5 text-gray-600" />
+          <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 shrink-0" />
 
           <div className="text-center">
-            <div className="text-xs text-gray-500">LTF ({analysis.ltfTimeframe})</div>
-            <div className={`text-lg font-bold ${getBiasColor(analysis.ltfBias)}`}>
+            <div className="text-[10px] sm:text-xs text-gray-500">LTF ({analysis.ltfTimeframe})</div>
+            <div className={`text-base sm:text-lg font-bold ${getBiasColor(analysis.ltfBias)}`}>
               {analysis.ltfBias === 'BULLISH' ? (
-                <TrendingUp className="w-6 h-6 mx-auto" />
+                <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 mx-auto" />
               ) : analysis.ltfBias === 'BEARISH' ? (
-                <TrendingDown className="w-6 h-6 mx-auto" />
+                <TrendingDown className="w-5 h-5 sm:w-6 sm:h-6 mx-auto" />
               ) : (
                 <span className="text-gray-500">?</span>
               )}
             </div>
-            <div className={`text-sm ${getBiasColor(analysis.ltfBias)}`}>
+            <div className={`text-xs sm:text-sm ${getBiasColor(analysis.ltfBias)}`}>
               {analysis.ltfBias}
             </div>
           </div>
 
-          <div className="flex items-center gap-1 ml-4">
+          <div className="flex items-center gap-1 ml-1 sm:ml-4">
             {analysis.biasAligned ? (
               <>
-                <CheckCircle className="w-4 h-4 text-green-400" />
-                <span className="text-green-400 text-sm">ALIGNED</span>
+                <CheckCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-green-400" />
+                <span className="text-green-400 text-xs sm:text-sm">ALIGNED</span>
               </>
             ) : (
               <>
-                <AlertTriangle className="w-4 h-4 text-yellow-400" />
-                <span className="text-yellow-400 text-sm">DIVERGENT</span>
+                <AlertTriangle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-yellow-400" />
+                <span className="text-yellow-400 text-xs sm:text-sm">DIVERGENT</span>
               </>
             )}
           </div>
@@ -98,8 +98,8 @@ export const MtfAnalysisPanel: React.FC<MtfAnalysisPanelProps> = ({ analysis }) 
       </div>
 
       {/* Swing Range Visual */}
-      <div className="bg-gray-900/50 rounded p-3">
-        <div className="text-xs text-gray-500 mb-2">Swing Range</div>
+      <div className="bg-gray-900/50 rounded p-2.5 sm:p-3">
+        <div className="text-[10px] sm:text-xs text-gray-500 mb-2">Swing Range</div>
         <div className="relative h-8 bg-gradient-to-r from-green-900/30 via-yellow-900/30 to-red-900/30 rounded">
           {/* Equilibrium line */}
           <div
@@ -135,30 +135,30 @@ export const MtfAnalysisPanel: React.FC<MtfAnalysisPanelProps> = ({ analysis }) 
       </div>
 
       {/* Flow Status */}
-      <div className="bg-gray-900/50 rounded p-3">
+      <div className="bg-gray-900/50 rounded p-2.5 sm:p-3">
         <div className="flex justify-between items-center">
-          <div className="text-xs text-gray-500">F&O Flow</div>
-          <span className={`text-sm font-medium ${getFlowStatusColor(analysis.flowStatus)}`}>
+          <div className="text-[10px] sm:text-xs text-gray-500">F&O Flow</div>
+          <span className={`text-xs sm:text-sm font-medium ${getFlowStatusColor(analysis.flowStatus)}`}>
             {analysis.flowStatus}
           </span>
         </div>
         {analysis.flowInterpretation && (
-          <div className="text-sm text-gray-300 mt-1">
+          <div className="text-xs sm:text-sm text-gray-300 mt-1">
             {analysis.flowInterpretation}
           </div>
         )}
         {analysis.flowReason && (
-          <div className="text-xs text-gray-500 mt-1">
+          <div className="text-[10px] sm:text-xs text-gray-500 mt-1">
             {analysis.flowReason}
           </div>
         )}
       </div>
 
       {/* Entry Sequence */}
-      <div className="bg-gray-900/50 rounded p-3">
+      <div className="bg-gray-900/50 rounded p-2.5 sm:p-3">
         <div className="flex justify-between items-center mb-2">
-          <div className="text-xs text-gray-500">Entry Sequence</div>
-          <span className="text-sm font-mono">
+          <div className="text-[10px] sm:text-xs text-gray-500">Entry Sequence</div>
+          <span className="text-xs sm:text-sm font-mono">
             <span className={analysis.coreRequirementsMet ? 'text-green-400' : 'text-gray-400'}>
               {analysis.completedSteps}
             </span>

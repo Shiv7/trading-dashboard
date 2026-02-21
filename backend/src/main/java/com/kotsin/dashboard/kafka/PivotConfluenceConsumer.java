@@ -250,6 +250,31 @@ public class PivotConfluenceConsumer {
             data.put("mlOrderFlowImbalance", root.path("mlOrderFlowImbalance").asDouble(0));
         }
 
+        // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
+        data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
+        if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
+        if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
+        if (root.has("optionStrike")) data.put("optionStrike", root.path("optionStrike").asDouble());
+        if (root.has("optionType")) data.put("optionType", root.path("optionType").asText());
+        if (root.has("optionExpiry")) data.put("optionExpiry", root.path("optionExpiry").asText());
+        if (root.has("optionLtp")) data.put("optionLtp", root.path("optionLtp").asDouble());
+        if (root.has("optionLotSize")) data.put("optionLotSize", root.path("optionLotSize").asInt(1));
+        if (root.has("optionMultiplier")) data.put("optionMultiplier", root.path("optionMultiplier").asInt(1));
+        if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
+        if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
+        if (root.has("symbol")) data.put("symbol", root.path("symbol").asText());
+
+        // Futures fallback fields (MCX instruments without options)
+        data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
+        if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());
+        if (root.has("futuresSymbol")) data.put("futuresSymbol", root.path("futuresSymbol").asText());
+        if (root.has("futuresLtp")) data.put("futuresLtp", root.path("futuresLtp").asDouble());
+        if (root.has("futuresLotSize")) data.put("futuresLotSize", root.path("futuresLotSize").asInt(1));
+        if (root.has("futuresMultiplier")) data.put("futuresMultiplier", root.path("futuresMultiplier").asInt(1));
+        if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
+        if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
+        if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
+
         return data;
     }
 

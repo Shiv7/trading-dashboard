@@ -326,6 +326,11 @@ public class FUKAAConsumer {
         data.put("surgeT", root.path("surgeT").asDouble(0));
         data.put("surgeTPlus1", root.path("surgeTPlus1").asDouble(0));
 
+        // OI enrichment fields
+        if (root.has("oiChangeRatio")) data.put("oiChangeRatio", root.path("oiChangeRatio").asDouble(0));
+        if (root.has("oiInterpretation")) data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
+        if (root.has("oiLabel")) data.put("oiLabel", root.path("oiLabel").asText(""));
+
         // FUKAA emission time
         String fukaaEmittedAt = root.path("fukaaEmittedAt").asText();
         if (fukaaEmittedAt != null && !fukaaEmittedAt.isEmpty()) {
@@ -336,6 +341,30 @@ public class FUKAAConsumer {
                 data.put("fukaaEmittedAt", fukaaEmittedAt);
             }
         }
+
+        // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
+        data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
+        if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
+        if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
+        if (root.has("optionStrike")) data.put("optionStrike", root.path("optionStrike").asDouble());
+        if (root.has("optionType")) data.put("optionType", root.path("optionType").asText());
+        if (root.has("optionExpiry")) data.put("optionExpiry", root.path("optionExpiry").asText());
+        if (root.has("optionLtp")) data.put("optionLtp", root.path("optionLtp").asDouble());
+        if (root.has("optionLotSize")) data.put("optionLotSize", root.path("optionLotSize").asInt(1));
+        if (root.has("optionMultiplier")) data.put("optionMultiplier", root.path("optionMultiplier").asInt(1));
+        if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
+        if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
+
+        // Futures fallback fields (MCX instruments without options)
+        data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
+        if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());
+        if (root.has("futuresSymbol")) data.put("futuresSymbol", root.path("futuresSymbol").asText());
+        if (root.has("futuresLtp")) data.put("futuresLtp", root.path("futuresLtp").asDouble());
+        if (root.has("futuresLotSize")) data.put("futuresLotSize", root.path("futuresLotSize").asInt(1));
+        if (root.has("futuresMultiplier")) data.put("futuresMultiplier", root.path("futuresMultiplier").asInt(1));
+        if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
+        if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
+        if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
 
         return data;
     }

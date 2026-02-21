@@ -4,8 +4,9 @@ import {
   Check, Zap, AlertTriangle, Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { fetchJson, ordersApi } from '../../services/api';
-import type { CreateOrderRequest } from '../../types/orders';
+import { fetchJson, strategyWalletsApi, strategyTradesApi } from '../../services/api';
+import type { StrategyTradeRequest } from '../../types/orders';
+import { getOTMStrike, mapToOptionLevels, computeLotSizing } from '../../utils/tradingUtils';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -39,6 +40,37 @@ interface FudkiiSignal {
   riskReward?: number;
   pivotSource?: boolean;
   atr30m?: number;
+  oiChangeRatio?: number;
+  oiInterpretation?: string;
+  oiLabel?: string;
+  surgeT?: number;
+  surgeTMinus1?: number;
+  volumeT?: number;
+  volumeTMinus1?: number;
+  avgVolume?: number;
+  // Option enrichment from backend (real LTP, strike, lot size)
+  optionAvailable?: boolean;
+  optionScripCode?: string;
+  optionSymbol?: string;
+  optionStrike?: number;
+  optionType?: string;
+  optionExpiry?: string;
+  optionLtp?: number;
+  optionLotSize?: number;
+  optionMultiplier?: number;
+  optionExchange?: string;
+  optionExchangeType?: string;
+  // Futures fallback (MCX instruments without options)
+  futuresAvailable?: boolean;
+  futuresScripCode?: string;
+  futuresSymbol?: string;
+  futuresLtp?: number;
+  futuresLotSize?: number;
+  futuresMultiplier?: number;
+  futuresExpiry?: string;
+  futuresExchange?: string;
+  futuresExchangeType?: string;
+  futuresVolume?: number;
 }
 
 interface TradePlan {
@@ -95,29 +127,7 @@ function fmt(v: number): string {
   return Number(v.toFixed(2)).toString();
 }
 
-/** Derive option strike interval from price */
-function getStrikeInterval(price: number): number {
-  if (price > 40000) return 500;
-  if (price > 20000) return 200;
-  if (price > 10000) return 100;
-  if (price > 5000) return 50;
-  if (price > 2000) return 20;
-  if (price > 1000) return 10;
-  if (price > 500) return 5;
-  if (price > 100) return 2.5;
-  return 1;
-}
-
-/** Get OTM strike 1-2 steps away from ATM */
-function getOTMStrike(price: number, direction: 'BULLISH' | 'BEARISH'): { strike: number; interval: number } {
-  const interval = getStrikeInterval(price);
-  const atm = Math.round(price / interval) * interval;
-  // CE (bullish): OTM = higher strike; PE (bearish): OTM = lower strike
-  const strike = direction === 'BULLISH'
-    ? atm + interval
-    : atm - interval;
-  return { strike, interval };
-}
+// getStrikeInterval, getOTMStrike: imported from ../../utils/tradingUtils
 
 /** Compute dynamic confidence from signal characteristics */
 function computeConfidence(sig: FudkiiSignal): number {
@@ -159,14 +169,12 @@ function estimateOptionPremium(plan: TradePlan): number {
   return Math.round(Math.max(plan.atr * 3, plan.entry * 0.008) * 10) / 10;
 }
 
-/** Compute stable volume surge multiplier per signal */
+// approximateDelta, mapToOptionLevels: imported from ../../utils/tradingUtils
+
+/** Real volume surge from backend (T candle volume / 6-candle avg); falls back to 0 if unavailable */
 function computeVolumeSurge(sig: FudkiiSignal): number {
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const bbWidth = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  const priceRatio = bbWidth > 0 ? bbWidth / sig.triggerPrice : 0.005;
-  const base = 1.2 + (hash % 20) / 10;
-  const volBoost = sig.trendChanged ? 0.5 : 0;
-  return Math.round((base + priceRatio * 50 + volBoost) * 10) / 10;
+  if (sig.surgeT != null && sig.surgeT > 0) return Math.round(sig.surgeT * 10) / 10;
+  return 0;
 }
 
 /** Compute stable IV change % per signal */
@@ -193,12 +201,32 @@ function computeDelta(sig: FudkiiSignal, plan: TradePlan): number {
   return sig.direction === 'BEARISH' ? -delta : delta;
 }
 
-/** Compute stable OI change % per signal */
+/** OI change ratio from real FUT OI data (3-window cumulative trend); falls back to 0 if unavailable */
 function computeOIChange(sig: FudkiiSignal): number {
-  const hash = sig.scripCode.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 3), 0);
-  const seed = ((hash * 13 + 7) % 31) - 15;
-  const trendBoost = sig.trendChanged ? 3 : -2;
-  return Math.round(seed + trendBoost);
+  if (sig.oiChangeRatio != null) return Math.round(sig.oiChangeRatio);
+  return 0;
+}
+
+/** OI label color: green for new positions (LONG_BUILDUP, SHORT_BUILDUP), orange for exits */
+function getOILabelStyle(label?: string): { text: string; color: string } {
+  switch (label) {
+    case 'LONG_BUILDUP': return { text: 'Long Buildup', color: 'text-green-400' };
+    case 'SHORT_BUILDUP': return { text: 'Short Buildup', color: 'text-green-400' };
+    case 'SHORT_COVERING': return { text: 'Short Covering', color: 'text-orange-400' };
+    case 'LONG_UNWINDING': return { text: 'Long Unwinding', color: 'text-orange-400' };
+    default: return { text: '', color: 'text-slate-500' };
+  }
+}
+
+/** OI chip accent based on whether OI confirms signal direction */
+function getOIAccent(label?: string): string {
+  if (label === 'LONG_BUILDUP' || label === 'SHORT_BUILDUP') {
+    return 'bg-green-500/15 text-green-300';
+  }
+  if (label === 'SHORT_COVERING' || label === 'LONG_UNWINDING') {
+    return 'bg-orange-500/15 text-orange-300';
+  }
+  return 'bg-slate-700/50 text-slate-300';
 }
 
 /** Compute composite strength score (0-100) from all metrics */
@@ -213,6 +241,8 @@ function computeStrength(sig: FudkiiSignal, plan: TradePlan): number {
   const ivNorm = Math.max(0, Math.min(25, ((iv + 10) / 25) * 25));
   return Math.min(100, Math.round(confNorm + volNorm + rrNorm + ivNorm));
 }
+
+// computeLotSizing: imported from ../../utils/tradingUtils
 
 /** Extract enriched trade plan from signal (OTM strikes) */
 function extractTradePlan(sig: FudkiiSignal): TradePlan {
@@ -372,7 +402,7 @@ const FilterDropdown: React.FC<{
   onClose: () => void;
   onReset: () => void;
 }> = ({ direction, exchange, onDirectionChange, onExchangeChange, onClose, onReset }) => (
-  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[260px] animate-slideDown">
+  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-3 sm:p-4 min-w-[240px] sm:min-w-[260px] animate-slideDown mobile-dropdown-full">
     {/* Direction */}
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
@@ -504,9 +534,9 @@ const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
    ═══════════════════════════════════════════════════════════════ */
 
 const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono
+  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
     ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[10px]">{label}</span>
+    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
     <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
   </div>
 );
@@ -518,8 +548,9 @@ const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bol
 const FudkiiTradingCard: React.FC<{
   sig: FudkiiSignal;
   plan: TradePlan;
-  onBuy: (sig: FudkiiSignal, plan: TradePlan) => void;
-}> = ({ sig, plan, onBuy }) => {
+  walletCapital: number;
+  onBuy: (sig: FudkiiSignal, plan: TradePlan, lots: number) => void;
+}> = ({ sig, plan, walletCapital, onBuy }) => {
   const [pressing, setPressing] = useState(false);
   const isLong = sig.direction === 'BULLISH';
 
@@ -535,8 +566,51 @@ const FudkiiTradingCard: React.FC<{
   // Dynamic confidence
   const confidence = computeConfidence(sig);
 
-  // Option premium estimate
-  const premium = estimateOptionPremium(plan);
+  // Option: prefer real data from backend; check futures fallback for MCX/currency
+  const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
+  const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+  const noDerivatives = sig.optionAvailable === false && !hasFutures;
+  // Currency pairs: the signal itself IS the FUT instrument, triggerPrice = FUT LTP
+  const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(sig.symbol);
+
+  // Determine instrument mode: OPTION, FUTURES, or NONE
+  let instrumentMode: 'OPTION' | 'FUTURES' | 'NONE' = 'NONE';
+  let premium = 0;
+  let displayInstrumentName = '';
+  let lotSize = 1;
+  let multiplier = 1;
+
+  if (hasRealOption) {
+    instrumentMode = 'OPTION';
+    premium = sig.optionLtp!;
+    const displayStrike = sig.optionStrike ?? plan.strike;
+    const displayOptionType = sig.optionType ?? plan.optionType;
+    displayInstrumentName = `${sig.symbol} ${displayStrike} ${displayOptionType}`;
+    lotSize = sig.optionLotSize ?? 1;
+    multiplier = sig.optionMultiplier ?? 1;
+  } else if (hasFutures) {
+    instrumentMode = 'FUTURES';
+    premium = sig.futuresLtp!;
+    displayInstrumentName = `${sig.futuresSymbol ?? sig.symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+    lotSize = sig.futuresLotSize ?? 1;
+    multiplier = sig.futuresMultiplier ?? 1;
+  } else if (isCurrencyPair && noDerivatives) {
+    // Currency FUT fallback: signal scrip IS the FUT contract, triggerPrice = FUT LTP
+    instrumentMode = 'FUTURES';
+    premium = sig.triggerPrice;
+    displayInstrumentName = `${sig.symbol}`;
+    lotSize = 1;
+  } else if (!noDerivatives) {
+    // Legacy fallback (old signals without optionAvailable field)
+    instrumentMode = 'OPTION';
+    premium = estimateOptionPremium(plan);
+    displayInstrumentName = `${sig.symbol} ${plan.strike} ${plan.optionType}`;
+    lotSize = 1;
+  }
+
+  const sizing = (instrumentMode === 'NONE')
+    ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
+    : computeLotSizing(confidence, walletCapital, premium, lotSize, multiplier);
 
   // Stable metrics derived from signal characteristics
   const volMultiplier = computeVolumeSurge(sig).toFixed(1);
@@ -545,11 +619,13 @@ const FudkiiTradingCard: React.FC<{
   const delta = computeDelta(sig, plan).toFixed(2);
   const oiVal = computeOIChange(sig);
   const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
+  const oiStyle = getOILabelStyle(sig.oiLabel);
+  const oiAccent = getOIAccent(sig.oiLabel);
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-hidden transition-all duration-200 hover:shadow-lg mx-4 md:mx-0`}>
-      <div className="p-4">
+      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
+      <div className="p-3 sm:p-4">
 
         {/* ── TOP SECTION ── */}
         <div className="flex items-start justify-between mb-1">
@@ -573,94 +649,12 @@ const FudkiiTradingCard: React.FC<{
           </span>
         </div>
 
-        {/* ── CENTER CORE: SL / Entry / Targets Grid ── */}
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
-          {/* Row 1: SL | Entry */}
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
-            <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
+        {/* ── TRIGGER PRICE ── */}
+        <div className="mt-4">
+          <span className="text-[10px] text-slate-500 uppercase tracking-wider">Trigger Price</span>
+          <div className="font-mono text-lg font-semibold text-slate-300 mt-0.5">
+            &#8377;{fmt(sig.triggerPrice)}
           </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
-            <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-
-          {/* Row 2: T1 | T2 */}
-          {plan.t1 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
-              <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-            </div>
-          )}
-          {plan.t2 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2</span>
-              <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-            </div>
-          )}
-
-          {/* Row 3: T3 | T4 */}
-          {plan.t3 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T3</span>
-              <span className="font-mono text-sm font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-            </div>
-          )}
-          {plan.t4 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T4</span>
-              <span className="font-mono text-sm font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Desktop inline row (hidden on mobile, shown on xl) */}
-        <div className="hidden xl:flex items-center gap-3 mt-4 py-2 border-t border-slate-700/40">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-slate-500">SL</span>
-            <span className="font-mono text-xs font-semibold text-red-400">{fmt(plan.sl)}</span>
-          </div>
-          <span className="text-slate-700">|</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-slate-500">Entry</span>
-            <span className="font-mono text-xs font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-          {plan.t1 !== null && (
-            <>
-              <span className="text-slate-700">|</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-slate-500">T1</span>
-                <span className="font-mono text-xs font-semibold text-green-400">{fmt(plan.t1)}</span>
-              </div>
-            </>
-          )}
-          {plan.t2 !== null && (
-            <>
-              <span className="text-slate-700">|</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-slate-500">T2</span>
-                <span className="font-mono text-xs font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-              </div>
-            </>
-          )}
-          {plan.t3 !== null && (
-            <>
-              <span className="text-slate-700">|</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-slate-500">T3</span>
-                <span className="font-mono text-xs font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-              </div>
-            </>
-          )}
-          {plan.t4 !== null && (
-            <>
-              <span className="text-slate-700">|</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-slate-500">T4</span>
-                <span className="font-mono text-xs font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-              </div>
-            </>
-          )}
         </div>
 
         {/* ── R:R BAR ── */}
@@ -669,27 +663,60 @@ const FudkiiTradingCard: React.FC<{
         </div>
 
         {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1">
+        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
           <MetricsChip label="ATR" value={fmt(plan.atr)} />
           <MetricsChip label="Vol" value={`${volMultiplier}x`} bold accent="bg-amber-500/15 text-amber-300" />
           <MetricsChip label="IV" value={`${ivChange}%`} />
           <MetricsChip label={'\u0394'} value={delta} />
-          <MetricsChip label="OI" value={`${oiChange}%`} />
+          <MetricsChip label="OI" value={`${oiChange}%`} accent={oiAccent} />
         </div>
 
+        {/* ── OI LABEL ── */}
+        {oiStyle.text && (
+          <div className="mt-1.5 px-1">
+            <span className={`text-[10px] font-semibold uppercase tracking-wider ${oiStyle.color}`}>
+              {oiStyle.text}
+            </span>
+          </div>
+        )}
+
+        {/* ── INSUFFICIENT FUNDS LABEL ── */}
+        {sizing.insufficientFunds && !sizing.disabled && (
+          <div className="mt-3 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30">
+            <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
+            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+          </div>
+        )}
+
         {/* ── BUY BUTTON ── */}
-        <button
-          onClick={() => onBuy(sig, plan)}
-          onMouseDown={() => setPressing(true)}
-          onMouseUp={() => setPressing(false)}
-          onMouseLeave={() => setPressing(false)}
-          className={`w-full h-12 rounded-xl mt-4 text-white font-semibold text-base
-            transition-all duration-100 select-none
-            ${buyBg} ${buyHover} ${buyBgActive}
-            ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
-        >
-          BUY {sig.symbol} {plan.strike}{plan.optionType} @ &#8377;{premium}/-
-        </button>
+        {instrumentMode === 'NONE' ? (
+          <button
+            disabled
+            className="w-full h-12 rounded-xl mt-4 text-slate-500 font-semibold text-sm bg-slate-700/30 border border-slate-600/30 cursor-not-allowed"
+          >
+            No Derivatives Available for {sig.symbol || sig.scripCode}
+          </button>
+        ) : sizing.disabled ? (
+          <button
+            disabled
+            className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
+          >
+            Confidence {confidence}% &lt; 60% — No Trade
+          </button>
+        ) : (
+          <button
+            onClick={() => onBuy(sig, plan, sizing.lots)}
+            onMouseDown={() => setPressing(true)}
+            onMouseUp={() => setPressing(false)}
+            onMouseLeave={() => setPressing(false)}
+            className={`w-full h-12 rounded-xl mt-4 text-white font-semibold text-sm
+              transition-all duration-100 select-none
+              ${buyBg} ${buyHover} ${buyBgActive}
+              ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
+          >
+            BUY {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -739,10 +766,10 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
     optionType: 'CE', lots: 3, filledPrice: 0, riskPercent: 0,
     status: 'sending',
   });
+  const [walletCapital, setWalletCapital] = useState<number>(100000);
 
   const fetchFudkii = useCallback(async () => {
     try {
-      // Use history endpoint — returns ALL triggered signals for today, persisted in Redis
       const data = await fetchJson<FudkiiSignal[]>('/strategy-state/fudkii/history/list');
       if (data) {
         setSignals(data);
@@ -774,6 +801,19 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
     };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
+  }, []);
+
+  // Fetch wallet capital for lot sizing
+  useEffect(() => {
+    const fetchCapital = async () => {
+      try {
+        const data = await strategyWalletsApi.getCapital('FUDKII');
+        if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
+      } catch { /* ignore */ }
+    };
+    fetchCapital();
+    const interval = setInterval(fetchCapital, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   /* ── FILTER ── */
@@ -816,47 +856,145 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
   const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Recent';
 
   /* ── BUY HANDLER — dispatches to trade execution module ── */
-  const handleBuy = useCallback(async (sig: FudkiiSignal, plan: TradePlan) => {
-    const est = estimateOptionPremium(plan);
-    const isLong = sig.direction === 'BULLISH';
+  const handleBuy = useCallback(async (sig: FudkiiSignal, plan: TradePlan, lots: number) => {
+    const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
+    const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+    const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(sig.symbol);
 
-    // Show sending state immediately
+    let instrumentType: 'OPTION' | 'FUTURES';
+    let entryPrice: number;
+    let tradingScripCode: string;
+    let displayName: string;
+    let lotSize: number;
+    let multiplier = 1;
+    let sl: number;
+    let t1: number;
+    let t2: number;
+    let t3: number;
+    let t4: number;
+    let delta = 1.0;
+
+    if (hasRealOption) {
+      instrumentType = 'OPTION';
+      entryPrice = sig.optionLtp!;
+      tradingScripCode = sig.optionScripCode ?? sig.scripCode;
+      const displayStrike = sig.optionStrike ?? plan.strike;
+      const displayOptionType = sig.optionType ?? plan.optionType;
+      displayName = `${sig.symbol} ${displayStrike} ${displayOptionType}`;
+      lotSize = sig.optionLotSize ?? 1;
+      multiplier = sig.optionMultiplier ?? 1;
+
+      // Delta-map equity levels to option premium levels
+      const mapped = mapToOptionLevels(
+        entryPrice,
+        sig.triggerPrice,
+        plan.sl,
+        [plan.t1, plan.t2, plan.t3, plan.t4],
+        sig.optionStrike ?? plan.strike,
+        (sig.optionType ?? plan.optionType) as 'CE' | 'PE'
+      );
+      sl = mapped.sl;
+      t1 = mapped.targets[0] || 0;
+      t2 = mapped.targets[1] || 0;
+      t3 = mapped.targets[2] || 0;
+      t4 = mapped.targets[3] || 0;
+      delta = mapped.delta;
+    } else if (hasFutures) {
+      instrumentType = 'FUTURES';
+      entryPrice = sig.futuresLtp!;
+      tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
+      displayName = `${sig.futuresSymbol ?? sig.symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      lotSize = sig.futuresLotSize ?? 1;
+      multiplier = sig.futuresMultiplier ?? 1;
+      // Futures: use equity levels directly (delta ≈ 1.0)
+      sl = plan.sl;
+      t1 = plan.t1 ?? 0;
+      t2 = plan.t2 ?? 0;
+      t3 = plan.t3 ?? 0;
+      t4 = plan.t4 ?? 0;
+      delta = 1.0;
+    } else if (isCurrencyPair) {
+      // Currency FUT fallback: signal scrip IS the FUT contract
+      instrumentType = 'FUTURES';
+      entryPrice = sig.triggerPrice;
+      tradingScripCode = sig.scripCode;
+      displayName = `${sig.symbol}`;
+      lotSize = 1;
+      sl = plan.sl;
+      t1 = plan.t1 ?? 0;
+      t2 = plan.t2 ?? 0;
+      t3 = plan.t3 ?? 0;
+      t4 = plan.t4 ?? 0;
+      delta = 1.0;
+    } else {
+      // Legacy fallback
+      instrumentType = 'OPTION';
+      entryPrice = estimateOptionPremium(plan);
+      tradingScripCode = sig.scripCode;
+      displayName = `${sig.symbol} ${plan.strike} ${plan.optionType}`;
+      lotSize = 1;
+      sl = plan.sl;
+      t1 = plan.t1 ?? 0;
+      t2 = plan.t2 ?? 0;
+      t3 = plan.t3 ?? 0;
+      t4 = plan.t4 ?? 0;
+    }
+
     setExecution({
       visible: true,
       symbol: sig.symbol || sig.scripCode,
-      optionName: `${sig.symbol} ${plan.strike} ${plan.optionType}`,
-      strike: plan.strike,
-      optionType: plan.optionType,
-      lots: 3,
-      filledPrice: est,
-      riskPercent: 0.8,
+      optionName: displayName,
+      strike: sig.optionStrike ?? plan.strike,
+      optionType: (sig.optionType ?? plan.optionType) as 'CE' | 'PE',
+      lots,
+      filledPrice: entryPrice,
+      riskPercent: plan.sl && sig.triggerPrice
+        ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
+        : 0.8,
       status: 'sending',
     });
 
     try {
-      const order: CreateOrderRequest = {
-        scripCode: sig.scripCode,
-        side: isLong ? 'BUY' : 'SELL',
-        type: 'MARKET',
-        qty: 3,
-        currentPrice: sig.triggerPrice,
-        sl: plan.sl,
-        tp1: plan.t1 ?? undefined,
-        tp2: plan.t2 ?? undefined,
-        trailingType: 'NONE',
-        signalSource: 'FUDKII',
+      const req: StrategyTradeRequest = {
+        scripCode: tradingScripCode,
+        instrumentSymbol: displayName,
+        instrumentType,
+        underlyingScripCode: sig.scripCode,
+        underlyingSymbol: sig.symbol || sig.scripCode,
+        side: 'BUY',
+        quantity: lots * lotSize,
+        lots,
+        lotSize,
+        multiplier,
+        entryPrice,
+        sl,
+        t1,
+        t2,
+        t3,
+        t4,
+        equitySpot: sig.triggerPrice,
+        equitySl: plan.sl,
+        equityT1: plan.t1 ?? 0,
+        equityT2: plan.t2 ?? 0,
+        equityT3: plan.t3 ?? 0,
+        equityT4: plan.t4 ?? 0,
+        delta,
+        optionType: hasRealOption ? (sig.optionType as 'CE' | 'PE') : undefined,
+        strike: sig.optionStrike ?? plan.strike,
+        strategy: 'FUDKII',
+        exchange: sig.exchange || 'N',
+        direction: sig.direction,
+        confidence: computeConfidence(sig),
       };
 
-      const result = await ordersApi.createOrder(order);
+      const result = await strategyTradesApi.create(req);
 
       setExecution(prev => ({
         ...prev,
-        status: 'filled',
-        filledPrice: result.filledPrice ?? est,
-        orderId: result.id,
-        riskPercent: plan.sl && sig.triggerPrice
-          ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
-          : 0.8,
+        status: result.success ? 'filled' : 'error',
+        filledPrice: result.entryPrice ?? entryPrice,
+        orderId: result.tradeId,
+        errorMessage: result.error,
       }));
     } catch (err) {
       setExecution(prev => ({
@@ -954,12 +1092,13 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
 
         {/* Cards Grid: 1 col mobile, 3 col desktop */}
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
               <FudkiiTradingCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
                 sig={sig}
                 plan={plan}
+                walletCapital={walletCapital}
                 onBuy={handleBuy}
               />
             ))}
@@ -973,7 +1112,7 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
         onClose={() => setExecution(s => ({ ...s, visible: false }))}
         onViewPosition={() => {
           setExecution(s => ({ ...s, visible: false }));
-          navigate('/wallet');
+          navigate('/wallets');
         }}
       />
     </div>

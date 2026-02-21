@@ -12,6 +12,8 @@ import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bson.Document;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +21,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.Date;
 
 /**
  * Kafka consumer for trade outcome events.
@@ -33,6 +36,7 @@ public class TradeOutcomeConsumer {
     private final WalletService walletService;
     private final UserPnLService userPnLService;
     private final ScripLookupService scripLookup;
+    private final MongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -51,6 +55,9 @@ public class TradeOutcomeConsumer {
             }
 
             TradeDTO trade = parseTrade(root);
+
+            // Persist to trade_outcomes MongoDB (feeds StrategyWalletsService)
+            persistTradeOutcome(root, trade);
 
             // Broadcast trade update
             sessionManager.broadcastTradeUpdate(trade);
@@ -236,6 +243,65 @@ public class TradeOutcomeConsumer {
         log.warn("[TRADE_OUTCOME] {} - Could not determine side, defaulting to LONG",
             root.path("scripCode").asText());
         return "LONG";
+    }
+
+    /**
+     * Persist trade outcome to trade_outcomes MongoDB collection.
+     * StrategyWalletsService reads from this collection for /wallets page.
+     */
+    private void persistTradeOutcome(JsonNode root, TradeDTO trade) {
+        try {
+            // Use explicit signalSource if available, else derive from signalType (e.g. FUDKII_LONG → FUDKII)
+            String signalType = root.path("signalType").asText("");
+            String signalSource = root.path("signalSource").asText("");
+            if (signalSource.isEmpty()) {
+                signalSource = signalType;
+                if (signalType.contains("_")) {
+                    signalSource = signalType.substring(0, signalType.indexOf("_"));
+                }
+            }
+
+            Document doc = new Document()
+                    .append("signalId", trade.getSignalId())
+                    .append("scripCode", trade.getScripCode())
+                    .append("companyName", trade.getCompanyName())
+                    .append("signalType", signalType)
+                    .append("signalSource", signalSource)
+                    .append("strategy", signalSource)
+                    .append("direction", root.path("direction").asText(""))
+                    .append("side", trade.getSide())
+                    .append("entryPrice", trade.getEntryPrice())
+                    .append("exitPrice", trade.getExitPrice())
+                    .append("stopLoss", trade.getStopLoss())
+                    .append("target1", trade.getTarget1())
+                    .append("quantity", trade.getQuantity())
+                    .append("exitReason", trade.getExitReason())
+                    .append("pnl", trade.getPnl())
+                    .append("pnlPercent", trade.getPnlPercent())
+                    .append("rMultiple", trade.getRMultiple())
+                    .append("isWin", trade.getPnl() > 0)
+                    .append("target1Hit", root.path("target1Hit").asBoolean(false))
+                    .append("target2Hit", root.path("target2Hit").asBoolean(false))
+                    .append("target3Hit", root.path("target3Hit").asBoolean(false))
+                    .append("stopHit", root.path("stopHit").asBoolean(false))
+                    .append("exchange", root.path("exchange").asText("N"))
+                    .append("durationMinutes", trade.getDurationMinutes());
+
+            // Store times as Date objects for MongoDB queries
+            if (trade.getEntryTime() != null) {
+                doc.append("entryTime", Date.from(trade.getEntryTime().atZone(ZoneId.of("Asia/Kolkata")).toInstant()));
+            }
+            if (trade.getExitTime() != null) {
+                doc.append("exitTime", Date.from(trade.getExitTime().atZone(ZoneId.of("Asia/Kolkata")).toInstant()));
+            }
+
+            mongoTemplate.getCollection("trade_outcomes").insertOne(doc);
+            log.info("trade_outcome_persisted scrip={} strategy={} pnl={} exit={}",
+                    trade.getScripCode(), signalSource, trade.getPnl(), trade.getExitReason());
+
+        } catch (Exception e) {
+            log.error("Failed to persist trade outcome: {}", e.getMessage(), e);
+        }
     }
 
     private LocalDateTime parseDateTime(JsonNode node) {

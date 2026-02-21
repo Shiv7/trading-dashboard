@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.kafka.FUDKIIConsumer;
 import com.kotsin.dashboard.kafka.FUKAAConsumer;
+import com.kotsin.dashboard.kafka.MereConsumer;
+import com.kotsin.dashboard.kafka.MicroAlphaConsumer;
 import com.kotsin.dashboard.kafka.PivotConfluenceConsumer;
 import com.kotsin.dashboard.kafka.StrategyOpportunityConsumer;
 import com.kotsin.dashboard.kafka.StrategyStateConsumer;
@@ -44,7 +46,9 @@ public class StrategyStateController {
     private final StrategyOpportunityConsumer opportunityConsumer;
     private final FUDKIIConsumer fudkiiConsumer;
     private final FUKAAConsumer fukaaConsumer;
+    private final MereConsumer mereConsumer;
     private final PivotConfluenceConsumer pivotConfluenceConsumer;
+    private final MicroAlphaConsumer microAlphaConsumer;
     private final TradingSignalService tradingSignalService;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
@@ -189,6 +193,7 @@ public class StrategyStateController {
         stats.put("totalOpportunities", opportunityConsumer.getOpportunityCount());
         stats.put("highScoreOpportunities", opportunityConsumer.getHighScoreOpportunities(70).size());
         stats.put("fukaaActive", fukaaConsumer.getActiveTriggerCount());
+        stats.put("microAlphaActive", microAlphaConsumer.getActiveTriggerCount());
 
         log.debug("[API] GET /strategy-state/stats | {}", stats);
         return ResponseEntity.ok(stats);
@@ -406,6 +411,128 @@ public class StrategyStateController {
         ));
     }
 
+    // ==================== MERE STRATEGY ENDPOINTS (Mean Reversion) ====================
+
+    @GetMapping("/mere/active")
+    public ResponseEntity<Map<String, Map<String, Object>>> getActiveMereTriggers() {
+        Map<String, Map<String, Object>> triggers = mereConsumer.getActiveTriggers();
+        log.debug("[API] GET /strategy-state/mere/active | {} active triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/mere/active/list")
+    public ResponseEntity<List<Map<String, Object>>> getActiveMereList() {
+        Map<String, Map<String, Object>> triggers = mereConsumer.getActiveTriggers();
+        List<Map<String, Object>> list = new ArrayList<>(triggers.values());
+        log.debug("[API] GET /strategy-state/mere/active/list | {} active triggers", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    @GetMapping("/mere/{scripCode}")
+    public ResponseEntity<Map<String, Object>> getMereSignal(@PathVariable String scripCode) {
+        Map<String, Object> signal = mereConsumer.getLatestMERE(scripCode);
+        if (signal == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(signal);
+    }
+
+    @GetMapping("/mere/all/list")
+    public ResponseEntity<List<Map<String, Object>>> getAllMereSignals() {
+        Map<String, Map<String, Object>> all = mereConsumer.getAllLatestSignals();
+        List<Map<String, Object>> list = new ArrayList<>(all.values());
+        log.debug("[API] GET /strategy-state/mere/all/list | {} signals", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    @GetMapping("/mere/history/list")
+    public ResponseEntity<List<Map<String, Object>>> getMereHistory() {
+        List<Map<String, Object>> history = mereConsumer.getTodaySignalHistory();
+        log.debug("[API] GET /strategy-state/mere/history/list | {} signals", history.size());
+        return ResponseEntity.ok(history);
+    }
+
+    @GetMapping("/mere/count")
+    public ResponseEntity<Map<String, Object>> getMereCount() {
+        int count = mereConsumer.getActiveTriggerCount();
+        return ResponseEntity.ok(Map.of(
+                "activeTriggers", count,
+                "historyCount", mereConsumer.getTodaySignalHistoryCount(),
+                "timestamp", System.currentTimeMillis()
+        ));
+    }
+
+    // ==================== MICROALPHA STRATEGY ENDPOINTS ====================
+
+    /**
+     * Get all active MicroAlpha triggers.
+     */
+    @GetMapping("/microalpha/active")
+    public ResponseEntity<Map<String, Map<String, Object>>> getActiveMicroAlphaTriggers() {
+        Map<String, Map<String, Object>> triggers = microAlphaConsumer.getActiveTriggers();
+        log.debug("[API] GET /strategy-state/microalpha/active | {} active triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    /**
+     * Get active MicroAlpha triggers as a list.
+     */
+    @GetMapping("/microalpha/active/list")
+    public ResponseEntity<List<Map<String, Object>>> getActiveMicroAlphaTriggersList() {
+        Map<String, Map<String, Object>> triggers = microAlphaConsumer.getActiveTriggers();
+        List<Map<String, Object>> list = new ArrayList<>(triggers.values());
+        log.debug("[API] GET /strategy-state/microalpha/active/list | {} active triggers", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    /**
+     * Get MicroAlpha signal for a specific instrument.
+     */
+    @GetMapping("/microalpha/{scripCode}")
+    public ResponseEntity<Map<String, Object>> getMicroAlphaSignal(@PathVariable String scripCode) {
+        Map<String, Object> signal = microAlphaConsumer.getLatestSignal(scripCode);
+        if (signal == null) {
+            return ResponseEntity.notFound().build();
+        }
+        log.debug("[API] GET /strategy-state/microalpha/{} | direction={}", scripCode, signal.get("direction"));
+        return ResponseEntity.ok(signal);
+    }
+
+    /**
+     * Get ALL MicroAlpha signals (per-instrument latest, no TTL).
+     */
+    @GetMapping("/microalpha/all/list")
+    public ResponseEntity<List<Map<String, Object>>> getAllMicroAlphaSignals() {
+        Map<String, Map<String, Object>> all = microAlphaConsumer.getAllLatestSignals();
+        List<Map<String, Object>> list = new ArrayList<>(all.values());
+        log.debug("[API] GET /strategy-state/microalpha/all/list | {} signals", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    /**
+     * Get today's MicroAlpha signal history — ALL triggered signals.
+     * Persisted in Redis, survives restart.
+     */
+    @GetMapping("/microalpha/history/list")
+    public ResponseEntity<List<Map<String, Object>>> getMicroAlphaSignalHistory() {
+        List<Map<String, Object>> history = microAlphaConsumer.getTodaySignalHistory();
+        log.debug("[API] GET /strategy-state/microalpha/history/list | {} signals", history.size());
+        return ResponseEntity.ok(history);
+    }
+
+    /**
+     * Get MicroAlpha trigger count.
+     */
+    @GetMapping("/microalpha/count")
+    public ResponseEntity<Map<String, Object>> getMicroAlphaCount() {
+        int count = microAlphaConsumer.getActiveTriggerCount();
+        return ResponseEntity.ok(Map.of(
+                "activeTriggers", count,
+                "historyCount", microAlphaConsumer.getTodaySignalHistoryCount(),
+                "timestamp", System.currentTimeMillis()
+        ));
+    }
+
     // ==================== COMBINED SIGNAL HISTORY (FUDKII + FUKAA) ====================
 
     /**
@@ -423,6 +550,9 @@ public class StrategyStateController {
         // Add all FUKAA history
         combined.addAll(fukaaConsumer.getTodaySignalHistory());
 
+        // Add all MERE history
+        combined.addAll(mereConsumer.getTodaySignalHistory());
+
         // Sort by trigger time (newest first)
         combined.sort((a, b) -> {
             long epochA = a.containsKey("triggerTimeEpoch")
@@ -434,9 +564,9 @@ public class StrategyStateController {
             return Long.compare(epochB, epochA); // newest first
         });
 
-        log.debug("[API] GET /strategy-state/signals/combined/list | {} total (fudkii={}, fukaa={})",
+        log.debug("[API] GET /strategy-state/signals/combined/list | {} total (fudkii={}, fukaa={}, mere={})",
                 combined.size(), fudkiiConsumer.getTodaySignalHistoryCount(),
-                fukaaConsumer.getTodaySignalHistoryCount());
+                fukaaConsumer.getTodaySignalHistoryCount(), mereConsumer.getTodaySignalHistoryCount());
         return ResponseEntity.ok(combined);
     }
 
@@ -467,6 +597,16 @@ public class StrategyStateController {
         result.put("pivotSignals", new ArrayList<>(pivotTriggers.values()));
         result.put("pivotCount", pivotTriggers.size());
 
+        // MicroAlpha signals (Strategy 4: Microstructure alpha engine)
+        Map<String, Map<String, Object>> microAlphaTriggers = microAlphaConsumer.getActiveTriggers();
+        result.put("microAlphaSignals", new ArrayList<>(microAlphaTriggers.values()));
+        result.put("microAlphaCount", microAlphaTriggers.size());
+
+        // MERE signals (Strategy 5: Mean Reversion)
+        Map<String, Map<String, Object>> mereTriggers = mereConsumer.getActiveTriggers();
+        result.put("mereSignals", new ArrayList<>(mereTriggers.values()));
+        result.put("mereCount", mereTriggers.size());
+
         // Trading signals (includes both FUDKII and PIVOT triggered)
         var pendingSignals = tradingSignalService.getPendingSignals();
         result.put("tradingSignals", pendingSignals);
@@ -478,7 +618,7 @@ public class StrategyStateController {
         result.put("opportunityCount", opportunities.size());
 
         // Stats
-        result.put("totalActive", fudkiiIgnitions.size() + fukaaTriggers.size() + pivotTriggers.size() + pendingSignals.size());
+        result.put("totalActive", fudkiiIgnitions.size() + fukaaTriggers.size() + pivotTriggers.size() + microAlphaTriggers.size() + mereTriggers.size() + pendingSignals.size());
         result.put("timestamp", System.currentTimeMillis());
 
         log.debug("[API] GET /strategy-state/signals/active | fudkii={}, fukaa={}, pivot={}, trading={}, opportunities={}",
@@ -537,6 +677,7 @@ public class StrategyStateController {
         stateCounts.put("FUDKII_ACTIVE", fudkiiConsumer.getActiveIgnitionCount());
         stateCounts.put("FUKAA_ACTIVE", fukaaConsumer.getActiveTriggerCount());
         stateCounts.put("PIVOT_ACTIVE", pivotConfluenceConsumer.getActiveTriggerCount());
+        stateCounts.put("MICROALPHA_ACTIVE", microAlphaConsumer.getActiveTriggerCount());
         stateCounts.put("TRADING_SIGNALS", tradingSignalService.getPendingSignals().size());
         stateCounts.put("OPPORTUNITIES", opportunityConsumer.getOpportunityCount());
 

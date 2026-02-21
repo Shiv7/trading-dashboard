@@ -1,9 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Check, Zap, Target, ShieldCheck, ShieldAlert
+  Check, Zap, Target, ShieldCheck, ShieldAlert, Loader2, AlertTriangle
 } from 'lucide-react';
-import { fetchJson } from '../../services/api';
+import { fetchJson, strategyWalletsApi, strategyTradesApi } from '../../services/api';
+import { useNavigate } from 'react-router-dom';
+import type { StrategyTradeRequest } from '../../types/orders';
+import { getOTMStrike, mapToOptionLevels, computeLotSizing } from '../../utils/tradingUtils';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -55,6 +58,32 @@ interface PivotSignal {
   mlPositionSizeMultiplier?: number;
   mlVpinToxicity?: number;
   mlOrderFlowImbalance?: number;
+  // Option enrichment from backend
+  optionAvailable?: boolean;
+  optionScripCode?: string;
+  optionSymbol?: string;
+  optionStrike?: number;
+  optionType?: string;
+  optionExpiry?: string;
+  optionLtp?: number;
+  optionLotSize?: number;
+  optionMultiplier?: number;
+  optionExchange?: string;
+  optionExchangeType?: string;
+  // Futures fallback (MCX instruments without options)
+  futuresAvailable?: boolean;
+  futuresScripCode?: string;
+  futuresSymbol?: string;
+  futuresLtp?: number;
+  futuresLotSize?: number;
+  futuresMultiplier?: number;
+  futuresExpiry?: string;
+  futuresExchange?: string;
+  futuresExchangeType?: string;
+  futuresVolume?: number;
+  // Symbol and company
+  symbol?: string;
+  companyName?: string;
 }
 
 interface TradePlan {
@@ -80,6 +109,9 @@ interface ExecutionState {
   lots: number;
   filledPrice: number;
   riskPercent: number;
+  status: 'sending' | 'filled' | 'error';
+  errorMessage?: string;
+  orderId?: string;
 }
 
 type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume';
@@ -119,24 +151,7 @@ function fmt(v: number): string {
   return Number(v.toFixed(2)).toString();
 }
 
-function getStrikeInterval(price: number): number {
-  if (price > 40000) return 500;
-  if (price > 20000) return 200;
-  if (price > 10000) return 100;
-  if (price > 5000) return 50;
-  if (price > 2000) return 20;
-  if (price > 1000) return 10;
-  if (price > 500) return 5;
-  if (price > 100) return 2.5;
-  return 1;
-}
-
-function getOTMStrike(price: number, direction: 'BULLISH' | 'BEARISH'): { strike: number; interval: number } {
-  const interval = getStrikeInterval(price);
-  const atm = Math.round(price / interval) * interval;
-  const strike = direction === 'BULLISH' ? atm + interval : atm - interval;
-  return { strike, interval };
-}
+// getStrikeInterval, getOTMStrike: imported from ../../utils/tradingUtils
 
 /** Format trigger timestamp in IST */
 function formatTriggerTime(sig: PivotSignal): string {
@@ -157,6 +172,8 @@ function formatTriggerTime(sig: PivotSignal): string {
 function estimateOptionPremium(plan: TradePlan): number {
   return Math.round(Math.max(plan.atr * 3, plan.entry * 0.008) * 10) / 10;
 }
+
+// approximateDelta, mapToOptionLevels: imported from ../../utils/tradingUtils
 
 /** Extract trade plan from Pivot signal (has real SL/target from backend) */
 function extractTradePlan(sig: PivotSignal): TradePlan {
@@ -268,6 +285,8 @@ function computeStrength(sig: PivotSignal, plan: TradePlan): number {
   const ivNorm = Math.max(0, Math.min(25, ((iv + 10) / 25) * 25));
   return Math.min(100, Math.round(confNorm + volNorm + rrNorm + ivNorm));
 }
+
+// computeLotSizing: imported from ../../utils/tradingUtils
 
 function getEpoch(sig: PivotSignal): number {
   if (sig.timestamp) return sig.timestamp;
@@ -450,25 +469,50 @@ const ExecutionOverlay: React.FC<{
 }> = ({ state, onClose, onViewPosition }) => {
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => {
-    if (state.visible) { timerRef.current = setTimeout(onClose, 3000); }
+    if (state.visible && state.status === 'filled') {
+      timerRef.current = setTimeout(onClose, 3000);
+    }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [state.visible, onClose]);
+  }, [state.visible, state.status, onClose]);
   if (!state.visible) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
       <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-[340px] shadow-2xl animate-scaleIn text-center">
-        <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-4">
-          <Check className="w-6 h-6 text-green-400" />
-        </div>
-        <h3 className="text-white font-semibold text-lg mb-1">Order Sent</h3>
-        <p className="text-slate-400 text-sm mb-4">{state.symbol} {state.strike} {state.optionType}</p>
-        <div className="grid grid-cols-3 gap-3 mb-5 text-center">
-          <div><div className="text-[11px] text-slate-500 mb-0.5">Filled</div><div className="font-mono text-white text-sm">{state.filledPrice.toFixed(2)}</div></div>
-          <div><div className="text-[11px] text-slate-500 mb-0.5">Lots</div><div className="font-mono text-white text-sm">{state.lots}</div></div>
-          <div><div className="text-[11px] text-slate-500 mb-0.5">Risk</div><div className="font-mono text-amber-400 text-sm">{state.riskPercent}%</div></div>
-        </div>
-        <button onClick={onViewPosition} className="w-full h-11 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors mb-2">View Position</button>
-        <button onClick={onClose} className="text-slate-500 text-xs hover:text-slate-300 transition-colors">Close</button>
+        {state.status === 'sending' && (
+          <>
+            <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center mx-auto mb-4">
+              <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
+            </div>
+            <h3 className="text-white font-semibold text-lg mb-1">Placing Order...</h3>
+            <p className="text-slate-400 text-sm mb-4">{state.symbol} {state.strike} {state.optionType}</p>
+          </>
+        )}
+        {state.status === 'error' && (
+          <>
+            <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
+              <AlertTriangle className="w-6 h-6 text-red-400" />
+            </div>
+            <h3 className="text-white font-semibold text-lg mb-1">Order Failed</h3>
+            <p className="text-red-400 text-sm mb-4">{state.errorMessage || 'Could not place order. Try again.'}</p>
+            <button onClick={onClose} className="w-full h-11 rounded-lg bg-slate-700 text-white font-semibold text-sm hover:bg-slate-600 transition-colors">Close</button>
+          </>
+        )}
+        {state.status === 'filled' && (
+          <>
+            <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-4">
+              <Check className="w-6 h-6 text-green-400" />
+            </div>
+            <h3 className="text-white font-semibold text-lg mb-1">Order Sent</h3>
+            <p className="text-slate-400 text-sm mb-4">{state.symbol} {state.strike} {state.optionType}</p>
+            <div className="grid grid-cols-3 gap-3 mb-5 text-center">
+              <div><div className="text-[11px] text-slate-500 mb-0.5">Filled</div><div className="font-mono text-white text-sm">{state.filledPrice.toFixed(2)}</div></div>
+              <div><div className="text-[11px] text-slate-500 mb-0.5">Lots</div><div className="font-mono text-white text-sm">{state.lots}</div></div>
+              <div><div className="text-[11px] text-slate-500 mb-0.5">Risk</div><div className="font-mono text-amber-400 text-sm">{state.riskPercent}%</div></div>
+            </div>
+            <button onClick={onViewPosition} className="w-full h-11 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors mb-2">View Position</button>
+            <button onClick={onClose} className="text-slate-500 text-xs hover:text-slate-300 transition-colors">Close</button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -584,8 +628,9 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 const PivotCard: React.FC<{
   sig: PivotSignal;
   plan: TradePlan;
-  onBuy: (sig: PivotSignal, plan: TradePlan) => void;
-}> = ({ sig, plan, onBuy }) => {
+  walletCapital: number;
+  onBuy: (sig: PivotSignal, plan: TradePlan, lots: number) => void;
+}> = ({ sig, plan, walletCapital, onBuy }) => {
   const [pressing, setPressing] = useState(false);
   const isLong = sig.direction === 'BULLISH';
   const symbol = getSymbol(sig);
@@ -600,7 +645,44 @@ const PivotCard: React.FC<{
     : 'border-red-500/20 hover:border-red-500/40';
 
   const confidence = computeConfidence(sig);
-  const premium = estimateOptionPremium(plan);
+
+  // Option: prefer real data from backend; check futures fallback for MCX
+  const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
+  const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+  const noDerivatives = sig.optionAvailable === false && !hasFutures;
+
+  // Determine instrument mode: OPTION, FUTURES, or NONE
+  let instrumentMode: 'OPTION' | 'FUTURES' | 'NONE' = 'NONE';
+  let premium = 0;
+  let displayInstrumentName = '';
+  let lotSize = 1;
+  let multiplier = 1;
+
+  if (hasRealOption) {
+    instrumentMode = 'OPTION';
+    premium = sig.optionLtp!;
+    const displayStrike = sig.optionStrike ?? plan.strike;
+    const displayOptionType = sig.optionType ?? plan.optionType;
+    displayInstrumentName = `${symbol} ${displayStrike} ${displayOptionType}`;
+    lotSize = sig.optionLotSize ?? 1;
+    multiplier = sig.optionMultiplier ?? 1;
+  } else if (hasFutures) {
+    instrumentMode = 'FUTURES';
+    premium = sig.futuresLtp!;
+    displayInstrumentName = `${sig.futuresSymbol ?? symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+    lotSize = sig.futuresLotSize ?? 1;
+    multiplier = sig.futuresMultiplier ?? 1;
+  } else if (!noDerivatives) {
+    // Legacy fallback (old signals without optionAvailable field)
+    instrumentMode = 'OPTION';
+    premium = estimateOptionPremium(plan);
+    displayInstrumentName = `${symbol} ${plan.strike} ${plan.optionType}`;
+    lotSize = 1;
+  }
+
+  const sizing = (instrumentMode === 'NONE')
+    ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
+    : computeLotSizing(confidence, walletCapital, premium, lotSize, multiplier);
 
   // Metrics
   const volMultiplier = computeVolumeSurge(sig).toFixed(1);
@@ -894,19 +976,43 @@ const PivotCard: React.FC<{
           <MetricsChip label="OI" value={`${oiChange}%`} />
         </div>
 
+        {/* ── INSUFFICIENT FUNDS LABEL ── */}
+        {sizing.insufficientFunds && !sizing.disabled && (
+          <div className="mt-3 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30">
+            <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
+            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+          </div>
+        )}
+
         {/* ── BUY BUTTON ── */}
-        <button
-          onClick={() => onBuy(sig, plan)}
-          onMouseDown={() => setPressing(true)}
-          onMouseUp={() => setPressing(false)}
-          onMouseLeave={() => setPressing(false)}
-          className={`w-full h-12 rounded-xl mt-4 text-white font-semibold text-base
-            transition-all duration-100 select-none
-            ${buyBg} ${buyHover} ${buyBgActive}
-            ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
-        >
-          BUY {symbol} {plan.strike}{plan.optionType} @ &#8377;{premium}/-
-        </button>
+        {instrumentMode === 'NONE' ? (
+          <button
+            disabled
+            className="w-full h-12 rounded-xl mt-4 text-slate-500 font-semibold text-sm bg-slate-700/30 border border-slate-600/30 cursor-not-allowed"
+          >
+            No Derivatives Available for {symbol || sig.scripCode}
+          </button>
+        ) : sizing.disabled ? (
+          <button
+            disabled
+            className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
+          >
+            Confidence {confidence}% &lt; 60% — No Trade
+          </button>
+        ) : (
+          <button
+            onClick={() => onBuy(sig, plan, sizing.lots)}
+            onMouseDown={() => setPressing(true)}
+            onMouseUp={() => setPressing(false)}
+            onMouseLeave={() => setPressing(false)}
+            className={`w-full h-12 rounded-xl mt-4 text-white font-semibold text-sm
+              transition-all duration-100 select-none
+              ${buyBg} ${buyHover} ${buyBgActive}
+              ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
+          >
+            BUY {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -918,6 +1024,7 @@ const PivotCard: React.FC<{
 
 export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = true }) => {
   const [signals, setSignals] = useState<PivotSignal[]>([]);
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [sortField, setSortField] = useState<SortField>('strength');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
@@ -927,7 +1034,9 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
   const [execution, setExecution] = useState<ExecutionState>({
     visible: false, symbol: '', optionName: '', strike: 0,
     optionType: 'CE', lots: 3, filledPrice: 0, riskPercent: 0,
+    status: 'sending',
   });
+  const [walletCapital, setWalletCapital] = useState<number>(100000);
 
   const fetchPivot = useCallback(async () => {
     try {
@@ -962,6 +1071,19 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
+  }, []);
+
+  // Fetch wallet capital for lot sizing
+  useEffect(() => {
+    const fetchCapital = async () => {
+      try {
+        const data = await strategyWalletsApi.getCapital('PIVOT_CONFLUENCE');
+        if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
+      } catch { /* ignore */ }
+    };
+    fetchCapital();
+    const interval = setInterval(fetchCapital, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   /* ── FILTER ── */
@@ -1001,19 +1123,133 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
   const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Strength';
 
   /* ── BUY HANDLER ── */
-  const handleBuy = useCallback((sig: PivotSignal, plan: TradePlan) => {
-    const symbol = getSymbol(sig);
-    const est = estimateOptionPremium(plan);
+  const handleBuy = useCallback(async (sig: PivotSignal, plan: TradePlan, lots: number) => {
+    const symbol = sig.symbol || sig.companyName || getSymbol(sig);
+    const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
+    const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+
+    // Determine instrument mode
+    let instrumentMode: 'OPTION' | 'FUTURES' | 'NONE' = 'NONE';
+    let premium = 0;
+    let displayName = '';
+    let lotSize = 1;
+    let multiplier = 1;
+    let tradingScripCode = sig.scripCode;
+    let displayStrike = plan.strike;
+    let displayOptionType: 'CE' | 'PE' = plan.optionType;
+
+    if (hasRealOption) {
+      instrumentMode = 'OPTION';
+      premium = sig.optionLtp!;
+      displayStrike = sig.optionStrike ?? plan.strike;
+      displayOptionType = (sig.optionType ?? plan.optionType) as 'CE' | 'PE';
+      displayName = `${symbol} ${displayStrike} ${displayOptionType}`;
+      lotSize = sig.optionLotSize ?? 1;
+      multiplier = sig.optionMultiplier ?? 1;
+      tradingScripCode = sig.optionScripCode ?? sig.scripCode;
+    } else if (hasFutures) {
+      instrumentMode = 'FUTURES';
+      premium = sig.futuresLtp!;
+      displayName = `${sig.futuresSymbol ?? symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      lotSize = sig.futuresLotSize ?? 1;
+      multiplier = sig.futuresMultiplier ?? 1;
+      tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
+    } else {
+      // Legacy fallback
+      instrumentMode = 'OPTION';
+      premium = estimateOptionPremium(plan);
+      displayName = `${symbol} ${plan.strike} ${plan.optionType}`;
+      lotSize = 1;
+    }
+
     setExecution({
       visible: true,
       symbol,
-      optionName: `${symbol} ${plan.strike} ${plan.optionType}`,
-      strike: plan.strike,
-      optionType: plan.optionType,
-      lots: 3,
-      filledPrice: est,
+      optionName: displayName,
+      strike: displayStrike,
+      optionType: displayOptionType,
+      lots,
+      filledPrice: premium,
       riskPercent: 0.8,
+      status: 'sending',
     });
+
+    try {
+      // Compute delta-mapped SL/targets for options; for futures use equity levels directly (delta=1.0)
+      let trSl = plan.sl;
+      let trT1 = plan.t1;
+      let trT2 = plan.t2;
+      let trT3 = plan.t3 ?? 0;
+      let trT4 = plan.t4 ?? 0;
+      let trDelta = 1.0;
+
+      if (instrumentMode === 'OPTION' && hasRealOption && sig.optionStrike) {
+        const mapped = mapToOptionLevels(
+          premium,
+          sig.entryPrice,
+          plan.sl,
+          [plan.t1, plan.t2, plan.t3, plan.t4],
+          sig.optionStrike,
+          displayOptionType
+        );
+        trSl = mapped.sl;
+        trT1 = mapped.targets[0] ?? 0;
+        trT2 = mapped.targets[1] ?? 0;
+        trT3 = mapped.targets[2] ?? 0;
+        trT4 = mapped.targets[3] ?? 0;
+        trDelta = mapped.delta;
+      }
+
+      const req: StrategyTradeRequest = {
+        scripCode: tradingScripCode,
+        instrumentSymbol: displayName,
+        instrumentType: instrumentMode === 'FUTURES' ? 'FUTURES' : 'OPTION',
+        underlyingScripCode: sig.scripCode,
+        underlyingSymbol: symbol,
+        side: 'BUY',
+        quantity: lots * lotSize,
+        lots,
+        lotSize,
+        multiplier,
+        entryPrice: premium,
+        sl: trSl,
+        t1: trT1,
+        t2: trT2,
+        t3: trT3,
+        t4: trT4,
+        equitySpot: sig.entryPrice,
+        equitySl: plan.sl,
+        equityT1: plan.t1,
+        equityT2: plan.t2,
+        equityT3: plan.t3 ?? 0,
+        equityT4: plan.t4 ?? 0,
+        delta: trDelta,
+        optionType: instrumentMode === 'OPTION' ? displayOptionType : undefined,
+        strike: displayStrike,
+        strategy: 'PIVOT_CONFLUENCE',
+        exchange: sig.optionExchange ?? sig.futuresExchange ?? getExchange(sig),
+        direction: sig.direction,
+        confidence: computeConfidence(sig),
+      };
+
+      const result = await strategyTradesApi.create(req);
+
+      setExecution(prev => ({
+        ...prev,
+        status: 'filled',
+        filledPrice: result.entryPrice ?? premium,
+        orderId: result.tradeId,
+        riskPercent: plan.sl && sig.entryPrice
+          ? Math.round(Math.abs(sig.entryPrice - plan.sl) / sig.entryPrice * 100 * 10) / 10
+          : 0.8,
+      }));
+    } catch (err) {
+      setExecution(prev => ({
+        ...prev,
+        status: 'error',
+        errorMessage: err instanceof Error ? err.message : 'Order failed',
+      }));
+    }
   }, []);
 
   const resetFilters = useCallback(() => {
@@ -1097,6 +1333,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
                 sig={sig}
                 plan={plan}
+                walletCapital={walletCapital}
                 onBuy={handleBuy}
               />
             ))}
@@ -1109,7 +1346,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
         onClose={() => setExecution(s => ({ ...s, visible: false }))}
         onViewPosition={() => {
           setExecution(s => ({ ...s, visible: false }));
-          window.location.hash = '#positions';
+          navigate('/wallets');
         }}
       />
     </div>

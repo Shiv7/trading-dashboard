@@ -571,7 +571,7 @@ export default function StockDetailPage() {
           <EnhancedQuickTradePanel
             score={displayScore}
             onExecute={handleTradeExecute}
-            onWatchlist={() => console.log('Add to watchlist:', scripCode)}
+            onWatchlist={() => { /* TODO: implement watchlist */ }}
           />
 
           {/* Regime Info */}

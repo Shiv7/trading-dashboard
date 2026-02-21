@@ -9,3 +9,5 @@ export { StrategyTabContent } from './StrategyTabContent';
 export { FudkiiTabContent } from './FudkiiTabContent';
 export { FukaaTabContent } from './FukaaTabContent';
 export { PivotTabContent } from './PivotTabContent';
+export { MicroAlphaTabContent } from './MicroAlphaTabContent';
+export { MereTabContent } from './MereTabContent';

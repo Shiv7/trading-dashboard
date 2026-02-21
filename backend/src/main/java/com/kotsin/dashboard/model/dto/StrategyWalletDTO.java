@@ -44,6 +44,8 @@ public class StrategyWalletDTO {
         private boolean target3Hit;
         private boolean target4Hit;
         private boolean stopHit;
+        private int quantity;
+        private double capitalEmployed;
         private double pnl;
         private double pnlPercent;
         private LocalDateTime entryTime;

@@ -93,7 +93,98 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
       <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
         {journal.length > 0 ? (
           <>
-            <div className="overflow-x-auto">
+            {/* Mobile Card Layout */}
+            <div className="md:hidden divide-y divide-slate-700/50">
+              {journal.map(trade => (
+                <React.Fragment key={trade.id}>
+                  <div
+                    onClick={() => setExpandedTrade(expandedTrade === trade.id ? null : trade.id)}
+                    className="px-3 py-3 active:bg-slate-700/20 transition-colors cursor-pointer"
+                  >
+                    {/* Row 1: Stock + P&L */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm text-white font-medium truncate">{trade.companyName || trade.scripCode}</span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium shrink-0 ${
+                            trade.side === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                          }`}>{trade.side}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {trade.exitTime ? new Date(trade.exitTime).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '-'}
+                          {trade.exitReason && <span className="ml-2 text-slate-400">{trade.exitReason}</span>}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className={`text-sm font-bold font-mono tabular-nums ${(trade.pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {formatCurrency(trade.pnl ?? 0)}
+                        </div>
+                        <div className={`text-[10px] font-mono ${(trade.rMultiple || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {(trade.rMultiple ?? 0).toFixed(1)}R
+                        </div>
+                      </div>
+                    </div>
+                    {/* Row 2: Entry/Exit prices */}
+                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-400">
+                      <span>Entry: <span className="text-slate-300 font-mono">{trade.entryPrice?.toFixed(2)}</span></span>
+                      <span>Exit: <span className="text-slate-300 font-mono">{trade.exitPrice?.toFixed(2)}</span></span>
+                    </div>
+                  </div>
+                  {expandedTrade === trade.id && (
+                    <div className="px-3 py-3 bg-slate-900/50 border-b border-slate-700/50">
+                      <div className="grid grid-cols-2 gap-3 mb-3 text-xs">
+                        <div><span className="text-slate-500">Duration:</span> <span className="text-white">{trade.durationMinutes}m</span></div>
+                        <div>
+                          <span className="text-slate-500">Strategy:</span>{' '}
+                          <span className={`font-medium ${
+                            trade.strategy === 'FUDKII' ? 'text-orange-400'
+                            : trade.strategy === 'FUKAA' ? 'text-amber-400'
+                            : trade.strategy === 'PIVOT' ? 'text-blue-400'
+                            : 'text-white'
+                          }`}>{trade.strategy}</span>
+                        </div>
+                        <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
+                        <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>
+                      </div>
+                      {trade.tags?.length > 0 && (
+                        <div className="flex gap-1.5 flex-wrap mb-2">
+                          {trade.tags.map(tag => (
+                            <span key={tag} className="px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded text-[10px]">{tag}</span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-2">
+                        <label className="text-[10px] text-slate-500 block mb-1">Notes</label>
+                        {editingNotes === trade.id ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={notesText}
+                              onChange={e => setNotesText(e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-amber-500 resize-none"
+                              rows={2}
+                            />
+                            <div className="flex gap-2">
+                              <button onClick={() => handleSaveNotes(trade.id)} className="px-3 py-1.5 bg-amber-500 text-slate-900 rounded text-xs font-medium flex-1">Save</button>
+                              <button onClick={() => setEditingNotes(null)} className="px-3 py-1.5 bg-slate-700 text-slate-300 rounded text-xs flex-1">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p
+                            onClick={(e) => { e.stopPropagation(); setEditingNotes(trade.id); setNotesText(trade.notes || '') }}
+                            className="text-xs text-slate-400 cursor-pointer hover:text-white transition-colors min-h-[24px]"
+                          >
+                            {trade.notes || 'Tap to add notes...'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+
+            {/* Desktop Table Layout */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-slate-700 text-xs text-slate-400 uppercase tracking-wider">
@@ -191,26 +282,26 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
             </div>
 
             {/* Pagination */}
-            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700">
+            <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-t border-slate-700">
               <button
                 onClick={() => setPage(Math.max(0, page - 1))}
                 disabled={page === 0}
-                className="px-3 py-1.5 rounded text-sm font-medium bg-slate-700 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded text-xs sm:text-sm font-medium bg-slate-700 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                Previous
+                Prev
               </button>
-              <span className="text-xs text-slate-500">Page {page + 1}</span>
+              <span className="text-[10px] sm:text-xs text-slate-500">Page {page + 1}</span>
               <button
                 onClick={() => setPage(page + 1)}
                 disabled={journal.length < 20}
-                className="px-3 py-1.5 rounded text-sm font-medium bg-slate-700 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded text-xs sm:text-sm font-medium bg-slate-700 text-slate-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Next
               </button>
             </div>
           </>
         ) : (
-          <div className="text-center text-slate-500 py-12">No trades recorded yet</div>
+          <div className="text-center text-slate-500 py-12 text-sm">No trades recorded yet</div>
         )}
       </div>
     </div>

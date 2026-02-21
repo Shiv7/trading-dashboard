@@ -63,61 +63,61 @@ export const PositionedCard: React.FC<PositionedCardProps> = ({ snapshot, setup,
 
       {/* Header */}
       <div className="p-3 pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/20 text-blue-400 border border-blue-500/40">
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
+            <div className="relative shrink-0">
+              <span className="px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold bg-blue-500/20 text-blue-400 border border-blue-500/40">
                 POSITIONED
               </span>
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-blue-400 rounded-full animate-ping" />
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-blue-400 rounded-full" />
             </div>
-            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${config.accentBg} ${config.accentText}`}>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${config.accentBg} ${config.accentText}`}>
               {config.label}
             </span>
             {setup.qualityTier && (
-              <span className={`px-2 py-0.5 rounded text-xs font-bold ${getQualityTierColor(setup.qualityTier)}`}>
+              <span className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-bold shrink-0 ${getQualityTierColor(setup.qualityTier)}`}>
                 {setup.qualityTier === 'A_PLUS' ? 'A+' : setup.qualityTier}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${getDirectionBgColor(pos?.direction ?? setup.direction)} ${getDirectionColor(pos?.direction ?? setup.direction)}`}>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium ${getDirectionBgColor(pos?.direction ?? setup.direction)} ${getDirectionColor(pos?.direction ?? setup.direction)}`}>
               {isLong ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
               {pos?.direction ?? setup.direction}
             </span>
           </div>
         </div>
-        <div className="flex items-center justify-between mt-1">
-          <span className="text-sm font-semibold text-white">{snapshot.companyName}</span>
-          <span className="flex items-center gap-1 text-[10px] text-gray-500">
+        <div className="flex items-center justify-between mt-1 gap-2">
+          <span className="text-sm font-semibold text-white truncate">{snapshot.companyName}</span>
+          <span className="flex items-center gap-1 text-[10px] text-gray-500 shrink-0">
             <Timer className="w-3 h-3" />
-            Holding {formatDuration(holdingMs)}
+            <span className="hidden sm:inline">Holding </span>{formatDuration(holdingMs)}
           </span>
         </div>
       </div>
 
       {/* P&L Section — THE dominant element */}
-      <div className="bg-slate-900/60 px-4 py-3">
-        {/* Price Grid */}
-        <div className="grid grid-cols-4 gap-3 text-center">
+      <div className="bg-slate-900/60 px-3 sm:px-4 py-2.5 sm:py-3">
+        {/* Price Grid — 2x2 on mobile, 4-col on sm+ */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 text-center">
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">Entry</div>
-            <div className="font-mono text-base font-bold text-white">{entry.toFixed(2)}</div>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">Entry</div>
+            <div className="font-mono text-sm sm:text-base font-bold text-white">{entry.toFixed(2)}</div>
           </div>
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">SL</div>
-            <div className="font-mono text-base font-bold text-red-400">{sl.toFixed(2)}</div>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">SL</div>
+            <div className="font-mono text-sm sm:text-base font-bold text-red-400">{sl.toFixed(2)}</div>
           </div>
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">Current</div>
-            <div className={`font-mono text-base font-bold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">Current</div>
+            <div className={`font-mono text-sm sm:text-base font-bold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
               {current.toFixed(2)}
             </div>
           </div>
           <div>
-            <div className="text-gray-500 text-[10px] mb-1">Target</div>
-            <div className="font-mono text-base font-bold text-blue-400">{target.toFixed(2)}</div>
+            <div className="text-gray-500 text-[10px] mb-0.5 sm:mb-1">Target</div>
+            <div className="font-mono text-sm sm:text-base font-bold text-blue-400">{target.toFixed(2)}</div>
           </div>
         </div>
 
@@ -190,13 +190,13 @@ export const PositionedCard: React.FC<PositionedCardProps> = ({ snapshot, setup,
         </div>
         {expanded && (
           <div className="px-3 pb-3 space-y-3">
-            <div className="grid grid-cols-3 gap-3 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 text-xs">
               <div>
                 <span className="text-gray-500">Signal:</span>
                 <span className="ml-1 text-gray-300">{pos?.signalId ?? '-'}</span>
               </div>
               <div>
-                <span className="text-gray-500">Entry Time:</span>
+                <span className="text-gray-500">Entry:</span>
                 <span className="ml-1 text-gray-300">
                   {pos?.entryTime ? new Date(pos.entryTime).toLocaleTimeString() : '-'}
                 </span>

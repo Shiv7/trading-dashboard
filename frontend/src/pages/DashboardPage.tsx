@@ -186,7 +186,7 @@ export default function DashboardPage() {
                 <h3 className="text-sm font-bold text-white uppercase tracking-wide">
                   Active Positions
                 </h3>
-                <Link to="/wallet" className="text-xs text-blue-400 hover:text-blue-300">
+                <Link to="/positions" className="text-xs text-blue-400 hover:text-blue-300">
                   View All →
                 </Link>
               </div>

@@ -36,18 +36,19 @@ export const StrategyTabContent: React.FC<StrategyTabContentProps> = ({
   return (
     <div className="space-y-6">
       {/* Strategy Header */}
-      <div className={`bg-slate-800 rounded-lg border ${config.accentBorder} p-4`}>
-        <div className="flex items-center justify-between">
-          <h2 className={`text-lg font-medium ${config.accentText} flex items-center gap-2`}>
-            <span className={`px-2 py-0.5 rounded text-sm font-bold ${config.accentBg} ${config.accentText}`}>
+      <div className={`bg-slate-800 rounded-lg border ${config.accentBorder} p-3 sm:p-4`}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h2 className={`text-sm sm:text-lg font-medium ${config.accentText} flex items-center gap-1.5 sm:gap-2`}>
+            <span className={`px-1.5 sm:px-2 py-0.5 rounded text-xs sm:text-sm font-bold ${config.accentBg} ${config.accentText}`}>
               {config.label}
             </span>
-            Strategy Dashboard
+            <span className="hidden sm:inline">Strategy Dashboard</span>
+            <span className="sm:hidden">Dashboard</span>
           </h2>
-          <div className="flex items-center gap-4 text-sm">
-            <span className="text-yellow-400 font-mono">{watching.length} watching</span>
-            <span className="text-green-400 font-mono">{ready.length} ready</span>
-            <span className="text-blue-400 font-mono">{positioned.length} positioned</span>
+          <div className="flex items-center gap-2 sm:gap-4 text-[10px] sm:text-sm">
+            <span className="text-yellow-400 font-mono">{watching.length} <span className="hidden sm:inline">watching</span><span className="sm:hidden">W</span></span>
+            <span className="text-green-400 font-mono">{ready.length} <span className="hidden sm:inline">ready</span><span className="sm:hidden">R</span></span>
+            <span className="text-blue-400 font-mono">{positioned.length} <span className="hidden sm:inline">positioned</span><span className="sm:hidden">P</span></span>
           </div>
         </div>
       </div>
@@ -123,7 +124,7 @@ const StateSection: React.FC<{
       </h3>
       <span className="text-xs text-gray-500 font-mono">({count})</span>
     </div>
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
       {children}
     </div>
   </div>

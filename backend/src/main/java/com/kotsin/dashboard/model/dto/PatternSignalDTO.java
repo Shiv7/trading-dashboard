@@ -20,6 +20,8 @@ public class PatternSignalDTO {
     private String signalId;
     private String scripCode;
     private String companyName;
+    private String symbol;          // Ticker name (e.g., "ADANIGREEN") — distinct from companyName
+    private String exchange;        // N=NSE, M=MCX, C=Currency
 
     // Pattern details
     private String patternType;      // BREAKOUT, BREAKDOWN, REVERSAL, TREND_CONTINUATION, etc.
@@ -32,10 +34,12 @@ public class PatternSignalDTO {
 
     // Price levels
     private double entryPrice;
-    private double stopLoss;
-    private double target1;
-    private double target2;
-    private double riskRewardRatio;
+    private Double stopLoss;
+    private Double target1;
+    private Double target2;
+    private Double target3;
+    private Double target4;
+    private Double riskRewardRatio;
     private double invalidationPrice;
 
     // Context

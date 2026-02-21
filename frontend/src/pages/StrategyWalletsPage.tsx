@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target } from 'lucide-react'
-import { strategyWalletsApi } from '../services/api'
+import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target, Briefcase } from 'lucide-react'
+import { strategyWalletsApi, walletApi } from '../services/api'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
+import type { Position } from '../types'
+import PositionCard from '../components/Wallet/PositionCard'
 
 // ─── Types ───────────────────────────────────────────────
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH'
@@ -59,7 +61,7 @@ const FilterDropdown: React.FC<{
   onClose: () => void
   onReset: () => void
 }> = ({ direction, exchange, strategy, onDirectionChange, onExchangeChange, onStrategyChange, onClose, onReset }) => (
-  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[280px] animate-slideDown">
+  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-3 sm:p-4 min-w-[240px] sm:min-w-[280px] animate-slideDown mobile-dropdown-full">
     {/* Direction */}
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
@@ -173,6 +175,9 @@ const SortDropdown: React.FC<{
 
 // ─── Target Status Badge ─────────────────────────────────
 function TargetBadge({ trade }: { trade: StrategyWalletTrade }) {
+  if (trade.exitReason === 'ACTIVE') {
+    return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 animate-pulse">LIVE</span>
+  }
   if (trade.stopHit) {
     return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">SL</span>
   }
@@ -196,6 +201,7 @@ function TargetBadge({ trade }: { trade: StrategyWalletTrade }) {
 export default function StrategyWalletsPage() {
   const [summaries, setSummaries] = useState<StrategyWalletSummary[]>([])
   const [trades, setTrades] = useState<StrategyWalletTrade[]>([])
+  const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [autoRefresh, setAutoRefresh] = useState(true)
 
@@ -215,7 +221,7 @@ export default function StrategyWalletsPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [s, t] = await Promise.all([
+      const [s, t, w] = await Promise.all([
         strategyWalletsApi.getSummaries(),
         strategyWalletsApi.getWeeklyTrades({
           strategy: strategyFilter !== 'ALL' ? strategyFilter : undefined,
@@ -223,9 +229,30 @@ export default function StrategyWalletsPage() {
           exchange: exchangeFilter !== 'ALL' ? exchangeFilter : undefined,
           sortBy: sortField,
         }),
+        walletApi.getWallet(),
       ])
       if (s) setSummaries(s)
       if (t) setTrades(t)
+      if (w?.positions) {
+        // Show all today's trades as cards: active first, then closed
+        const today = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })
+        const todayPositions = w.positions.filter(p => {
+          if (p.quantity > 0) return true // Always show open positions
+          // Show closed positions from today
+          if (p.openedAt) {
+            const opened = new Date(p.openedAt)
+            return opened.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) === today
+          }
+          return false
+        })
+        // Sort: active (qty > 0) first, then closed
+        todayPositions.sort((a, b) => {
+          if (a.quantity > 0 && b.quantity <= 0) return -1
+          if (a.quantity <= 0 && b.quantity > 0) return 1
+          return 0
+        })
+        setPositions(todayPositions)
+      }
     } catch (err) {
       console.error('Error loading strategy wallets:', err)
     } finally {
@@ -260,26 +287,26 @@ export default function StrategyWalletsPage() {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen mobile-page-bottom">
       {/* ══ Sticky Header ══ */}
       <div className="bg-slate-800/95 backdrop-blur border-b border-slate-700 sticky top-0 z-10">
-        <div className="px-4 py-4 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center">
-              <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="px-3 sm:px-4 py-3 sm:py-4 flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
+              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                   d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
               </svg>
             </div>
-            <h1 className="text-xl font-bold text-white">Strategy Wallets</h1>
+            <h1 className="text-base sm:text-xl font-bold text-white truncate">Strategy Wallets</h1>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             {/* Filter */}
             <div className="relative" ref={filterRef}>
               <button
                 onClick={() => { setShowFilter(!showFilter); setShowSort(false) }}
-                className={`relative p-2 rounded-lg transition-colors ${showFilter ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
+                className={`relative p-1.5 sm:p-2 rounded-lg transition-colors ${showFilter ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
               >
                 <Filter className="w-4 h-4" />
                 {hasFilters && <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400" />}
@@ -302,10 +329,11 @@ export default function StrategyWalletsPage() {
             <div className="relative" ref={sortRef}>
               <button
                 onClick={() => { setShowSort(!showSort); setShowFilter(false) }}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${showSort ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
+                className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-medium transition-colors ${showSort ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
               >
                 <ArrowUpDown className="w-3.5 h-3.5" />
-                {SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Sort'}
+                <span className="hidden sm:inline">{SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Sort'}</span>
+                <span className="sm:hidden">Sort</span>
               </button>
               {showSort && (
                 <SortDropdown
@@ -319,27 +347,27 @@ export default function StrategyWalletsPage() {
             {/* Auto-refresh */}
             <button
               onClick={() => setAutoRefresh(!autoRefresh)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium ${
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-[10px] sm:text-xs font-medium ${
                 autoRefresh ? 'bg-green-500/20 text-green-400' : 'bg-slate-700 text-slate-400'
               }`}
             >
-              <div className={`w-2 h-2 rounded-full ${autoRefresh ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
-              Live
+              <div className={`w-1.5 sm:w-2 h-1.5 sm:h-2 rounded-full ${autoRefresh ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
+              <span className="hidden sm:inline">Live</span>
             </button>
 
             {/* Refresh */}
-            <button onClick={loadData} className="p-2 hover:bg-slate-700 rounded transition-colors" disabled={loading}>
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
+            <button onClick={loadData} className="p-1.5 sm:p-2 hover:bg-slate-700 rounded transition-colors" disabled={loading}>
+              <RefreshCw className={`w-3.5 sm:w-4 h-3.5 sm:h-4 ${loading ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
             </button>
           </div>
         </div>
       </div>
 
       {/* ══ Content ══ */}
-      <div className="px-4 py-6 space-y-6">
+      <div className="px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
 
         {/* ── 4 Wallet Cards ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-4">
           {(summaries.length > 0 ? summaries : Array.from({ length: 4 }, (_, i) => ({
             strategy: ['FUDKII', 'FUKAA', 'PIVOT_CONFLUENCE', 'MICROALPHA'][i],
             displayName: ['FUDKII', 'FUKAA', 'PIVOT', 'MICROALPHA'][i],
@@ -351,41 +379,41 @@ export default function StrategyWalletsPage() {
             return (
               <div
                 key={s.strategy}
-                className={`bg-slate-800/60 backdrop-blur border ${colors.border} rounded-xl p-6 hover:bg-slate-800/80 transition-all`}
+                className={`bg-slate-800/60 backdrop-blur border ${colors.border} rounded-xl p-3 sm:p-6 hover:bg-slate-800/80 transition-all`}
               >
                 {/* Header */}
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2.5 h-2.5 rounded-full bg-gradient-to-br ${colors.accent}`} />
-                    <h3 className={`text-base font-bold ${colors.text}`}>{s.displayName}</h3>
+                <div className="flex items-center justify-between mb-2 sm:mb-4">
+                  <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                    <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-gradient-to-br ${colors.accent} shrink-0`} />
+                    <h3 className={`text-xs sm:text-base font-bold ${colors.text} truncate`}>{s.displayName}</h3>
                   </div>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${positive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-                    {s.winRate.toFixed(0)}% WR
+                  <span className={`text-[10px] sm:text-xs font-medium px-1.5 sm:px-2 py-0.5 rounded shrink-0 ${positive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+                    {s.winRate.toFixed(0)}%
                   </span>
                 </div>
 
                 {/* Capital */}
-                <div className="text-2xl font-bold font-mono tabular-nums text-white mb-1">
+                <div className="text-base sm:text-2xl font-bold font-mono tabular-nums text-white mb-0.5 sm:mb-1 truncate">
                   {formatINR(s.currentCapital)}
                 </div>
 
                 {/* P&L */}
-                <div className={`flex items-center gap-1 text-sm font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {positive ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-                  {positive ? '+' : ''}{formatINR(s.totalPnl)}
-                  <span className="text-xs opacity-75">({s.totalPnlPercent.toFixed(1)}%)</span>
+                <div className={`flex items-center gap-1 text-xs sm:text-sm font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {positive ? <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" /> : <TrendingDown className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />}
+                  <span className="truncate">{positive ? '+' : ''}{formatINR(s.totalPnl)}</span>
+                  <span className="text-[10px] sm:text-xs opacity-75 shrink-0">({s.totalPnlPercent.toFixed(1)}%)</span>
                 </div>
 
                 {/* Stats */}
-                <div className="mt-4 flex items-center gap-4 text-xs text-slate-500">
-                  <span>{s.totalTrades} trades</span>
+                <div className="mt-2 sm:mt-4 flex items-center gap-2 sm:gap-4 text-[10px] sm:text-xs text-slate-500">
+                  <span>{s.totalTrades}t</span>
                   <span className="text-emerald-500">{s.wins}W</span>
                   <span className="text-red-500">{s.losses}L</span>
                 </div>
 
                 {/* Win/Loss bar */}
                 {s.totalTrades > 0 && (
-                  <div className="mt-2 h-1.5 rounded-full bg-slate-700 overflow-hidden flex">
+                  <div className="mt-1.5 sm:mt-2 h-1 sm:h-1.5 rounded-full bg-slate-700 overflow-hidden flex">
                     <div className="bg-emerald-500 rounded-l-full" style={{ width: `${s.winRate}%` }} />
                     <div className="bg-red-500 rounded-r-full flex-1" />
                   </div>
@@ -394,6 +422,54 @@ export default function StrategyWalletsPage() {
             )
           })}
         </div>
+
+        {/* ── Active Trades ── */}
+        {(() => {
+          const activePositions = positions.filter(p => p.quantity > 0)
+          const exitedPositions = positions.filter(p => p.quantity <= 0)
+          return (
+            <>
+              {activePositions.length > 0 && (
+                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-cyan-400" />
+                    <h2 className="text-sm font-bold text-white">Active Trades</h2>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
+                      {activePositions.length}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {activePositions.map(pos => (
+                        <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Exited Today ── */}
+              {exitedPositions.length > 0 && (
+                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-slate-400" />
+                    <h2 className="text-sm font-bold text-white">Exited Today</h2>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
+                      {exitedPositions.length}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {exitedPositions.map(pos => (
+                        <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )
+        })()}
 
         {/* ── Weekly Trades Table ── */}
         <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
@@ -420,75 +496,137 @@ export default function StrategyWalletsPage() {
               )}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] text-slate-500 uppercase tracking-wider border-b border-slate-700/50">
-                    <th className="px-4 py-3 font-medium">Security</th>
-                    <th className="px-3 py-3 font-medium text-right">Entry</th>
-                    <th className="px-3 py-3 font-medium text-right">Exit</th>
-                    <th className="px-3 py-3 font-medium text-center">Dir</th>
-                    <th className="px-3 py-3 font-medium text-center">Target</th>
-                    <th className="px-3 py-3 font-medium text-right">P&L</th>
-                    <th className="px-3 py-3 font-medium text-right">P&L%</th>
-                    <th className="px-3 py-3 font-medium">Entry Time</th>
-                    <th className="px-3 py-3 font-medium">Exit Time</th>
-                    <th className="px-3 py-3 font-medium">Strategy</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700/30">
-                  {trades.map((t, i) => {
-                    const positive = t.pnl >= 0
-                    const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
-                    return (
-                      <tr key={t.tradeId || i} className="hover:bg-slate-700/20 transition-colors">
-                        {/* Security */}
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-white truncate max-w-[160px]">{t.companyName || t.scripCode}</div>
-                          <div className="text-[10px] text-slate-500">{t.scripCode}</div>
-                        </td>
-                        {/* Entry */}
-                        <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{formatNum(t.entryPrice)}</td>
-                        {/* Exit */}
-                        <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{formatNum(t.exitPrice)}</td>
-                        {/* Direction */}
-                        <td className="px-3 py-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            t.direction === 'BULLISH'
-                              ? 'bg-green-500/15 text-green-400 border border-green-500/30'
-                              : 'bg-red-500/15 text-red-400 border border-red-500/30'
-                          }`}>
-                            {t.direction === 'BULLISH' ? 'BULL' : 'BEAR'}
-                          </span>
-                        </td>
-                        {/* Target */}
-                        <td className="px-3 py-3 text-center">
-                          <TargetBadge trade={t} />
-                        </td>
-                        {/* P&L */}
-                        <td className={`px-3 py-3 text-right font-mono text-xs font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {positive ? '+' : ''}{formatNum(t.pnl)}
-                        </td>
-                        {/* P&L% */}
-                        <td className={`px-3 py-3 text-right font-mono text-xs font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {positive ? '+' : ''}{t.pnlPercent.toFixed(2)}%
-                        </td>
-                        {/* Entry Time */}
-                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{formatTime(t.entryTime)}</td>
-                        {/* Exit Time */}
-                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{formatTime(t.exitTime)}</td>
-                        {/* Strategy */}
-                        <td className="px-3 py-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
-                            {t.strategy}
-                          </span>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* Mobile Card Layout */}
+              <div className="md:hidden divide-y divide-slate-700/30">
+                {trades.map((t, i) => {
+                  const positive = t.pnl >= 0
+                  const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
+                  return (
+                    <div key={t.tradeId || i} className="px-3 py-3 space-y-2">
+                      {/* Row 1: Security + P&L */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-medium text-sm text-white truncate">{t.companyName || t.scripCode}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                              t.direction === 'BULLISH'
+                                ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+                                : 'bg-red-500/15 text-red-400 border border-red-500/30'
+                            }`}>
+                              {t.direction === 'BULLISH' ? 'BULL' : 'BEAR'}
+                            </span>
+                            <TargetBadge trade={t} />
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
+                              {t.strategy}
+                            </span>
+                            <span className="text-[10px] text-slate-500">{t.quantity} qty</span>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className={`text-sm font-bold font-mono tabular-nums ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {positive ? '+' : ''}{formatNum(t.pnl)}
+                          </div>
+                          <div className={`text-[10px] font-mono ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {positive ? '+' : ''}{t.pnlPercent.toFixed(2)}%
+                          </div>
+                        </div>
+                      </div>
+                      {/* Row 2: Entry/Exit prices + times */}
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <div className="flex items-center gap-3">
+                          <span>Entry: <span className="text-slate-300 font-mono">{formatNum(t.entryPrice)}</span></span>
+                          <span>Exit: <span className={`font-mono ${t.exitReason === 'ACTIVE' ? 'text-cyan-400' : 'text-slate-300'}`}>{formatNum(t.exitPrice)}</span></span>
+                        </div>
+                        <div>
+                          {t.exitReason === 'ACTIVE' || !t.exitTime
+                            ? <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-500/20 text-green-400 border border-green-500/30 animate-pulse">Active</span>
+                            : <span>{formatTime(t.exitTime)}</span>
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Desktop Table Layout */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[11px] text-slate-500 uppercase tracking-wider border-b border-slate-700/50">
+                      <th className="px-4 py-3 font-medium">Security</th>
+                      <th className="px-3 py-3 font-medium text-right">Entry</th>
+                      <th className="px-3 py-3 font-medium text-right">Exit</th>
+                      <th className="px-3 py-3 font-medium text-center">Dir</th>
+                      <th className="px-3 py-3 font-medium text-right">Capital</th>
+                      <th className="px-3 py-3 font-medium text-right">Equity</th>
+                      <th className="px-3 py-3 font-medium text-center">Target</th>
+                      <th className="px-3 py-3 font-medium text-right">P&L</th>
+                      <th className="px-3 py-3 font-medium text-right">P&L%</th>
+                      <th className="px-3 py-3 font-medium">Entry Time</th>
+                      <th className="px-3 py-3 font-medium">Exit Time</th>
+                      <th className="px-3 py-3 font-medium">Strategy</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-700/30">
+                    {trades.map((t, i) => {
+                      const positive = t.pnl >= 0
+                      const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
+                      return (
+                        <tr key={t.tradeId || i} className="hover:bg-slate-700/20 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-white truncate max-w-[160px]">{t.companyName || t.scripCode}</div>
+                            <div className="text-[10px] text-slate-500">{t.scripCode}</div>
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{formatNum(t.entryPrice)}</td>
+                          <td className="px-3 py-3 text-right font-mono text-xs">
+                            {t.exitReason === 'ACTIVE'
+                              ? <span className="text-cyan-400">{formatNum(t.exitPrice)}</span>
+                              : <span className="text-slate-300">{formatNum(t.exitPrice)}</span>
+                            }
+                          </td>
+                          <td className="px-3 py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              t.direction === 'BULLISH'
+                                ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+                                : 'bg-red-500/15 text-red-400 border border-red-500/30'
+                            }`}>
+                              {t.direction === 'BULLISH' ? 'BULL' : 'BEAR'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{formatINR(t.capitalEmployed)}</td>
+                          <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{t.quantity}</td>
+                          <td className="px-3 py-3 text-center">
+                            <TargetBadge trade={t} />
+                          </td>
+                          <td className={`px-3 py-3 text-right font-mono text-xs font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {positive ? '+' : ''}{formatNum(t.pnl)}
+                          </td>
+                          <td className={`px-3 py-3 text-right font-mono text-xs font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {positive ? '+' : ''}{t.pnlPercent.toFixed(2)}%
+                          </td>
+                          <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{formatTime(t.entryTime)}</td>
+                          <td className="px-3 py-3 text-xs whitespace-nowrap">
+                            {t.exitReason === 'ACTIVE' || !t.exitTime
+                              ? <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-500/20 text-green-400 border border-green-500/30 animate-pulse">Active</span>
+                              : <span className="text-slate-400">{formatTime(t.exitTime)}</span>
+                            }
+                          </td>
+                          <td className="px-3 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
+                              {t.strategy}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>

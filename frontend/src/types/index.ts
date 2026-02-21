@@ -39,6 +39,43 @@ export interface Position {
   openedAt: string;
   lastUpdated: string;
   strategy?: string;
+  // Dual equity/option levels for strategy trades
+  equitySl?: number;
+  equityT1?: number;
+  equityT2?: number;
+  equityT3?: number;
+  equityT4?: number;
+  optionSl?: number;
+  optionT1?: number;
+  optionT2?: number;
+  optionT3?: number;
+  optionT4?: number;
+  target3?: number;
+  target4?: number;
+  // Target hit tracking
+  t1Hit?: boolean;
+  t2Hit?: boolean;
+  t3Hit?: boolean;
+  t4Hit?: boolean;
+  slHit?: boolean;
+  // Instrument type
+  instrumentType?: string;
+  delta?: number;
+  // Trade execution metadata
+  exitReason?: string;    // "1% DD", "SL-EQ", "SL-OP", "T1-OP", "T2-EQ", "EOD", etc.
+  confidence?: number;
+  equityLtp?: number;     // live equity/futures price for dual display
+  // Per-target exit history
+  exitHistory?: ExitEvent[];
+}
+
+export interface ExitEvent {
+  level: string;       // "T1", "T2", "T3", "T4"
+  lots: number;
+  qty: number;
+  price: number;
+  timestamp: number;   // epoch ms
+  source: string;      // "T1-OP", "T2-EQ", etc.
 }
 
 // Family Score types
@@ -649,6 +686,8 @@ export interface PatternSignal {
   patternId: string;
   signalId?: string;
   scripCode: string;
+  symbol?: string;
+  exchange?: string;
   companyName: string;
   patternType: string;
   direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
@@ -656,10 +695,12 @@ export interface PatternSignal {
   confidence: number;
   qualityScore: number;
   entryPrice: number;
-  stopLoss: number;
-  target1: number;
-  target2: number;
-  riskRewardRatio: number;
+  stopLoss?: number | null;
+  target1?: number | null;
+  target2?: number | null;
+  target3?: number | null;
+  target4?: number | null;
+  riskRewardRatio?: number | null;
   invalidationPrice?: number;
   timeframe?: string;
   patternDescription?: string;
@@ -672,6 +713,19 @@ export interface PatternSignal {
   completedAt?: string;
   actualPnl?: number;
   rMultiple?: number;
+  // Volume gate (Flaw 2)
+  volumeConfirmed?: boolean;
+  volumeRatio?: number;
+  // Regime enrichment (Flaw 3)
+  marketRegime?: string;
+  tradingMode?: string;
+  // SL source (Flaw 4)
+  slSource?: string;
+  atr30m?: number;
+  pivotSource?: boolean;
+  // Spread estimation (Flaw 6)
+  estimatedSpreadPct?: number;
+  spreadImpactPct?: number;
 }
 
 export interface PatternSummary {
