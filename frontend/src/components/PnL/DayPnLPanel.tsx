@@ -72,7 +72,7 @@ export const DayPnLPanel: React.FC<DayPnLPanelProps> = ({ data, initialCapital }
                     <div className="text-[10px] text-slate-500">Win Rate</div>
                     <div className={`text-lg font-bold ${data.winRate >= 60 ? 'text-emerald-400' : data.winRate >= 40 ? 'text-amber-400' : 'text-red-400'
                         }`}>
-                        {data.winRate.toFixed(0)}%
+                        {(data.winRate ?? 0).toFixed(0)}%
                     </div>
                 </div>
                 <div className="text-center p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20">

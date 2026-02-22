@@ -80,14 +80,14 @@ export const ActiveSetupsPanel: React.FC<ActiveSetupsPanelProps> = ({ setups, cl
                                     setup.confidence >= 0.7 ? 'text-emerald-400' :
                                     setup.confidence >= 0.5 ? 'text-amber-400' : 'text-slate-400'
                                 }`}>
-                                    {(setup.confidence * 100).toFixed(0)}%
+                                    {((setup.confidence ?? 0) * 100).toFixed(0)}%
                                 </div>
                             </div>
                             {setup.entryPrice && (
                                 <div>
                                     <div className="text-slate-500">Entry</div>
                                     <div className="text-white font-medium">
-                                        {setup.entryPrice.toFixed(2)}
+                                        {(setup.entryPrice ?? 0).toFixed(2)}
                                     </div>
                                 </div>
                             )}
@@ -95,7 +95,7 @@ export const ActiveSetupsPanel: React.FC<ActiveSetupsPanelProps> = ({ setups, cl
                                 <div>
                                     <div className="text-slate-500">Target</div>
                                     <div className="text-emerald-400 font-medium">
-                                        {setup.target.toFixed(2)}
+                                        {(setup.target ?? 0).toFixed(2)}
                                     </div>
                                 </div>
                             )}
@@ -104,7 +104,7 @@ export const ActiveSetupsPanel: React.FC<ActiveSetupsPanelProps> = ({ setups, cl
                         {setup.stopLoss && (
                             <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs">
                                 <span className="text-slate-500">Stop Loss: </span>
-                                <span className="text-red-400 font-medium">{setup.stopLoss.toFixed(2)}</span>
+                                <span className="text-red-400 font-medium">{(setup.stopLoss ?? 0).toFixed(2)}</span>
                             </div>
                         )}
                     </div>

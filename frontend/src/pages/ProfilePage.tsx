@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { profileApi, authApi, type UserProfile } from '../services/api'
 
@@ -6,6 +7,7 @@ type Tab = 'personal' | 'preferences' | 'notifications' | 'security'
 
 export default function ProfilePage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('personal')
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [saving, setSaving] = useState(false)
@@ -48,9 +50,44 @@ export default function ProfilePage() {
     }).catch(() => setMessage({ type: 'error', text: 'Failed to load profile' }))
   }, [])
 
-  const showMessage = (type: 'success' | 'error', text: string) => {
+  const showMessage = (type: 'success' | 'error', text: string, autoClose = false) => {
     setMessage({ type, text })
-    setTimeout(() => setMessage(null), 3000)
+    if (autoClose) {
+      setTimeout(() => navigate(-1), 1200)
+    } else {
+      setTimeout(() => setMessage(null), 3000)
+    }
+  }
+
+  const goBack = () => navigate(-1)
+
+  const resetPasswordFields = () => {
+    setOldPassword('')
+    setNewPassword('')
+    setConfirmPassword('')
+  }
+
+  const resetPersonalFields = () => {
+    if (profile) {
+      setDisplayName(profile.displayName || '')
+      setEmail(profile.email || '')
+    }
+  }
+
+  const resetPreferenceFields = () => {
+    if (profile?.preferences) {
+      setTimezone(profile.preferences.timezone || 'Asia/Kolkata')
+      setDefaultLotSize(profile.preferences.defaultLotSize || 1)
+      setRiskTolerance(profile.preferences.riskTolerance || 'MODERATE')
+    }
+  }
+
+  const resetNotificationFields = () => {
+    if (profile?.preferences?.notificationSettings) {
+      setInApp(profile.preferences.notificationSettings.inApp)
+      setTelegramEnabled(profile.preferences.notificationSettings.telegram)
+      setEmailEnabled(profile.preferences.notificationSettings.email)
+    }
   }
 
   const handleSavePersonal = async () => {
@@ -58,7 +95,7 @@ export default function ProfilePage() {
     try {
       const updated = await profileApi.updateProfile({ displayName, email } as Partial<UserProfile>)
       setProfile(updated)
-      showMessage('success', 'Profile updated')
+      showMessage('success', 'Profile updated! Redirecting...', true)
     } catch (err) {
       showMessage('error', err instanceof Error ? err.message : 'Failed to update')
     }
@@ -76,7 +113,7 @@ export default function ProfilePage() {
         notificationSettings: profile?.preferences?.notificationSettings || { telegram: false, email: false, inApp: true },
       })
       setProfile(updated)
-      showMessage('success', 'Preferences updated')
+      showMessage('success', 'Preferences updated! Redirecting...', true)
     } catch (err) {
       showMessage('error', err instanceof Error ? err.message : 'Failed to update')
     }
@@ -92,7 +129,7 @@ export default function ProfilePage() {
         inApp,
       } as unknown as UserProfile['preferences'])
       setProfile(updated)
-      showMessage('success', 'Notifications updated')
+      showMessage('success', 'Notifications updated! Redirecting...', true)
     } catch (err) {
       showMessage('error', err instanceof Error ? err.message : 'Failed to update')
     }
@@ -111,10 +148,8 @@ export default function ProfilePage() {
     setSaving(true)
     try {
       await authApi.changePassword({ oldPassword, newPassword })
-      setOldPassword('')
-      setNewPassword('')
-      setConfirmPassword('')
-      showMessage('success', 'Password changed successfully')
+      resetPasswordFields()
+      showMessage('success', 'Password changed successfully! Redirecting...', true)
     } catch (err) {
       showMessage('error', err instanceof Error ? err.message : 'Failed to change password')
     }
@@ -133,7 +168,30 @@ export default function ProfilePage() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <h1 className="text-2xl font-display font-bold text-white mb-6">Profile Settings</h1>
+      {/* Header with back navigation + close button */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={goBack}
+            className="p-2 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700/50 hover:border-slate-600 transition-all"
+            title="Go back"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+          </button>
+          <h1 className="text-2xl font-display font-bold text-white">Profile Settings</h1>
+        </div>
+        <button
+          onClick={goBack}
+          className="p-2 rounded-xl bg-slate-800/50 border border-slate-700/50 text-slate-400 hover:text-white hover:bg-red-500/20 hover:border-red-500/40 transition-all"
+          title="Close"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
 
       {/* Message */}
       {message && (
@@ -188,10 +246,16 @@ export default function ProfilePage() {
               <input type="text" value={user?.username || ''} disabled className={`${inputClass} opacity-50 cursor-not-allowed`} />
               <p className="text-xs text-slate-500 mt-1">Username cannot be changed</p>
             </div>
-            <button onClick={handleSavePersonal} disabled={saving}
-              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
-              {saving ? 'Saving...' : 'Save Changes'}
-            </button>
+            <div className="flex gap-3 pt-2">
+              <button onClick={handleSavePersonal} disabled={saving}
+                className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+              <button onClick={() => { resetPersonalFields(); goBack() }}
+                className="px-6 py-3 bg-slate-700/50 border border-slate-600 text-slate-300 font-medium rounded-xl hover:bg-slate-600/50 hover:text-white transition-all">
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
@@ -228,10 +292,16 @@ export default function ProfilePage() {
                 ))}
               </div>
             </div>
-            <button onClick={handleSavePreferences} disabled={saving}
-              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
-              {saving ? 'Saving...' : 'Save Preferences'}
-            </button>
+            <div className="flex gap-3 pt-2">
+              <button onClick={handleSavePreferences} disabled={saving}
+                className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save Preferences'}
+              </button>
+              <button onClick={() => { resetPreferenceFields(); goBack() }}
+                className="px-6 py-3 bg-slate-700/50 border border-slate-600 text-slate-300 font-medium rounded-xl hover:bg-slate-600/50 hover:text-white transition-all">
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
@@ -254,10 +324,16 @@ export default function ProfilePage() {
                 </button>
               </div>
             ))}
-            <button onClick={handleSaveNotifications} disabled={saving}
-              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
-              {saving ? 'Saving...' : 'Save Notifications'}
-            </button>
+            <div className="flex gap-3 pt-2">
+              <button onClick={handleSaveNotifications} disabled={saving}
+                className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save Notifications'}
+              </button>
+              <button onClick={() => { resetNotificationFields(); goBack() }}
+                className="px-6 py-3 bg-slate-700/50 border border-slate-600 text-slate-300 font-medium rounded-xl hover:bg-slate-600/50 hover:text-white transition-all">
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
@@ -277,10 +353,16 @@ export default function ProfilePage() {
               <label className={labelClass}>Confirm New Password</label>
               <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} className={inputClass} placeholder="Confirm new password" />
             </div>
-            <button onClick={handleChangePassword} disabled={saving || !oldPassword || !newPassword}
-              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
-              {saving ? 'Changing...' : 'Change Password'}
-            </button>
+            <div className="flex gap-3 pt-2">
+              <button onClick={handleChangePassword} disabled={saving || !oldPassword || !newPassword}
+                className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all disabled:opacity-50">
+                {saving ? 'Changing...' : 'Change Password'}
+              </button>
+              <button onClick={() => { resetPasswordFields(); setActiveTab('personal') }}
+                className="px-6 py-3 bg-slate-700/50 border border-slate-600 text-slate-300 font-medium rounded-xl hover:bg-slate-600/50 hover:text-white transition-all">
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>

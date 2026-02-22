@@ -77,10 +77,10 @@ public class TradesController {
             int count = 0;
             
             for (Document doc : mongoTemplate.getCollection("trade_outcomes").find()) {
-                Double pnl = doc.getDouble("pnl");
-                Double rMult = doc.getDouble("rMultiple");
-                if (pnl != null) totalPnl += pnl;
-                if (rMult != null) {
+                double pnl = getDouble(doc, "pnl");
+                double rMult = getDouble(doc, "rMultiple");
+                totalPnl += pnl;
+                if (rMult != 0) {
                     totalRMultiple += rMult;
                     count++;
                 }

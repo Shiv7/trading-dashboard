@@ -299,7 +299,7 @@ export default function StockDetailPage() {
                 ₹{displayScore.close?.toFixed(2)}
               </span>
               <span className={`text-sm font-medium ${priceChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {priceChange >= 0 ? '+' : ''}{priceChangePercent.toFixed(2)}%
+                {priceChange >= 0 ? '+' : ''}{(priceChangePercent ?? 0).toFixed(2)}%
                 {priceChange >= 0 ? ' ↑' : ' ↓'}
               </span>
             </div>
@@ -341,7 +341,7 @@ export default function StockDetailPage() {
                 directionConsensus.dominant === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
                 'bg-slate-700 text-slate-400'
               }`}>
-                {directionConsensus.percentage.toFixed(0)}% {directionConsensus.dominant}
+                {(directionConsensus.percentage ?? 0).toFixed(0)}% {directionConsensus.dominant}
               </span>
             </div>
             <span className="text-slate-400 text-xs">Click to expand/collapse</span>
@@ -376,22 +376,22 @@ export default function StockDetailPage() {
               <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3">VCP Module</h3>
               <div className="text-center py-4">
                 <div className="text-3xl font-bold text-emerald-400 mb-1">
-                  {(displayScore.vcpCombinedScore * 100).toFixed(0)}%
+                  {((displayScore.vcpCombinedScore ?? 0) * 100).toFixed(0)}%
                 </div>
                 <div className="text-xs text-slate-400">Combined Score</div>
               </div>
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Runway</span>
-                  <span className="text-white">{(displayScore.vcpRunway * 100).toFixed(0)}%</span>
+                  <span className="text-white">{((displayScore.vcpRunway ?? 0) * 100).toFixed(0)}%</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Support</span>
-                  <span className="text-white">{(displayScore.vcpSupportScore * 100).toFixed(0)}%</span>
+                  <span className="text-white">{((displayScore.vcpSupportScore ?? 0) * 100).toFixed(0)}%</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Resistance</span>
-                  <span className="text-white">{(displayScore.vcpResistanceScore * 100).toFixed(0)}%</span>
+                  <span className="text-white">{((displayScore.vcpResistanceScore ?? 0) * 100).toFixed(0)}%</span>
                 </div>
               </div>
             </div>
@@ -408,14 +408,14 @@ export default function StockDetailPage() {
               </h3>
               <div className="text-center py-4">
                 <div className="text-3xl font-bold text-blue-400 mb-1">
-                  {(displayScore.ipuFinalScore * 100).toFixed(0)}%
+                  {((displayScore.ipuFinalScore ?? 0) * 100).toFixed(0)}%
                 </div>
                 <div className="text-xs text-slate-400">Final Score</div>
               </div>
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Institutional</span>
-                  <span className="text-white">{(displayScore.ipuInstProxy * 100).toFixed(0)}%</span>
+                  <span className="text-white">{((displayScore.ipuInstProxy ?? 0) * 100).toFixed(0)}%</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Momentum</span>
@@ -423,7 +423,7 @@ export default function StockDetailPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Exhaustion</span>
-                  <span className="text-white">{(displayScore.ipuExhaustion * 100).toFixed(0)}%</span>
+                  <span className="text-white">{((displayScore.ipuExhaustion ?? 0) * 100).toFixed(0)}%</span>
                 </div>
               </div>
             </div>
@@ -498,7 +498,7 @@ export default function StockDetailPage() {
                 <span>H: <span className="text-emerald-400">{displayScore.high?.toFixed(2)}</span></span>
                 <span>L: <span className="text-red-400">{displayScore.low?.toFixed(2)}</span></span>
                 <span>C: <span className="text-white">{displayScore.close?.toFixed(2)}</span></span>
-                <span>Vol: <span className="text-white">{(displayScore.volume / 1000).toFixed(0)}K</span></span>
+                <span>Vol: <span className="text-white">{((displayScore.volume ?? 0) / 1000).toFixed(0)}K</span></span>
               </div>
             </div>
             {/* Indicator Toggle Controls */}
@@ -587,7 +587,7 @@ export default function StockDetailPage() {
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-400">Strength</span>
-                <span className="text-white">{(displayScore.indexRegimeStrength * 100).toFixed(0)}%</span>
+                <span className="text-white">{((displayScore.indexRegimeStrength ?? 0) * 100).toFixed(0)}%</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Security</span>
@@ -636,7 +636,7 @@ export default function StockDetailPage() {
                 displayScore.overallScore >= 5 ? 'text-amber-400' :
                   'text-slate-400'
                 }`}>
-                {displayScore.overallScore.toFixed(1)}
+                {(displayScore.overallScore ?? 0).toFixed(1)}
               </span>
             </div>
             <div className="mt-3 h-2 bg-slate-700 rounded-full overflow-hidden">

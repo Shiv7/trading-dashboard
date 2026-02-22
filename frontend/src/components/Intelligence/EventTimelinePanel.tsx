@@ -93,7 +93,7 @@ export const EventTimelinePanel: React.FC<EventTimelinePanelProps> = ({
                         <div className="p-2 bg-blue-500/10 border border-blue-500/30 rounded text-center">
                             <div className="text-xs text-slate-400">Rate</div>
                             <div className={`text-lg font-bold ${getConfirmationColor(eventConfirmationRate)}`}>
-                                {eventConfirmationRate.toFixed(0)}%
+                                {(eventConfirmationRate ?? 0).toFixed(0)}%
                             </div>
                             <div className={`text-xs ${getConfirmationColor(eventConfirmationRate)}`}>
                                 Grade: {getConfirmationGrade(eventConfirmationRate)}
@@ -166,7 +166,7 @@ export const EventTimelinePanel: React.FC<EventTimelinePanelProps> = ({
                     <div className="text-xs text-slate-400">
                         The system has learned from {(confirmedEvents || 0) + (failedEvents || 0)} historical events.
                         Current prediction accuracy: <span className={`font-medium ${getConfirmationColor(eventConfirmationRate)}`}>
-                            {eventConfirmationRate.toFixed(1)}%
+                            {(eventConfirmationRate ?? 0).toFixed(1)}%
                         </span>
                     </div>
                 </div>

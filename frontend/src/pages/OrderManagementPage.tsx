@@ -195,7 +195,7 @@ export default function OrderManagementPage() {
           </div>
           <div className="card text-center">
             <div className={`text-2xl font-bold font-mono ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
+              {(totalPnl ?? 0) >= 0 ? '+' : ''}{(totalPnl ?? 0).toFixed(2)}
             </div>
             <div className="text-xs text-slate-400">Total P&L</div>
           </div>

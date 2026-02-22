@@ -424,7 +424,7 @@ function ScoreCard({ score, isSelected, activeTab, getCategoryScore, getScoreCol
             <div className="text-amber-400 font-medium">DM</div>
           ) : (
             <>
-              <div className="text-white font-medium">{categoryScore.toFixed(1)}</div>
+              <div className="text-white font-medium">{(categoryScore ?? 0).toFixed(1)}</div>
               <div className="text-slate-500">/{categoryMax}</div>
             </>
           )}

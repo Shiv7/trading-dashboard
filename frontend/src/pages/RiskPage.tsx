@@ -101,7 +101,7 @@ export default function RiskPage() {
                 metrics.riskScore.score < 30 ? 'text-emerald-400' :
                 metrics.riskScore.score < 60 ? 'text-amber-400' : 'text-red-400'
               }`}>
-                {metrics.riskScore.score.toFixed(0)}
+                {(metrics.riskScore?.score ?? 0).toFixed(0)}
               </span>
               <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getRiskLevelColor(metrics.riskScore.level)}`}>
                 {metrics.riskScore.level}
@@ -112,15 +112,15 @@ export default function RiskPage() {
           <div className="hidden md:flex gap-4">
             <div className="text-center">
               <div className="text-sm text-slate-400">Concentration</div>
-              <div className="text-xl font-bold text-white">{metrics.riskScore.concentrationComponent.toFixed(0)}</div>
+              <div className="text-xl font-bold text-white">{(metrics.riskScore?.concentrationComponent ?? 0).toFixed(0)}</div>
             </div>
             <div className="text-center">
               <div className="text-sm text-slate-400">Exposure</div>
-              <div className="text-xl font-bold text-white">{metrics.riskScore.exposureComponent.toFixed(0)}</div>
+              <div className="text-xl font-bold text-white">{(metrics.riskScore?.exposureComponent ?? 0).toFixed(0)}</div>
             </div>
             <div className="text-center">
               <div className="text-sm text-slate-400">VaR</div>
-              <div className="text-xl font-bold text-white">{metrics.riskScore.varComponent.toFixed(0)}</div>
+              <div className="text-xl font-bold text-white">{(metrics.riskScore?.varComponent ?? 0).toFixed(0)}</div>
             </div>
           </div>
         </div>
@@ -135,22 +135,22 @@ export default function RiskPage() {
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Long Exposure</span>
               <span className="text-emerald-400 font-medium">
-                ₹{(metrics.portfolioExposure.longExposure / 1000).toFixed(1)}K
-                <span className="text-xs text-slate-500 ml-1">({metrics.portfolioExposure.longCount})</span>
+                ₹{((metrics.portfolioExposure?.longExposure ?? 0) / 1000).toFixed(1)}K
+                <span className="text-xs text-slate-500 ml-1">({metrics.portfolioExposure?.longCount ?? 0})</span>
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Short Exposure</span>
               <span className="text-red-400 font-medium">
-                ₹{(metrics.portfolioExposure.shortExposure / 1000).toFixed(1)}K
-                <span className="text-xs text-slate-500 ml-1">({metrics.portfolioExposure.shortCount})</span>
+                ₹{((metrics.portfolioExposure?.shortExposure ?? 0) / 1000).toFixed(1)}K
+                <span className="text-xs text-slate-500 ml-1">({metrics.portfolioExposure?.shortCount ?? 0})</span>
               </span>
             </div>
             <div className="border-t border-slate-700 pt-2">
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Net Exposure</span>
-                <span className={`font-bold ${metrics.portfolioExposure.netExposure >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  ₹{(metrics.portfolioExposure.netExposure / 1000).toFixed(1)}K
+                <span className={`font-bold ${(metrics.portfolioExposure?.netExposure ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  ₹{((metrics.portfolioExposure?.netExposure ?? 0) / 1000).toFixed(1)}K
                 </span>
               </div>
               <div className="text-sm text-slate-500 mt-1">
@@ -167,7 +167,7 @@ export default function RiskPage() {
             <div>
               <div className="flex justify-between text-sm mb-1">
                 <span className="text-emerald-400">Bullish</span>
-                <span className="text-white">{metrics.directionExposure.bullishPercent.toFixed(0)}%</span>
+                <span className="text-white">{(metrics.directionExposure?.bullishPercent ?? 0).toFixed(0)}%</span>
               </div>
               <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
                 <div
@@ -179,7 +179,7 @@ export default function RiskPage() {
             <div>
               <div className="flex justify-between text-sm mb-1">
                 <span className="text-red-400">Bearish</span>
-                <span className="text-white">{metrics.directionExposure.bearishPercent.toFixed(0)}%</span>
+                <span className="text-white">{(metrics.directionExposure?.bearishPercent ?? 0).toFixed(0)}%</span>
               </div>
               <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
                 <div
@@ -191,7 +191,7 @@ export default function RiskPage() {
             <div>
               <div className="flex justify-between text-sm mb-1">
                 <span className="text-slate-400">Neutral</span>
-                <span className="text-white">{metrics.directionExposure.neutralPercent.toFixed(0)}%</span>
+                <span className="text-white">{(metrics.directionExposure?.neutralPercent ?? 0).toFixed(0)}%</span>
               </div>
               <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
                 <div
@@ -209,7 +209,7 @@ export default function RiskPage() {
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-slate-400">HHI Score</span>
-              <span className="text-white font-medium">{metrics.concentrationRisk.herfindahlIndex.toFixed(3)}</span>
+              <span className="text-white font-medium">{(metrics.concentrationRisk?.herfindahlIndex ?? 0).toFixed(3)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Risk Level</span>
@@ -224,7 +224,7 @@ export default function RiskPage() {
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Max Single Stock</span>
               <span className={`font-medium ${metrics.concentrationRisk.singleStockMaxPercent > 20 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                {metrics.concentrationRisk.singleStockMaxPercent.toFixed(1)}%
+                {(metrics.concentrationRisk?.singleStockMaxPercent ?? 0).toFixed(1)}%
               </span>
             </div>
           </div>
@@ -236,15 +236,15 @@ export default function RiskPage() {
           <div className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-slate-400">VaR 95%</span>
-              <span className="text-amber-400 font-medium">{metrics.valueAtRisk.var95.toFixed(2)}R</span>
+              <span className="text-amber-400 font-medium">{(metrics.valueAtRisk?.var95 ?? 0).toFixed(2)}R</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">VaR 99%</span>
-              <span className="text-red-400 font-medium">{metrics.valueAtRisk.var99.toFixed(2)}R</span>
+              <span className="text-red-400 font-medium">{(metrics.valueAtRisk?.var99 ?? 0).toFixed(2)}R</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Expected Shortfall</span>
-              <span className="text-red-400 font-medium">{metrics.valueAtRisk.expectedShortfall.toFixed(2)}R</span>
+              <span className="text-red-400 font-medium">{(metrics.valueAtRisk?.expectedShortfall ?? 0).toFixed(2)}R</span>
             </div>
             <div className="text-xs text-slate-500">
               Based on {metrics.valueAtRisk.sampleSize} trades
@@ -262,16 +262,16 @@ export default function RiskPage() {
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Total Risk Amount</span>
-              <span className="text-red-400 font-medium">₹{(metrics.riskBreakdown.totalRiskAmount / 1000).toFixed(1)}K</span>
+              <span className="text-red-400 font-medium">₹{((metrics.riskBreakdown?.totalRiskAmount ?? 0) / 1000).toFixed(1)}K</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Avg Risk/Trade</span>
-              <span className="text-white">₹{metrics.riskBreakdown.averageRiskPerTrade.toFixed(0)}</span>
+              <span className="text-white">₹{(metrics.riskBreakdown?.averageRiskPerTrade ?? 0).toFixed(0)}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Avg R:R</span>
-              <span className={`font-medium ${metrics.riskBreakdown.averageRiskReward >= 1.5 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {metrics.riskBreakdown.averageRiskReward.toFixed(2)}
+              <span className={`font-medium ${(metrics.riskBreakdown?.averageRiskReward ?? 0) >= 1.5 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {(metrics.riskBreakdown?.averageRiskReward ?? 0).toFixed(2)}
               </span>
             </div>
           </div>
@@ -282,7 +282,7 @@ export default function RiskPage() {
           <h3 className="text-lg font-semibold text-white mb-4">Max Loss Exposure</h3>
           <div className="text-center py-4">
             <div className="text-4xl font-bold text-red-400">
-              ₹{(metrics.maxLossExposure / 1000).toFixed(1)}K
+              ₹{((metrics.maxLossExposure ?? 0) / 1000).toFixed(1)}K
             </div>
             <div className="text-sm text-slate-400 mt-2">
               If all stop losses are hit
@@ -300,7 +300,7 @@ export default function RiskPage() {
                   style={{ width: `${metrics.correlationMetrics.diversificationScore * 100}%` }}
                 />
               </div>
-              <span className="text-white text-sm">{(metrics.correlationMetrics.diversificationScore * 100).toFixed(0)}%</span>
+              <span className="text-white text-sm">{((metrics.correlationMetrics?.diversificationScore ?? 0) * 100).toFixed(0)}%</span>
             </div>
           </div>
         </div>
@@ -357,7 +357,7 @@ export default function RiskPage() {
                     style={{ width: `${percent}%` }}
                   />
                 </div>
-                <span className="text-slate-400 text-sm w-16 text-right">{percent.toFixed(1)}%</span>
+                <span className="text-slate-400 text-sm w-16 text-right">{(percent ?? 0).toFixed(1)}%</span>
               </div>
             ))}
           </div>

@@ -364,7 +364,7 @@ export default function StrategyWalletsPage() {
       </div>
 
       {/* ══ Content ══ */}
-      <div className="px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
+      <div className="px-1.5 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
 
         {/* ── 4 Wallet Cards ── */}
         <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-4">
@@ -388,7 +388,7 @@ export default function StrategyWalletsPage() {
                     <h3 className={`text-xs sm:text-base font-bold ${colors.text} truncate`}>{s.displayName}</h3>
                   </div>
                   <span className={`text-[10px] sm:text-xs font-medium px-1.5 sm:px-2 py-0.5 rounded shrink-0 ${positive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-                    {s.winRate.toFixed(0)}%
+                    {(s.winRate ?? 0).toFixed(0)}%
                   </span>
                 </div>
 
@@ -401,7 +401,7 @@ export default function StrategyWalletsPage() {
                 <div className={`flex items-center gap-1 text-xs sm:text-sm font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
                   {positive ? <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" /> : <TrendingDown className="w-3 h-3 sm:w-3.5 sm:h-3.5 shrink-0" />}
                   <span className="truncate">{positive ? '+' : ''}{formatINR(s.totalPnl)}</span>
-                  <span className="text-[10px] sm:text-xs opacity-75 shrink-0">({s.totalPnlPercent.toFixed(1)}%)</span>
+                  <span className="text-[10px] sm:text-xs opacity-75 shrink-0">({(s.totalPnlPercent ?? 0).toFixed(1)}%)</span>
                 </div>
 
                 {/* Stats */}
@@ -438,8 +438,8 @@ export default function StrategyWalletsPage() {
                       {activePositions.length}
                     </span>
                   </div>
-                  <div className="p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div className="p-2 sm:p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                       {activePositions.map(pos => (
                         <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
                       ))}
@@ -458,8 +458,8 @@ export default function StrategyWalletsPage() {
                       {exitedPositions.length}
                     </span>
                   </div>
-                  <div className="p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  <div className="p-2 sm:p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                       {exitedPositions.map(pos => (
                         <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
                       ))}

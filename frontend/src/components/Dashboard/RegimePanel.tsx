@@ -81,14 +81,14 @@ export default function RegimePanel({ regime }: RegimePanelProps) {
           <div className="text-xs text-slate-400 mb-2">Strength</div>
           {getStrengthBar(regime.regimeStrength)}
           <div className="text-right text-xs mt-1 text-slate-300">
-            {(regime.regimeStrength * 100).toFixed(0)}%
+            {((regime.regimeStrength ?? 0) * 100).toFixed(0)}%
           </div>
         </div>
         <div className="bg-slate-700/30 p-3 rounded-lg">
           <div className="text-xs text-slate-400 mb-2">Coherence</div>
           {getStrengthBar(regime.regimeCoherence)}
           <div className="text-right text-xs mt-1 text-slate-300">
-            {(regime.regimeCoherence * 100).toFixed(0)}%
+            {((regime.regimeCoherence ?? 0) * 100).toFixed(0)}%
           </div>
         </div>
       </div>
@@ -109,7 +109,7 @@ export default function RegimePanel({ regime }: RegimePanelProps) {
                 {tf.tf.replace(/_/g, ' ').substring(0, 8)}
               </div>
               <div className="text-xs opacity-75 mt-1">
-                {(tf.strength * 100).toFixed(0)}%
+                {((tf.strength ?? 0) * 100).toFixed(0)}%
               </div>
             </div>
           ))}

@@ -289,9 +289,9 @@ const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
    ═══════════════════════════════════════════════════════════════ */
 
 const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono
+  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
     ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[10px]">{label}</span>
+    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
     <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
   </div>
 );
@@ -368,7 +368,7 @@ const FilterDropdown: React.FC<{
   onClose: () => void;
   onReset: () => void;
 }> = ({ direction, exchange, onDirectionChange, onExchangeChange, onClose, onReset }) => (
-  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[260px] animate-slideDown">
+  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[260px] animate-slideDown mobile-dropdown-full">
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
       <div className="flex gap-2">
@@ -518,8 +518,8 @@ const MicroAlphaCard: React.FC<{
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-hidden transition-all duration-200 hover:shadow-lg mx-4 md:mx-0`}>
-      <div className="p-4">
+      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
+      <div className="p-3 sm:p-4">
 
         {/* ── TOP SECTION ── */}
         <div className="flex items-start justify-between mb-1">
@@ -606,7 +606,7 @@ const MicroAlphaCard: React.FC<{
         </div>
 
         {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1">
+        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
           <MetricsChip label="Conv" value={`${sig.absConviction.toFixed(0)}%`} bold accent="bg-cyan-500/15 text-cyan-300" />
           <MetricsChip label="Score" value={sig.score.toFixed(1)} />
           <MetricsChip label="Mode" value={getModeLabel(sig.tradingMode)} />
@@ -979,7 +979,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
         )}
 
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
               <MicroAlphaCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}

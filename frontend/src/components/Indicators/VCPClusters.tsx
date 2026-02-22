@@ -18,18 +18,18 @@ export function VCPClusters({ data }: VCPClustersProps) {
             <div className="card-header flex justify-between items-center">
                 <span>📊 VCP Clusters</span>
                 <div className={`text-xl font-bold ${data.vcpCombinedScore >= 60 ? 'text-emerald-400' : data.vcpCombinedScore <= 40 ? 'text-red-400' : 'text-amber-400'}`}>
-                    {data.vcpCombinedScore.toFixed(0)}
+                    {(data.vcpCombinedScore ?? 0).toFixed(0)}
                 </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2 mb-4 text-center text-xs">
                 <div className="bg-slate-700/30 p-2 rounded">
                     <div className="text-slate-400">Runway</div>
-                    <div className="font-bold text-white">{(data.runwayScore * 100).toFixed(0)}%</div>
+                    <div className="font-bold text-white">{((data.runwayScore ?? 0) * 100).toFixed(0)}%</div>
                 </div>
                 <div className="bg-slate-700/30 p-2 rounded">
                     <div className="text-slate-400">Bias</div>
-                    <div className="font-bold text-white">{data.structuralBias.toFixed(2)}</div>
+                    <div className="font-bold text-white">{(data.structuralBias ?? 0).toFixed(2)}</div>
                 </div>
                 <div className="bg-slate-700/30 p-2 rounded">
                     <div className="text-slate-400">Clusters</div>
@@ -69,7 +69,7 @@ export function VCPClusters({ data }: VCPClustersProps) {
             </div>
 
             <div className="mt-3 text-xs text-center text-slate-500">
-                Current Price: <span className="text-white font-mono">{data.currentPrice.toFixed(2)}</span> •
+                Current Price: <span className="text-white font-mono">{(data.currentPrice ?? 0).toFixed(2)}</span> •
                 Position: <span className={data.pricePosition === 'ABOVE_POC' ? 'text-emerald-400' : data.pricePosition === 'BELOW_POC' ? 'text-red-400' : 'text-slate-400'}>{data.pricePosition.replace('_', ' ')}</span>
             </div>
         </div>

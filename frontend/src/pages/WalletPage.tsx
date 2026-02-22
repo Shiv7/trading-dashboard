@@ -154,7 +154,7 @@ export default function WalletPage() {
         </div>
 
         {/* Tab Content */}
-        <div className="px-4 py-6">
+        <div className="px-1.5 sm:px-4 py-4 sm:py-6">
           {/* Positions Tab */}
           {activeTab === 'positions' && (
             <div className="space-y-6">
@@ -180,13 +180,13 @@ export default function WalletPage() {
                 </div>
 
                 {loading ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 animate-pulse">
                     {[...Array(3)].map((_, i) => (
                       <div key={i} className="h-40 bg-slate-700/30 rounded-xl" />
                     ))}
                   </div>
                 ) : filteredPositions.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                     {filteredPositions.map(pos => (
                       <PositionCard
                         key={pos.positionId}

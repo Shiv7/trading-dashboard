@@ -147,7 +147,7 @@ export function MTFScoreHeatmap({ scores }: MTFScoreHeatmapProps) {
             overallConsensus.direction === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
             'bg-slate-700 text-slate-400'
           }`}>
-            {overallConsensus.percentage.toFixed(0)}% {overallConsensus.direction}
+            {(overallConsensus.percentage ?? 0).toFixed(0)}% {overallConsensus.direction}
           </span>
           <span className="text-xs px-2 py-1 rounded bg-purple-500/20 text-purple-400">
             Horizon: {getRecommendedHorizon()}
@@ -193,7 +193,7 @@ export function MTFScoreHeatmap({ scores }: MTFScoreHeatmapProps) {
                 })}
                 <td className="text-center py-1.5 px-1">
                   <span className={`${consensus.percentage >= 75 ? 'text-emerald-400' : consensus.percentage >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
-                    {consensus.icon} {consensus.percentage.toFixed(0)}%
+                    {consensus.icon} {(consensus.percentage ?? 0).toFixed(0)}%
                   </span>
                 </td>
               </tr>
@@ -237,7 +237,7 @@ export function MTFScoreHeatmap({ scores }: MTFScoreHeatmapProps) {
               )
             })}
             <td className="text-center py-1.5 px-1">
-              <span className="text-amber-400">{overallConsensus.percentage.toFixed(0)}%</span>
+              <span className="text-amber-400">{(overallConsensus.percentage ?? 0).toFixed(0)}%</span>
             </td>
           </tr>
         </tbody>

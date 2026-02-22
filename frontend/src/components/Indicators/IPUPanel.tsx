@@ -23,7 +23,7 @@ export function IPUPanel({ data }: IPUPanelProps) {
                     )}
                 </div>
                 <div className={`text-xl font-bold ${getScoreColor(data.ipuFinalScore)}`}>
-                    {(data.ipuFinalScore * 100).toFixed(0)}%
+                    {((data.ipuFinalScore ?? 0) * 100).toFixed(0)}%
                 </div>
             </div>
 
@@ -35,25 +35,25 @@ export function IPUPanel({ data }: IPUPanelProps) {
                         <div className="flex justify-between">
                             <span>Inst. Proxy</span>
                             <span className={getScoreColor(data.institutionalProxy)}>
-                                {(data.institutionalProxy * 100).toFixed(0)}%
+                                {((data.institutionalProxy ?? 0) * 100).toFixed(0)}%
                             </span>
                         </div>
                         <div className="flex justify-between">
                             <span>Momentum</span>
                             <span className={getScoreColor(data.momentum)}>
-                                {(data.momentum * 100).toFixed(0)}%
+                                {((data.momentum ?? 0) * 100).toFixed(0)}%
                             </span>
                         </div>
                         <div className="flex justify-between">
                             <span>Urgency</span>
                             <span className={getScoreColor(data.urgency)}>
-                                {(data.urgency * 100).toFixed(0)}%
+                                {((data.urgency ?? 0) * 100).toFixed(0)}%
                             </span>
                         </div>
                         <div className="flex justify-between">
                             <span>Exhaustion</span>
                             <span className={data.exhaustion > 0.7 ? 'text-red-400' : 'text-slate-300'}>
-                                {(data.exhaustion * 100).toFixed(0)}%
+                                {((data.exhaustion ?? 0) * 100).toFixed(0)}%
                             </span>
                         </div>
                     </div>
@@ -65,12 +65,12 @@ export function IPUPanel({ data }: IPUPanelProps) {
                     <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                             <span>Aggressive</span>
-                            <span className="text-white">{data.aggressiveVolumeRatio.toFixed(0)}%</span>
+                            <span className="text-white">{(data.aggressiveVolumeRatio ?? 0).toFixed(0)}%</span>
                         </div>
                         <div className="flex justify-between">
                             <span>Expansion</span>
                             <span className={data.volumeExpansionPct > 0 ? 'text-emerald-400' : 'text-slate-400'}>
-                                {data.volumeExpansionPct > 0 ? '+' : ''}{data.volumeExpansionPct.toFixed(1)}%
+                                {data.volumeExpansionPct > 0 ? '+' : ''}{(data.volumeExpansionPct ?? 0).toFixed(1)}%
                             </span>
                         </div>
                         <div className="flex justify-between">

@@ -51,7 +51,7 @@ export default function TradeRow({ trade }: TradeRowProps) {
         </span>
       </td>
       <td className="py-3 px-4 text-slate-300">
-        {trade.entryPrice.toFixed(2)}
+        {(trade.entryPrice ?? 0).toFixed(2)}
       </td>
       <td className="py-3 px-4 text-slate-300">
         {trade.exitPrice?.toFixed(2) || '-'}
@@ -61,12 +61,12 @@ export default function TradeRow({ trade }: TradeRowProps) {
           {formatCurrency(trade.pnl)}
         </span>
         <div className={`text-xs ${trade.pnl >= 0 ? 'num-positive' : 'num-negative'}`}>
-          {trade.pnlPercent >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
+          {trade.pnlPercent >= 0 ? '+' : ''}{(trade.pnlPercent ?? 0).toFixed(2)}%
         </div>
       </td>
       <td className="py-3 px-4">
         <span className={`font-medium ${trade.rMultiple >= 0 ? 'num-positive' : 'num-negative'}`}>
-          {trade.rMultiple >= 0 ? '+' : ''}{trade.rMultiple.toFixed(2)}R
+          {trade.rMultiple >= 0 ? '+' : ''}{(trade.rMultiple ?? 0).toFixed(2)}R
         </span>
       </td>
       <td className="py-3 px-4 text-slate-400 text-sm">

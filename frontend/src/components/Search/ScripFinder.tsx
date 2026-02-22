@@ -190,9 +190,9 @@ export default function ScripFinder({
                     </span>
                   </div>
                   <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-400">
-                    <span>Score: <span className="text-white">{score.overallScore.toFixed(1)}</span></span>
-                    <span>VCP: <span className="text-white">{(score.vcpCombinedScore * 100).toFixed(0)}%</span></span>
-                    <span>IPU: <span className="text-white">{(score.ipuFinalScore * 100).toFixed(0)}%</span></span>
+                    <span>Score: <span className="text-white">{(score.overallScore ?? 0).toFixed(1)}</span></span>
+                    <span>VCP: <span className="text-white">{((score.vcpCombinedScore ?? 0) * 100).toFixed(0)}%</span></span>
+                    <span>IPU: <span className="text-white">{((score.ipuFinalScore ?? 0) * 100).toFixed(0)}%</span></span>
                   </div>
                 </div>
 

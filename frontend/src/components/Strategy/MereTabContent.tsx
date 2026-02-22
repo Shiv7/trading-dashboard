@@ -10,6 +10,7 @@ import type { StrategyTradeRequest } from '../../types/orders';
 type SortField = 'score' | 'rr' | 'time' | 'percentB' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
+type VariantFilter = 'ALL' | 'MERE' | 'MERE_SCALP' | 'MERE_SWING' | 'MERE_POSITIONAL';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -91,6 +92,7 @@ interface MereTrigger {
   futuresExchange?: string;
   futuresExchangeType?: string;
   cachedAt: number;
+  mereVariant?: string;
 }
 
 interface TradePlan {
@@ -237,18 +239,20 @@ function mapToOptionLevels(
 }
 
 function formatTriggerTime(sig: MereTrigger): string {
+  let d: Date | null = null;
   if (sig.triggerTime) {
     try {
-      const d = new Date(sig.triggerTime);
-      if (!isNaN(d.getTime())) {
-        return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-      }
+      const parsed = new Date(sig.triggerTime);
+      if (!isNaN(parsed.getTime())) d = parsed;
     } catch { /* fall through */ }
   }
-  if (sig.triggerTimeEpoch) {
-    return new Date(sig.triggerTimeEpoch).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  if (!d && sig.triggerTimeEpoch) {
+    d = new Date(sig.triggerTimeEpoch);
   }
-  return '';
+  if (!d) return '';
+  const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
+  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+  return `${date}, ${time}`;
 }
 
 function getEpoch(sig: MereTrigger): number {
@@ -274,6 +278,15 @@ function getOIAccent(label?: string): string {
   if (label === 'LONG_BUILDUP' || label === 'SHORT_BUILDUP') return 'bg-green-500/15 text-green-300';
   if (label === 'SHORT_COVERING' || label === 'LONG_UNWINDING') return 'bg-orange-500/15 text-orange-300';
   return 'bg-slate-700/50 text-slate-300';
+}
+
+function getVariantBadge(variant?: string): { label: string; color: string } | null {
+  switch (variant) {
+    case 'MERE_SCALP': return { label: 'Scalp', color: 'bg-blue-500/15 text-blue-400 border-blue-500/30' };
+    case 'MERE_SWING': return { label: 'Swing', color: 'bg-orange-500/15 text-orange-400 border-orange-500/30' };
+    case 'MERE_POSITIONAL': return { label: 'Positional', color: 'bg-purple-500/15 text-purple-400 border-purple-500/30' };
+    default: return null;
+  }
 }
 
 /** Compute lot sizing based on confidence and wallet capital */
@@ -537,15 +550,43 @@ const ExecutionOverlay: React.FC<{
    FILTER DROPDOWN
    ═══════════════════════════════════════════════════════════════ */
 
+const VARIANT_OPTIONS: { key: VariantFilter; label: string; color: string }[] = [
+  { key: 'ALL', label: 'All', color: 'bg-teal-500/20 text-teal-400 border border-teal-500/40' },
+  { key: 'MERE', label: 'Base', color: 'bg-teal-500/20 text-teal-400 border border-teal-500/40' },
+  { key: 'MERE_SCALP', label: 'Scalp', color: 'bg-blue-500/20 text-blue-400 border border-blue-500/40' },
+  { key: 'MERE_SWING', label: 'Swing', color: 'bg-orange-500/20 text-orange-400 border border-orange-500/40' },
+  { key: 'MERE_POSITIONAL', label: 'Pos.', color: 'bg-purple-500/20 text-purple-400 border border-purple-500/40' },
+];
+
 const FilterDropdown: React.FC<{
   direction: DirectionFilter;
   exchange: ExchangeFilter;
+  variant: VariantFilter;
   onDirectionChange: (d: DirectionFilter) => void;
   onExchangeChange: (e: ExchangeFilter) => void;
+  onVariantChange: (v: VariantFilter) => void;
   onClose: () => void;
   onReset: () => void;
-}> = ({ direction, exchange, onDirectionChange, onExchangeChange, onClose, onReset }) => (
+}> = ({ direction, exchange, variant, onDirectionChange, onExchangeChange, onVariantChange, onClose, onReset }) => (
   <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[260px] animate-slideDown mobile-dropdown-full">
+    <div className="mb-4">
+      <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Variant</div>
+      <div className="flex gap-1.5 flex-wrap">
+        {VARIANT_OPTIONS.map(({ key, label, color }) => (
+          <button
+            key={key}
+            onClick={() => onVariantChange(key)}
+            className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+              variant === key
+                ? color
+                : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
       <div className="flex gap-2">
@@ -687,6 +728,7 @@ const MereCard: React.FC<{
 
   const displayName = trigger.symbol || trigger.companyName || trigger.scripCode;
   const confidence = trigger.mereScore;
+  const variantBadge = getVariantBadge(trigger.mereVariant);
 
   // Option / Futures instrument resolution
   const hasRealOption = trigger.optionAvailable === true && trigger.optionLtp != null && trigger.optionLtp > 0;
@@ -739,6 +781,14 @@ const MereCard: React.FC<{
           <div>
             <h3 className="text-lg font-semibold text-white leading-tight">{displayName}</h3>
             <div className="flex items-center gap-2 mt-1">
+              {variantBadge && (
+                <>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${variantBadge.color}`}>
+                    {variantBadge.label}
+                  </span>
+                  <span className="text-slate-700">|</span>
+                </>
+              )}
               <span className="text-xs text-slate-500">
                 Score <span className="font-mono text-teal-400 font-semibold">{trigger.mereScore}</span>
               </span>
@@ -894,6 +944,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   const [sortField, setSortField] = useState<SortField>('timestamp');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL');
+  const [variantFilter, setVariantFilter] = useState<VariantFilter>('ALL');
   const [showFilter, setShowFilter] = useState(false);
   const [showSort, setShowSort] = useState(false);
   const [execution, setExecution] = useState<ExecutionState>({
@@ -952,9 +1003,22 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   }, []);
 
   /* FILTER */
-  const hasActiveFilter = directionFilter !== 'ALL' || exchangeFilter !== 'ALL';
+  const hasActiveFilter = directionFilter !== 'ALL' || exchangeFilter !== 'ALL' || variantFilter !== 'ALL';
 
-  let filtered = triggers.filter(t => t.triggered);
+  // Deduplicate by scripCode+mereVariant, keeping the latest signal
+  const deduped = Object.values(
+    triggers.reduce<Record<string, MereTrigger>>((acc, t) => {
+      const key = `${t.scripCode}|${t.mereVariant || 'MERE'}`;
+      const existing = acc[key];
+      if (!existing || getEpoch(t) > getEpoch(existing)) acc[key] = t;
+      return acc;
+    }, {})
+  );
+
+  let filtered = deduped.filter(t => t.triggered);
+  if (variantFilter !== 'ALL') {
+    filtered = filtered.filter(s => (s.mereVariant || 'MERE') === variantFilter);
+  }
   if (directionFilter !== 'ALL') {
     filtered = filtered.filter(s => s.direction === directionFilter);
   }
@@ -1118,6 +1182,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   const resetFilters = useCallback(() => {
     setDirectionFilter('ALL');
     setExchangeFilter('ALL');
+    setVariantFilter('ALL');
     setShowFilter(false);
   }, []);
 
@@ -1152,8 +1217,10 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
                 <FilterDropdown
                   direction={directionFilter}
                   exchange={exchangeFilter}
+                  variant={variantFilter}
                   onDirectionChange={setDirectionFilter}
                   onExchangeChange={setExchangeFilter}
+                  onVariantChange={setVariantFilter}
                   onClose={() => setShowFilter(false)}
                   onReset={resetFilters}
                 />

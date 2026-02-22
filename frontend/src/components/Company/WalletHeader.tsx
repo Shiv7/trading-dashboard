@@ -54,7 +54,7 @@ export default function WalletHeader({ wallet, className = '' }: WalletHeaderPro
                     <div className="text-xs text-slate-400 uppercase tracking-wide">Win Rate</div>
                     <div className={`text-lg font-bold ${displayWallet.winRate >= 50 ? 'text-emerald-400' : 'text-amber-400'
                         }`}>
-                        {displayWallet.winRate.toFixed(0)}%
+                        {(displayWallet.winRate ?? 0).toFixed(0)}%
                     </div>
                 </div>
             )}

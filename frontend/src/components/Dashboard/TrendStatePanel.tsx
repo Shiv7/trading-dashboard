@@ -100,7 +100,7 @@ export default function TrendStatePanel({ acl, activeIgnitions = [], indexName =
               TF Agreement: <span className={acl.agreementScore >= 3 ? 'text-emerald-400' : 'text-slate-300'}>{acl.agreementScore}/4</span>
             </span>
             <span className="text-slate-400">
-              Multiplier: <span className={acl.aclMultiplier >= 1 ? 'text-emerald-400' : 'text-amber-400'}>{acl.aclMultiplier.toFixed(2)}x</span>
+              Multiplier: <span className={acl.aclMultiplier >= 1 ? 'text-emerald-400' : 'text-amber-400'}>{(acl.aclMultiplier ?? 0).toFixed(2)}x</span>
             </span>
           </div>
         </div>

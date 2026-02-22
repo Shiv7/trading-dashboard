@@ -114,10 +114,10 @@ export default function MasterArchPanel({ signals = [] }: MasterArchPanelProps) 
                     </Link>
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                       <span className={getScoreColor(signal.finalScore)}>
-                        Score: {(signal.finalScore * 100).toFixed(0)}%
+                        Score: {((signal.finalScore ?? 0) * 100).toFixed(0)}%
                       </span>
                       <span>•</span>
-                      <span>Conf: {(signal.directionConfidence * 100).toFixed(0)}%</span>
+                      <span>Conf: {((signal.directionConfidence ?? 0) * 100).toFixed(0)}%</span>
                     </div>
                   </div>
                 </div>
@@ -163,19 +163,19 @@ export default function MasterArchPanel({ signals = [] }: MasterArchPanelProps) 
                   <div className="text-center p-2 bg-slate-700/30 rounded">
                     <div className="text-xs text-slate-400">Index Context</div>
                     <div className={`text-sm font-medium ${getScoreColor(signal.indexContextScore)}`}>
-                      {(signal.indexContextScore * 100).toFixed(0)}%
+                      {((signal.indexContextScore ?? 0) * 100).toFixed(0)}%
                     </div>
                   </div>
                   <div className="text-center p-2 bg-slate-700/30 rounded">
                     <div className="text-xs text-slate-400">Security Context</div>
                     <div className={`text-sm font-medium ${getScoreColor(signal.securityContextScore)}`}>
-                      {(signal.securityContextScore * 100).toFixed(0)}%
+                      {((signal.securityContextScore ?? 0) * 100).toFixed(0)}%
                     </div>
                   </div>
                   <div className="text-center p-2 bg-slate-700/30 rounded">
                     <div className="text-xs text-slate-400">Signal Strength</div>
                     <div className={`text-sm font-medium ${getScoreColor(signal.signalStrengthScore)}`}>
-                      {(signal.signalStrengthScore * 100).toFixed(0)}%
+                      {((signal.signalStrengthScore ?? 0) * 100).toFixed(0)}%
                     </div>
                   </div>
                 </div>

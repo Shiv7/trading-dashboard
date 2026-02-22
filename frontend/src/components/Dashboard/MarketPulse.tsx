@@ -116,9 +116,9 @@ export default function MarketPulse({ limit = 5 }: MarketPulseProps) {
 }
 
 function IPUItem({ signal }: { signal: IPUSignal }) {
-  const scoreColor = signal.ipuFinalScore >= 0.7
+  const scoreColor = (signal.ipuFinalScore ?? 0) >= 0.7
     ? 'text-emerald-400 bg-emerald-500/10'
-    : signal.ipuFinalScore >= 0.5
+    : (signal.ipuFinalScore ?? 0) >= 0.5
       ? 'text-amber-400 bg-amber-500/10'
       : 'text-slate-400 bg-slate-500/10'
 
@@ -129,7 +129,7 @@ function IPUItem({ signal }: { signal: IPUSignal }) {
     >
       {/* Score Circle */}
       <div className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold text-lg ${scoreColor}`}>
-        {(signal.ipuFinalScore * 100).toFixed(0)}
+        {((signal.ipuFinalScore ?? 0) * 100).toFixed(0)}
       </div>
 
       {/* Info */}
@@ -149,7 +149,7 @@ function IPUItem({ signal }: { signal: IPUSignal }) {
             {signal.ipuDirection}
           </span>
           <span>•</span>
-          <span>Inst: {(signal.institutionalProxy * 100).toFixed(0)}%</span>
+          <span>Inst: {((signal.institutionalProxy ?? 0) * 100).toFixed(0)}%</span>
           <span>•</span>
           <span>Mom: {signal.momentumState}</span>
         </div>
@@ -164,9 +164,9 @@ function IPUItem({ signal }: { signal: IPUSignal }) {
 }
 
 function VCPItem({ signal }: { signal: VCPSignal }) {
-  const scoreColor = signal.vcpCombinedScore >= 60
+  const scoreColor = (signal.vcpCombinedScore ?? 0) >= 60
     ? 'text-emerald-400 bg-emerald-500/10'
-    : signal.vcpCombinedScore >= 40
+    : (signal.vcpCombinedScore ?? 0) >= 40
       ? 'text-amber-400 bg-amber-500/10'
       : 'text-slate-400 bg-slate-500/10'
 
@@ -177,7 +177,7 @@ function VCPItem({ signal }: { signal: VCPSignal }) {
     >
       {/* Score Circle */}
       <div className={`w-12 h-12 rounded-lg flex items-center justify-center font-bold text-lg ${scoreColor}`}>
-        {signal.vcpCombinedScore.toFixed(0)}
+        {(signal.vcpCombinedScore ?? 0).toFixed(0)}
       </div>
 
       {/* Info */}
@@ -197,7 +197,7 @@ function VCPItem({ signal }: { signal: VCPSignal }) {
             {signal.vcpSignal}
           </span>
           <span>•</span>
-          <span>Runway: {(signal.runwayScore * 100).toFixed(0)}%</span>
+          <span>Runway: {((signal.runwayScore ?? 0) * 100).toFixed(0)}%</span>
           <span>•</span>
           <span>{signal.totalClusters} clusters</span>
         </div>

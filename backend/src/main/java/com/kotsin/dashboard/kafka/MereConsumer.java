@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
  * MERE detects mean reversion setups where price has deviated from BB bands
  * and conditions favor a snap-back to the mean.
  *
- * Consumes from: kotsin_MERE
+ * Consumes from: kotsin_MERE, kotsin_MERE_SCALP, kotsin_MERE_SWING, kotsin_MERE_POSITIONAL
  */
 @Component
 @Slf4j
@@ -99,7 +99,7 @@ public class MereConsumer {
     }
 
     @KafkaListener(
-            topics = {"kotsin_MERE"},
+            topics = {"kotsin_MERE", "kotsin_MERE_SCALP", "kotsin_MERE_SWING", "kotsin_MERE_POSITIONAL"},
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
     )
     public void onMERE(String payload) {
@@ -123,6 +123,7 @@ public class MereConsumer {
 
             Map<String, Object> mereData = parseMERE(root);
             boolean triggered = Boolean.TRUE.equals(mereData.get("triggered"));
+            String variant = (String) mereData.getOrDefault("mereVariant", "MERE");
 
             if (triggered) {
                 // Daily cap check
@@ -143,8 +144,9 @@ public class MereConsumer {
                         symbol != null && !symbol.isEmpty() ? symbol :
                         (companyName != null && !companyName.isEmpty() ? companyName : null));
 
-                log.info("MERE TRIGGER: {} ({}) direction={} score={} [L1={} L2={} L3={} bonus={}] [signals today: {}]",
-                        displayName, scripCode, direction,
+                String variantTag = "MERE".equals(variant) ? "" : " [" + variant + "]";
+                log.info("MERE TRIGGER{}: {} ({}) direction={} score={} [L1={} L2={} L3={} bonus={}] [signals today: {}]",
+                        variantTag, displayName, scripCode, direction,
                         mereData.get("mereScore"),
                         mereData.get("mereLayer1"),
                         mereData.get("mereLayer2"),
@@ -181,14 +183,28 @@ public class MereConsumer {
                         stopLoss, slSource, target1, riskReward,
                         mereData.get("percentB"));
 
+                String horizon = switch (variant) {
+                    case "MERE_SCALP" -> "SCALP";
+                    case "MERE_SWING" -> "SWING";
+                    case "MERE_POSITIONAL" -> "POSITIONAL";
+                    default -> "INTRADAY";
+                };
+                String sourceLabel = switch (variant) {
+                    case "MERE_SCALP" -> "Mean Reversion (Scalp)";
+                    case "MERE_SWING" -> "Mean Reversion (Swing)";
+                    case "MERE_POSITIONAL" -> "Mean Reversion (Positional)";
+                    default -> "Mean Reversion";
+                };
+
                 SignalDTO signalDTO = SignalDTO.builder()
                         .signalId(UUID.randomUUID().toString())
                         .scripCode(scripCode)
                         .companyName(displayName)
                         .timestamp(LocalDateTime.now(IST))
                         .signalSource("MERE")
-                        .signalSourceLabel("Mean Reversion")
+                        .signalSourceLabel(sourceLabel)
                         .signalType("MERE")
+                        .horizon(horizon)
                         .direction(direction)
                         .confidence(Math.min(1.0, mereScore / 100.0))
                         .rationale(rationale)
@@ -206,9 +222,11 @@ public class MereConsumer {
 
                 // Send notification
                 String emoji = "BULLISH".equals(direction) ? "^" : "v";
+                String notifLabel = "MERE".equals(variant) ? "MERE (mean reversion)"
+                        : variant.replace("MERE_", "MERE ").toLowerCase() + " (mean reversion)";
                 sessionManager.broadcastNotification("MERE_TRIGGER",
-                        String.format("%s %s MERE (mean reversion) for %s @ %.2f | Score=%.0f",
-                                emoji, direction, displayName, triggerPrice, mereScore));
+                        String.format("%s %s %s for %s @ %.2f | Score=%.0f",
+                                emoji, direction, notifLabel, displayName, triggerPrice, mereScore));
 
                 // Update latest
                 latestMERE.put(scripCode, mereData);
@@ -229,6 +247,10 @@ public class MereConsumer {
 
     private Map<String, Object> parseMERE(JsonNode root) {
         Map<String, Object> data = new HashMap<>();
+
+        // Detect variant (MTF strategies set "strategy" field)
+        String strategy = root.path("strategy").asText("MERE");
+        data.put("mereVariant", strategy);
 
         // Basic info
         data.put("scripCode", root.path("scripCode").asText());
@@ -258,7 +280,7 @@ public class MereConsumer {
             data.put("triggerTimeEpoch", System.currentTimeMillis());
         }
 
-        // MERE-specific scoring
+        // MERE-specific scoring (base MERE field names)
         data.put("mereScore", root.path("mereScore").asInt(0));
         data.put("mereLayer1", root.path("mereLayer1").asInt(0));
         data.put("mereLayer2", root.path("mereLayer2").asInt(0));
@@ -266,6 +288,11 @@ public class MereConsumer {
         data.put("mereBonus", root.path("mereBonus").asInt(0));
         data.put("merePenalty", root.path("merePenalty").asInt(0));
         data.put("mereReasons", root.path("mereReasons").asText(""));
+
+        // Normalize variant-specific field names to standard MERE fields
+        if (!"MERE".equals(strategy)) {
+            normalizeVariantFields(root, data, strategy);
+        }
 
         // Bollinger Bands data
         data.put("bbUpper", root.path("bbUpper").asDouble(0));
@@ -329,6 +356,62 @@ public class MereConsumer {
         if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
 
         return data;
+    }
+
+    /**
+     * Normalizes variant-specific payload field names to standard MERE fields.
+     * MTF triggers (Scalp, Swing, Positional) use variant-prefixed field names
+     * for scoring that differ from what the dashboard expects.
+     */
+    private void normalizeVariantFields(JsonNode root, Map<String, Object> data, String strategy) {
+        switch (strategy) {
+            case "MERE_SCALP" -> {
+                data.put("mereScore", root.path("scalpScore").asInt(0));
+                data.put("mereLayer1", root.path("scalpLayer1_30mContext").asInt(0));
+                data.put("mereLayer2", root.path("scalpLayer2_30mTrend").asInt(0));
+                data.put("mereLayer3", root.path("scalpLayer3_5mEntry").asInt(0));
+                data.put("mereBonus", root.path("scalpLayer4_OIOptions").asInt(0)
+                        + root.path("scalpTimeBonus").asInt(0));
+                data.put("merePenalty", root.path("scalpPenalty").asInt(0));
+                data.put("mereReasons", root.path("scalpReasons").asText(""));
+                // BB/SuperTrend fields already use the same names as base MERE
+            }
+            case "MERE_SWING" -> {
+                data.put("mereScore", root.path("swingMereScore").asInt(0));
+                data.put("mereLayer1", root.path("swingLayer1").asInt(0));
+                data.put("mereLayer2", root.path("swingLayer2").asInt(0));
+                data.put("mereLayer3", root.path("swingLayer3").asInt(0));
+                data.put("mereBonus", root.path("swingLayer4").asInt(0)
+                        + root.path("swingLayer5").asInt(0));
+                data.put("merePenalty", root.path("swingPenalty").asInt(0));
+                data.put("mereReasons", root.path("swingReasons").asText(""));
+                // Remap daily BB fields to standard names
+                if (root.has("daily_bbUpper")) data.put("bbUpper", root.path("daily_bbUpper").asDouble(0));
+                if (root.has("daily_bbMiddle")) data.put("bbMiddle", root.path("daily_bbMiddle").asDouble(0));
+                if (root.has("daily_bbLower")) data.put("bbLower", root.path("daily_bbLower").asDouble(0));
+                if (root.has("daily_percentB")) data.put("percentB", root.path("daily_percentB").asDouble(0));
+                if (root.has("daily_bbBandwidth")) data.put("bbWidth", root.path("daily_bbBandwidth").asDouble(0));
+            }
+            case "MERE_POSITIONAL" -> {
+                data.put("mereScore", root.path("positionalScore").asInt(0));
+                data.put("mereLayer1", root.path("scoreLayer1_WeeklyContext").asInt(0));
+                data.put("mereLayer2", root.path("scoreLayer2_DailySignal").asInt(0));
+                data.put("mereLayer3", root.path("scoreLayer3_OIOptions").asInt(0));
+                data.put("mereBonus", root.path("scoreLayer4_PivotStructure").asInt(0)
+                        + root.path("scoreLayer5_H4Confirmation").asInt(0));
+                data.put("merePenalty", root.path("scorePenalty").asInt(0));
+                data.put("mereReasons", root.path("scoreReasons").asText(""));
+                // Remap weekly BB fields to standard names
+                if (root.has("weeklyBBUpper")) data.put("bbUpper", root.path("weeklyBBUpper").asDouble(0));
+                if (root.has("weeklyBBMiddle")) data.put("bbMiddle", root.path("weeklyBBMiddle").asDouble(0));
+                if (root.has("weeklyBBLower")) data.put("bbLower", root.path("weeklyBBLower").asDouble(0));
+                if (root.has("weeklyPercentB")) data.put("percentB", root.path("weeklyPercentB").asDouble(0));
+                if (root.has("weeklyBBWidth")) data.put("bbWidth", root.path("weeklyBBWidth").asDouble(0));
+            }
+            default -> log.warn("Unknown MERE variant: {}", strategy);
+        }
+        // Also update triggerScore to match normalized mereScore
+        data.put("triggerScore", ((Number) data.get("mereScore")).doubleValue());
     }
 
     // --- REDIS PERSISTENCE ---

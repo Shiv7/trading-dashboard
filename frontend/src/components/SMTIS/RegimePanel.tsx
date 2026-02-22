@@ -90,7 +90,7 @@ export const RegimePanel: React.FC<RegimePanelProps> = ({
                                         {regimeLabels[regime.regime]}
                                     </span>
                                     <span className="text-xs text-slate-500">
-                                        z:{regime.zScore > 0 ? '+' : ''}{regime.zScore.toFixed(1)}
+                                        z:{regime.zScore > 0 ? '+' : ''}{(regime.zScore ?? 0).toFixed(1)}
                                     </span>
                                 </div>
                             </div>
@@ -112,7 +112,7 @@ export const RegimePanel: React.FC<RegimePanelProps> = ({
 
                             <div className="flex justify-between mt-1">
                                 <span className="text-[10px] text-slate-600">0%</span>
-                                <span className="text-[10px] text-slate-500">{regime.percentile.toFixed(0)}th pctl</span>
+                                <span className="text-[10px] text-slate-500">{(regime.percentile ?? 0).toFixed(0)}th pctl</span>
                                 <span className="text-[10px] text-slate-600">100%</span>
                             </div>
                         </div>

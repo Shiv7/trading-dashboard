@@ -147,26 +147,26 @@ export default function PerformanceCharts({ trades, initialCapital = 100000 }: P
           <div className="card bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 border-emerald-500/20">
             <div className="text-xs text-emerald-400 mb-1">Total Return</div>
             <div className={`text-2xl font-bold ${stats.totalReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {stats.totalReturn >= 0 ? '+' : ''}{stats.totalReturn.toFixed(1)}%
+              {stats.totalReturn >= 0 ? '+' : ''}{(stats.totalReturn ?? 0).toFixed(1)}%
             </div>
           </div>
           <div className="card bg-gradient-to-br from-red-500/10 to-red-600/5 border-red-500/20">
             <div className="text-xs text-red-400 mb-1">Max Drawdown</div>
             <div className="text-2xl font-bold text-red-400">
-              {stats.maxDrawdownPct.toFixed(1)}%
+              {(stats.maxDrawdownPct ?? 0).toFixed(1)}%
             </div>
             <div className="text-xs text-slate-500">{formatCurrency(stats.maxDrawdown)}</div>
           </div>
           <div className="card bg-gradient-to-br from-blue-500/10 to-blue-600/5 border-blue-500/20">
             <div className="text-xs text-blue-400 mb-1">Profit Factor</div>
             <div className={`text-2xl font-bold ${stats.profitFactor >= 1.5 ? 'text-emerald-400' : stats.profitFactor >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-              {stats.profitFactor.toFixed(2)}
+              {(stats.profitFactor ?? 0).toFixed(2)}
             </div>
           </div>
           <div className="card bg-gradient-to-br from-purple-500/10 to-purple-600/5 border-purple-500/20">
             <div className="text-xs text-purple-400 mb-1">Return/DD Ratio</div>
             <div className={`text-2xl font-bold ${stats.sharpeEstimate >= 2 ? 'text-emerald-400' : stats.sharpeEstimate >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-              {stats.sharpeEstimate.toFixed(2)}
+              {(stats.sharpeEstimate ?? 0).toFixed(2)}
             </div>
           </div>
         </div>
@@ -233,7 +233,7 @@ export default function PerformanceCharts({ trades, initialCapital = 100000 }: P
         <div className="card-header">
           <span>📉 Drawdown</span>
           <span className="text-xs text-red-400">
-            Max: {stats?.maxDrawdownPct.toFixed(1)}%
+            Max: {(stats?.maxDrawdownPct ?? 0).toFixed(1)}%
           </span>
         </div>
         <ResponsiveContainer width="100%" height={150}>

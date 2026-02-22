@@ -147,8 +147,8 @@ export default function WatchlistPage() {
   }
 
   const formatPrice = (n: number) => n?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'
-  const formatChange = (n: number) => (n >= 0 ? '+' : '') + n?.toFixed(2)
-  const formatChangePct = (n: number) => (n >= 0 ? '+' : '') + n?.toFixed(2) + '%'
+  const formatChange = (n: number) => ((n ?? 0) >= 0 ? '+' : '') + (n ?? 0).toFixed(2)
+  const formatChangePct = (n: number) => ((n ?? 0) >= 0 ? '+' : '') + (n ?? 0).toFixed(2) + '%'
 
   if (loading) {
     return (

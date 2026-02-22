@@ -794,9 +794,14 @@ public class StrategyTradeExecutor {
         double optionSlLevel = currentSl; // already the trailing/current SL for options
         double equitySlLevel = targets.get("equitySl") != null
             ? ((Number) targets.get("equitySl")).doubleValue() : 0;
+        String direction = (String) targets.getOrDefault("direction", "BULLISH");
+        boolean isBearish = "BEARISH".equals(direction);
 
         boolean optionSlHit = optionLtp <= optionSlLevel;
-        boolean equitySlHit = equityLtp > 0 && equitySlLevel > 0 && equityLtp <= equitySlLevel;
+        // BEARISH (PE): equity SL is ABOVE entry, hit when price rises past it
+        // BULLISH (CE): equity SL is BELOW entry, hit when price drops past it
+        boolean equitySlHit = equityLtp > 0 && equitySlLevel > 0
+            && (isBearish ? equityLtp >= equitySlLevel : equityLtp <= equitySlLevel);
 
         if (optionSlHit || equitySlHit) {
             String slReason = optionSlHit ? "SL-OP" : "SL-EQ";
@@ -841,9 +846,13 @@ public class StrategyTradeExecutor {
             String level = (String) target.get("level"); // "T1", "T2", "T3", "T4"
 
             // Dual check: option target OR equity target — whichever hits first
+            // Option targets always use >= (premium rises = good regardless of direction)
             boolean optionHit = optionLtp >= optionTargetPrice;
+            // BEARISH (PE): equity targets are BELOW entry, hit when price drops past them
+            // BULLISH (CE): equity targets are ABOVE entry, hit when price rises past them
             boolean equityHit = equityLtp > 0 && i < equityTargets.length
-                && equityTargets[i] > 0 && equityLtp >= equityTargets[i];
+                && equityTargets[i] > 0
+                && (isBearish ? equityLtp <= equityTargets[i] : equityLtp >= equityTargets[i]);
 
             if (optionHit || equityHit) {
                 String hitSource = optionHit ? level + "-OP" : level + "-EQ";

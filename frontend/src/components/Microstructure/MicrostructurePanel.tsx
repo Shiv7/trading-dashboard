@@ -76,7 +76,7 @@ export const MicrostructurePanel: React.FC<MicrostructurePanelProps> = ({
                         <span className={`text-2xl font-bold ${ofiColors.text}`}>
                             {data.ofi > 0 ? '+' : ''}{data.ofi.toLocaleString()}
                         </span>
-                        <span className="text-xs text-slate-500">z:{data.ofiZScore.toFixed(1)}</span>
+                        <span className="text-xs text-slate-500">z:{(data.ofiZScore ?? 0).toFixed(1)}</span>
                     </div>
                     <div className={`text-xs font-medium mt-1 ${ofiColors.text}`}>
                         {data.ofiRegime.replace(/_/g, ' ')}
@@ -88,7 +88,7 @@ export const MicrostructurePanel: React.FC<MicrostructurePanelProps> = ({
                     <div className="text-xs text-slate-500 mb-1">VPIN (Informed Flow)</div>
                     <div className="flex items-baseline justify-between">
                         <span className={`text-2xl font-bold ${vpinColors.text}`}>
-                            {(data.vpin * 100).toFixed(0)}%
+                            {((data.vpin ?? 0) * 100).toFixed(0)}%
                         </span>
                     </div>
                     <div className={`text-xs font-medium mt-1 ${vpinColors.text}`}>
@@ -112,9 +112,9 @@ export const MicrostructurePanel: React.FC<MicrostructurePanelProps> = ({
                     <div className="text-[10px] text-slate-500 uppercase">Kyle λ</div>
                     <div className={`text-sm font-semibold ${data.lambdaZScore < -1 ? 'text-cyan-400' : data.lambdaZScore > 1 ? 'text-amber-400' : 'text-slate-300'
                         }`}>
-                        {data.kyleLambda.toFixed(4)}
+                        {(data.kyleLambda ?? 0).toFixed(4)}
                     </div>
-                    <div className="text-[10px] text-slate-500">z:{data.lambdaZScore.toFixed(1)}</div>
+                    <div className="text-[10px] text-slate-500">z:{(data.lambdaZScore ?? 0).toFixed(1)}</div>
                 </div>
 
                 {/* Depth Imbalance */}
@@ -122,7 +122,7 @@ export const MicrostructurePanel: React.FC<MicrostructurePanelProps> = ({
                     <div className="text-[10px] text-slate-500 uppercase">Depth Imb</div>
                     <div className={`text-sm font-semibold ${data.depthImbalance > 0.3 ? 'text-emerald-400' : data.depthImbalance < -0.3 ? 'text-red-400' : 'text-slate-300'
                         }`}>
-                        {data.depthImbalance > 0 ? '+' : ''}{(data.depthImbalance * 100).toFixed(0)}%
+                        {(data.depthImbalance ?? 0) > 0 ? '+' : ''}{((data.depthImbalance ?? 0) * 100).toFixed(0)}%
                     </div>
                 </div>
 
@@ -131,18 +131,18 @@ export const MicrostructurePanel: React.FC<MicrostructurePanelProps> = ({
                     <div className="text-[10px] text-slate-500 uppercase">Spread</div>
                     <div className={`text-sm font-semibold ${data.spreadZScore > 1.5 ? 'text-amber-400' : 'text-slate-300'
                         }`}>
-                        ₹{data.spread.toFixed(2)}
+                        ₹{(data.spread ?? 0).toFixed(2)}
                     </div>
-                    <div className="text-[10px] text-slate-500">z:{data.spreadZScore.toFixed(1)}</div>
+                    <div className="text-[10px] text-slate-500">z:{(data.spreadZScore ?? 0).toFixed(1)}</div>
                 </div>
             </div>
 
             {/* Buy/Sell Pressure Bar */}
             <div>
                 <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-emerald-400">Buy {buyPercent.toFixed(0)}%</span>
+                    <span className="text-emerald-400">Buy {(buyPercent ?? 0).toFixed(0)}%</span>
                     <span className="text-slate-500">Pressure</span>
-                    <span className="text-red-400">Sell {(100 - buyPercent).toFixed(0)}%</span>
+                    <span className="text-red-400">Sell {(100 - (buyPercent ?? 0)).toFixed(0)}%</span>
                 </div>
                 <div className="h-3 bg-slate-700 rounded-full overflow-hidden flex">
                     <div

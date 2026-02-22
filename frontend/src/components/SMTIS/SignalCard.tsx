@@ -98,7 +98,7 @@ export const SignalCard: React.FC<SignalCardProps> = ({ signal, onTrade }) => {
                     </div>
                     <div className="text-right">
                         <div className={`text-2xl font-bold ${getConfidenceColor(signal.confidence)}`}>
-                            {(signal.confidence * 100).toFixed(0)}%
+                            {((signal.confidence ?? 0) * 100).toFixed(0)}%
                         </div>
                         <div className="text-xs text-slate-500">Confidence</div>
                     </div>
@@ -110,16 +110,16 @@ export const SignalCard: React.FC<SignalCardProps> = ({ signal, onTrade }) => {
                 <div className="grid grid-cols-3 gap-3 mb-4">
                     <div className="text-center p-2 bg-slate-800/50 rounded-lg">
                         <div className="text-xs text-slate-500 mb-1">Entry</div>
-                        <div className="text-lg font-semibold text-white">₹{signal.entryPrice.toFixed(2)}</div>
+                        <div className="text-lg font-semibold text-white">₹{(signal.entryPrice ?? 0).toFixed(2)}</div>
                     </div>
                     <div className="text-center p-2 bg-red-500/10 rounded-lg border border-red-500/20">
                         <div className="text-xs text-red-400/70 mb-1">Stop Loss</div>
-                        <div className="text-lg font-semibold text-red-400">₹{signal.stopLoss.toFixed(2)}</div>
+                        <div className="text-lg font-semibold text-red-400">₹{(signal.stopLoss ?? 0).toFixed(2)}</div>
                         <div className="text-[10px] text-red-400/50">-{Math.abs(riskPercent).toFixed(2)}%</div>
                     </div>
                     <div className="text-center p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
                         <div className="text-xs text-emerald-400/70 mb-1">Target 1</div>
-                        <div className="text-lg font-semibold text-emerald-400">₹{signal.target1.toFixed(2)}</div>
+                        <div className="text-lg font-semibold text-emerald-400">₹{(signal.target1 ?? 0).toFixed(2)}</div>
                         <div className="text-[10px] text-emerald-400/50">+{rewardPercent.toFixed(2)}%</div>
                     </div>
                 </div>
@@ -131,7 +131,7 @@ export const SignalCard: React.FC<SignalCardProps> = ({ signal, onTrade }) => {
                         <span className={`ml-2 text-lg font-bold ${signal.riskReward >= 2 ? 'text-emerald-400' :
                                 signal.riskReward >= 1.5 ? 'text-yellow-400' : 'text-amber-400'
                             }`}>
-                            1:{signal.riskReward.toFixed(1)}
+                            1:{(signal.riskReward ?? 0).toFixed(1)}
                         </span>
                     </div>
                 </div>
@@ -179,19 +179,19 @@ export const SignalCard: React.FC<SignalCardProps> = ({ signal, onTrade }) => {
                         <div className="flex justify-between">
                             <span className="text-slate-500">Time:</span>
                             <span className={getModifierColor(signal.modifiers.timeModifier)}>
-                                {signal.modifiers.timeModifier.toFixed(2)}x
+                                {(signal.modifiers?.timeModifier ?? 0).toFixed(2)}x
                             </span>
                         </div>
                         <div className="flex justify-between">
                             <span className="text-slate-500">GEX:</span>
                             <span className={getModifierColor(signal.modifiers.gexModifier)}>
-                                {signal.modifiers.gexModifier.toFixed(2)}x
+                                {(signal.modifiers?.gexModifier ?? 0).toFixed(2)}x
                             </span>
                         </div>
                         <div className="flex justify-between">
                             <span className="text-slate-500">MTF:</span>
                             <span className={getModifierColor(signal.modifiers.mtfModifier)}>
-                                {signal.modifiers.mtfModifier.toFixed(2)}x
+                                {(signal.modifiers?.mtfModifier ?? 0).toFixed(2)}x
                             </span>
                         </div>
                     </div>
@@ -203,7 +203,7 @@ export const SignalCard: React.FC<SignalCardProps> = ({ signal, onTrade }) => {
                     <span className={`text-sm font-semibold ${signal.recommendedSize >= 1 ? 'text-emerald-400' :
                             signal.recommendedSize >= 0.5 ? 'text-amber-400' : 'text-red-400'
                         }`}>
-                        {(signal.recommendedSize * 100).toFixed(0)}% of normal
+                        {((signal.recommendedSize ?? 0) * 100).toFixed(0)}% of normal
                     </span>
                 </div>
 

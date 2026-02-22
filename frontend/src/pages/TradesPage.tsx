@@ -106,19 +106,19 @@ export default function TradesPage() {
           </div>
           <div className="card text-center">
             <div className={`text-2xl font-bold ${stats.winRate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {stats.winRate.toFixed(1)}%
+              {(stats.winRate ?? 0).toFixed(1)}%
             </div>
             <div className="text-xs text-slate-400">Win Rate</div>
           </div>
           <div className="card text-center">
             <div className={`text-2xl font-bold ${stats.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              ₹{(stats.totalPnl / 1000).toFixed(1)}K
+              ₹{((stats.totalPnl ?? 0) / 1000).toFixed(1)}K
             </div>
             <div className="text-xs text-slate-400">Total P&L</div>
           </div>
           <div className="card text-center">
             <div className={`text-2xl font-bold ${stats.avgRMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {stats.avgRMultiple >= 0 ? '+' : ''}{stats.avgRMultiple.toFixed(2)}R
+              {(stats.avgRMultiple ?? 0) >= 0 ? '+' : ''}{(stats.avgRMultiple ?? 0).toFixed(2)}R
             </div>
             <div className="text-xs text-slate-400">Avg R</div>
           </div>

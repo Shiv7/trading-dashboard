@@ -88,13 +88,13 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
           {signal.finalOpportunityScore !== undefined && (
             <span className="text-xs text-white">
               Score: <span className={signal.finalOpportunityScore > 0 ? 'text-emerald-400' : 'text-red-400'}>
-                {(signal.finalOpportunityScore * 100).toFixed(0)}%
+                {((signal.finalOpportunityScore ?? 0) * 100).toFixed(0)}%
               </span>
             </span>
           )}
           {signal.directionConfidence !== undefined && (
             <span className="text-xs text-white">
-              Conf: <span className="text-purple-400">{(signal.directionConfidence * 100).toFixed(0)}%</span>
+              Conf: <span className="text-purple-400">{((signal.directionConfidence ?? 0) * 100).toFixed(0)}%</span>
             </span>
           )}
           {signal.recommendedLots !== undefined && signal.recommendedLots > 0 && (
@@ -132,11 +132,11 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
 
       {/* Scores */}
       <div className="flex items-center gap-4 text-xs text-slate-400">
-        <span>VCP: <span className="text-slate-200">{(signal.vcpScore * 100).toFixed(0)}%</span></span>
-        <span>IPU: <span className="text-slate-200">{(signal.ipuScore * 100).toFixed(0)}%</span></span>
+        <span>VCP: <span className="text-slate-200">{((signal.vcpScore ?? 0) * 100).toFixed(0)}%</span></span>
+        <span>IPU: <span className="text-slate-200">{((signal.ipuScore ?? 0) * 100).toFixed(0)}%</span></span>
         <span>Regime: <span className="text-slate-200">{signal.regimeLabel}</span></span>
         {signal.positionSizeMultiplier > 1 && (
-          <span className="text-emerald-400">Size: {signal.positionSizeMultiplier.toFixed(1)}x</span>
+          <span className="text-emerald-400">Size: {(signal.positionSizeMultiplier ?? 0).toFixed(1)}x</span>
         )}
       </div>
 
@@ -155,7 +155,7 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
           </span>
           {signal.rMultiple !== undefined && (
             <span className={signal.rMultiple >= 0 ? 'num-positive' : 'num-negative'}>
-              {signal.rMultiple >= 0 ? '+' : ''}{signal.rMultiple.toFixed(2)}R
+              {signal.rMultiple >= 0 ? '+' : ''}{(signal.rMultiple ?? 0).toFixed(2)}R
             </span>
           )}
         </div>
