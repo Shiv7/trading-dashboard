@@ -3,7 +3,7 @@ import {
   RefreshCw, Filter, Activity, Eye, Target, BarChart2,
   Zap, CheckCircle2, Volume2, TrendingUp
 } from 'lucide-react';
-import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent } from '../components/Strategy';
+import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent } from '../components/Strategy';
 import {
   InstrumentStateSnapshot,
   StrategyOpportunity,
@@ -12,7 +12,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'pivot' | 'microalpha' | 'mere';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -140,7 +140,8 @@ export const StrategyTransparencyPage: React.FC = () => {
               { id: 'overview' as TabType, label: 'Overview', shortLabel: 'Overview', icon: BarChart2 },
               { id: 'fudkii' as TabType, label: 'FUDKII', shortLabel: 'FUDKII', icon: Zap, accent: 'text-orange-400' },
               { id: 'fukaa' as TabType, label: 'FUKAA', shortLabel: 'FUKAA', icon: Volume2, accent: 'text-amber-400' },
-              { id: 'mere' as TabType, label: 'MERE', shortLabel: 'MERE', icon: TrendingUp, accent: 'text-teal-400' },
+              { id: 'fudkoi' as TabType, label: 'FUDKOI', shortLabel: 'FUDKOI', icon: BarChart2, accent: 'text-teal-400' },
+              { id: 'mere' as TabType, label: 'MERE', shortLabel: 'MERE', icon: TrendingUp, accent: 'text-emerald-400' },
               { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
               { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
             ].map(tab => (
@@ -189,6 +190,10 @@ export const StrategyTransparencyPage: React.FC = () => {
 
         {activeTab === 'fukaa' && (
           <FukaaTabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'fudkoi' && (
+          <FudkoiTabContent autoRefresh={autoRefresh} />
         )}
 
         {activeTab === 'pivot' && (

@@ -411,6 +411,85 @@ public class StrategyStateController {
         ));
     }
 
+    // ==================== FUDKOI STRATEGY ENDPOINTS (OI-filtered FUDKII) ====================
+
+    /**
+     * Get today's FUDKOI signal history — FUDKII signals filtered by OI Change% thresholds:
+     *   MCX (M):      oiChangeRatio > 100
+     *   NSE (N):      oiChangeRatio > 150
+     *   Currency (C): oiChangeRatio > 100
+     * Only positive OI change values qualify.
+     */
+    @GetMapping("/fudkoi/history/list")
+    public ResponseEntity<List<Map<String, Object>>> getFudkoiSignalHistory() {
+        List<Map<String, Object>> fudkiiHistory = fudkiiConsumer.getTodaySignalHistory();
+        List<Map<String, Object>> fudkoiSignals = new ArrayList<>();
+
+        for (Map<String, Object> signal : fudkiiHistory) {
+            Object oiRaw = signal.get("oiChangeRatio");
+            Object exchangeRaw = signal.get("exchange");
+            if (oiRaw == null || exchangeRaw == null) continue;
+
+            double oiChange = ((Number) oiRaw).doubleValue();
+            if (oiChange <= 0) continue; // positive only
+
+            String exchange = exchangeRaw.toString();
+            boolean qualifies = false;
+
+            switch (exchange) {
+                case "M": // MCX
+                    qualifies = oiChange > 100;
+                    break;
+                case "N": // NSE
+                    qualifies = oiChange > 150;
+                    break;
+                case "C": // Currency
+                    qualifies = oiChange > 100;
+                    break;
+            }
+
+            if (qualifies) {
+                // Tag the signal as FUDKOI
+                Map<String, Object> tagged = new HashMap<>(signal);
+                tagged.put("signalSource", "FUDKOI");
+                fudkoiSignals.add(tagged);
+            }
+        }
+
+        log.debug("[API] GET /strategy-state/fudkoi/history/list | {} FUDKOI signals (from {} FUDKII)",
+                fudkoiSignals.size(), fudkiiHistory.size());
+        return ResponseEntity.ok(fudkoiSignals);
+    }
+
+    /**
+     * Get FUDKOI signal count.
+     */
+    @GetMapping("/fudkoi/count")
+    public ResponseEntity<Map<String, Object>> getFudkoiCount() {
+        // Compute by running the same filter logic
+        List<Map<String, Object>> fudkiiHistory = fudkiiConsumer.getTodaySignalHistory();
+        long count = fudkiiHistory.stream().filter(signal -> {
+            Object oiRaw = signal.get("oiChangeRatio");
+            Object exchangeRaw = signal.get("exchange");
+            if (oiRaw == null || exchangeRaw == null) return false;
+            double oiChange = ((Number) oiRaw).doubleValue();
+            if (oiChange <= 0) return false;
+            String exchange = exchangeRaw.toString();
+            return switch (exchange) {
+                case "M" -> oiChange > 100;
+                case "N" -> oiChange > 150;
+                case "C" -> oiChange > 100;
+                default -> false;
+            };
+        }).count();
+
+        return ResponseEntity.ok(Map.of(
+                "fudkoiCount", count,
+                "fudkiiHistoryCount", fudkiiHistory.size(),
+                "timestamp", System.currentTimeMillis()
+        ));
+    }
+
     // ==================== MERE STRATEGY ENDPOINTS (Mean Reversion) ====================
 
     @GetMapping("/mere/active")

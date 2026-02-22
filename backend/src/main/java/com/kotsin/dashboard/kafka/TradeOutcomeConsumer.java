@@ -7,6 +7,7 @@ import com.kotsin.dashboard.model.dto.PositionDTO;
 import com.kotsin.dashboard.model.dto.TradeDTO;
 import com.kotsin.dashboard.model.entity.UserTrade;
 import com.kotsin.dashboard.service.UserPnLService;
+import com.kotsin.dashboard.service.PerformanceAnalyticsService;
 import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
@@ -35,6 +36,7 @@ public class TradeOutcomeConsumer {
     private final WebSocketSessionManager sessionManager;
     private final WalletService walletService;
     private final UserPnLService userPnLService;
+    private final PerformanceAnalyticsService performanceAnalyticsService;
     private final ScripLookupService scripLookup;
     private final MongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -58,6 +60,9 @@ public class TradeOutcomeConsumer {
 
             // Persist to trade_outcomes MongoDB (feeds StrategyWalletsService)
             persistTradeOutcome(root, trade);
+
+            // Record in performance analytics
+            performanceAnalyticsService.recordTrade(trade);
 
             // Broadcast trade update
             sessionManager.broadcastTradeUpdate(trade);
@@ -181,6 +186,18 @@ public class TradeOutcomeConsumer {
             rMultiple = -Math.abs(rMultiple);
         }
 
+        // Derive strategy from signalSource, then strategy, then signalType
+        String signalSource = root.path("signalSource").asText("");
+        String strategyField = root.path("strategy").asText("");
+        String signalType = root.path("signalType").asText("");
+        String strategy = !signalSource.isEmpty() ? signalSource
+                        : !strategyField.isEmpty() ? strategyField
+                        : signalType;
+        // Strip side suffix (e.g. FUDKII_LONG → FUDKII)
+        if (strategy.contains("_")) {
+            strategy = strategy.substring(0, strategy.indexOf("_"));
+        }
+
         return TradeDTO.builder()
                 .tradeId(root.path("tradeId").asText(root.path("signalId").asText()))
                 .signalId(root.path("signalId").asText())
@@ -190,7 +207,7 @@ public class TradeOutcomeConsumer {
                 .status(status)
                 .entryPrice(entryPrice)
                 .entryTime(entryTime)
-                .quantity(quantity) // FIX: Use properly parsed quantity
+                .quantity(quantity)
                 .exitPrice(exitPrice)
                 .exitTime(exitTime)
                 .exitReason(exitReason)
@@ -201,6 +218,7 @@ public class TradeOutcomeConsumer {
                 .pnlPercent(pnlPercent)
                 .rMultiple(rMultiple)
                 .durationMinutes(durationMinutes)
+                .strategy(strategy)
                 .build();
     }
 

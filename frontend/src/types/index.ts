@@ -598,7 +598,23 @@ export interface PerformanceMetrics {
   byExitReason: Record<string, OutcomeStats>;
   byCategory: Record<string, OutcomeStats>;
   timeAnalysis: TimeAnalysis;
+  strategyDetails: StrategyDetail[];
+  bestByExchange: Record<string, StrategyDetail>;
   lastUpdated: string;
+}
+
+export interface StrategyDetail {
+  strategy: string;
+  exchange: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  profitPercent: number;
+  roi: number;
+  maxDrawdownPercent: number;
+  maxCapitalEmployed: number;
 }
 
 export interface DrawdownAnalysis {
@@ -661,6 +677,11 @@ export interface SourcePerformance {
   winRate: number;
   totalPnl: number;
   avgRMultiple: number;
+  maxDrawdownPercent: number;
+  maxCapitalEmployed: number;
+  avgHoldingTime: number;
+  minHoldingTime: number;
+  maxHoldingTime: number;
 }
 
 export interface OutcomeStats {
