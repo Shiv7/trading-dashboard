@@ -7,7 +7,7 @@ import { formatTimeAgo } from '../../utils/formatTime'
 export default function NotificationPanel() {
   const [isOpen, setIsOpen] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
-  const { notifications, clearNotifications } = useDashboardStore()
+  const { notifications, clearNotifications, notificationsMuted, toggleNotificationsMuted } = useDashboardStore()
   const navigate = useNavigate()
 
   // Close panel when clicking outside
@@ -57,16 +57,29 @@ export default function NotificationPanel() {
 
   return (
     <div className="relative" ref={panelRef}>
-      {/* Bell Button */}
+      {/* Bell icon — click toggles mute on/off */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-slate-700/50"
+        onClick={() => toggleNotificationsMuted()}
+        className={`relative p-2 transition-colors rounded-lg hover:bg-slate-700/50 ${
+          notificationsMuted ? 'text-red-400/60' : 'text-slate-400 hover:text-white'
+        }`}
+        title={notificationsMuted ? 'Click to unmute notifications' : 'Click to mute notifications'}
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-        </svg>
-        {notifications.length > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-red-500 rounded-full text-[10px] flex items-center justify-center text-white font-bold animate-pulse">
+        {notificationsMuted ? (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            <line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          </svg>
+        )}
+        {!notificationsMuted && notifications.length > 0 && (
+          <span
+            onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen) }}
+            className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-red-500 rounded-full text-[10px] flex items-center justify-center text-white font-bold animate-pulse cursor-pointer"
+          >
             {notifications.length > 9 ? '9+' : notifications.length}
           </span>
         )}
@@ -78,14 +91,35 @@ export default function NotificationPanel() {
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 bg-slate-700/50 border-b border-slate-700">
             <h3 className="font-semibold text-white">Notifications</h3>
-            {notifications.length > 0 && (
+            <div className="flex items-center gap-3">
               <button
-                onClick={() => clearNotifications()}
-                className="text-xs text-slate-400 hover:text-white transition-colors"
+                onClick={(e) => { e.stopPropagation(); toggleNotificationsMuted() }}
+                className={`flex items-center gap-1 text-xs transition-colors ${
+                  notificationsMuted ? 'text-red-400 hover:text-red-300' : 'text-slate-400 hover:text-white'
+                }`}
+                title={notificationsMuted ? 'Unmute popups' : 'Mute popups'}
               >
-                Clear all
+                {notificationsMuted ? (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    <line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                )}
+                {notificationsMuted ? 'Unmute' : 'Mute'}
               </button>
-            )}
+              {notifications.length > 0 && (
+                <button
+                  onClick={() => clearNotifications()}
+                  className="text-xs text-slate-400 hover:text-white transition-colors"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Notifications List */}

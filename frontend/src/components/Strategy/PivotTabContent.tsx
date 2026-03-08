@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Check, Zap, Target, ShieldCheck, ShieldAlert, Loader2, AlertTriangle
+  Check, Zap, Target, ShieldCheck, ShieldAlert, Loader2, AlertTriangle, Clock
 } from 'lucide-react';
-import { fetchJson, strategyWalletsApi, strategyTradesApi } from '../../services/api';
+import { fetchJson, strategyWalletsApi, strategyTradesApi, pivotAutoTradeApi } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeLotSizing } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow } from '../../utils/tradingUtils';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -37,10 +37,24 @@ interface PivotSignal {
   retestLevel?: string;
   retestQuality?: string;
   firstRetest?: boolean;
+  retestDirection?: string; // BULLISH or BEARISH — direction of bounce after retest
+  // OI context
+  oiInterpretation?: string; // LONG_BUILDUP, SHORT_COVERING, SHORT_BUILDUP, LONG_UNWINDING
+  oiChangePercent?: number;
   smcInOrderBlock: boolean;
   smcNearFVG: boolean;
   smcAtLiquidityZone: boolean;
   smcBias: string;
+  // FVG actual price range
+  fvgHigh?: number;
+  fvgLow?: number;
+  fvgType?: string;
+  // LZ actual price data
+  lzLevel?: number;
+  lzZoneHigh?: number;
+  lzZoneLow?: number;
+  lzType?: string;
+  lzSource?: string;
   entryPrice: number;
   stopLoss: number;
   target: number;
@@ -81,9 +95,26 @@ interface PivotSignal {
   futuresExchange?: string;
   futuresExchangeType?: string;
   futuresVolume?: number;
-  // Symbol and company
+  // Symbol, company, and exchange
   symbol?: string;
   companyName?: string;
+  exchange?: string;
+  // V2 4-Gate Funnel fields
+  version?: number;
+  stAlignment?: number;
+  stBarsInTrend?: number;
+  trendConfidence?: number;
+  htfTimeframes?: string[];
+  pullbackDepth?: number;
+  zoneType?: string;
+  zoneLevels?: string[];
+  pullbackScore?: number;
+  volumeSurge?: number;
+  oiBuildupPct?: number;
+  triggerType?: string;
+  triggerTimeframe?: string;
+  atrMultiple?: number;
+  gateReached?: number;
 }
 
 interface TradePlan {
@@ -114,7 +145,7 @@ interface ExecutionState {
   orderId?: string;
 }
 
-type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume';
+type SortField = 'strength' | 'confidence' | 'rr' | 'time';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 
@@ -123,31 +154,24 @@ interface PivotTabContentProps {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   SCRIP CODE → SYMBOL MAPPING (for Pivot signals that lack symbol)
+   SYMBOL / EXCHANGE HELPERS
+   Uses symbol & companyName from backend (resolved via ScripLookupService).
    ═══════════════════════════════════════════════════════════════ */
 
-const SCRIP_MAP: Record<string, { symbol: string; name: string; exchange: string }> = {
-  '383':    { symbol: 'BEL',         name: 'BHARAT ELECTRONICS LTD',    exchange: 'N' },
-  '13611':  { symbol: 'IRCTC',       name: 'INDIAN RAIL TOUR CORP LTD', exchange: 'N' },
-  '18391':  { symbol: 'RBLBANK',     name: 'RBL BANK LIMITED',          exchange: 'N' },
-  '467385': { symbol: 'NATURALGAS',  name: 'NATURAL GAS',               exchange: 'M' },
-  '21770':  { symbol: 'ICICIGI',     name: 'ICICI LOMBARD GIC LIMITED', exchange: 'N' },
-  '9480':   { symbol: 'LICI',        name: 'LIFE INSURA CORP OF INDIA', exchange: 'N' },
-};
-
 function getSymbol(sig: PivotSignal): string {
-  return SCRIP_MAP[sig.scripCode]?.symbol || sig.scripCode;
+  return sig.symbol || sig.companyName || sig.scripCode;
 }
 
 function getExchange(sig: PivotSignal): string {
-  return SCRIP_MAP[sig.scripCode]?.exchange || 'N';
+  return sig.exchange || sig.optionExchange || sig.futuresExchange || 'N';
 }
 
 /* ═══════════════════════════════════════════════════════════════
    UTILITY FUNCTIONS
    ═══════════════════════════════════════════════════════════════ */
 
-function fmt(v: number): string {
+function fmt(v: number | null | undefined): string {
+  if (v == null || isNaN(v)) return 'DM';
   return Number(v.toFixed(2)).toString();
 }
 
@@ -179,21 +203,21 @@ function estimateOptionPremium(plan: TradePlan): number {
 function extractTradePlan(sig: PivotSignal): TradePlan {
   const isLong = sig.direction === 'BULLISH';
   const optionType: 'CE' | 'PE' = isLong ? 'CE' : 'PE';
-  const { strike, interval } = getOTMStrike(sig.entryPrice, sig.direction);
-  const atr = sig.risk;  // risk ≈ ATR-based distance
+  const entry = sig.entryPrice ?? 0;
+  const { strike, interval } = getOTMStrike(entry, sig.direction);
+  const risk = sig.risk ?? 0;
+  const atr = risk;
 
-  // T1 = signal's target (from backend), T2-T4 = extended R-multiples
-  const risk = sig.risk;
-  const t1 = sig.target;
-  const t2 = isLong ? sig.entryPrice + risk * 3 : sig.entryPrice - risk * 3;
-  const t3 = isLong ? sig.entryPrice + risk * 4 : sig.entryPrice - risk * 4;
-  const t4 = isLong ? sig.entryPrice + risk * 5 : sig.entryPrice - risk * 5;
+  const t1 = sig.target ?? entry;
+  const t2 = isLong ? entry + risk * 3 : entry - risk * 3;
+  const t3 = isLong ? entry + risk * 4 : entry - risk * 4;
+  const t4 = isLong ? entry + risk * 5 : entry - risk * 5;
 
   return {
-    entry: sig.entryPrice,
-    sl: sig.stopLoss,
+    entry,
+    sl: sig.stopLoss ?? 0,
     t1, t2, t3, t4,
-    rr: sig.riskReward,
+    rr: sig.riskReward ?? 0,
     atr,
     optionType,
     strike,
@@ -201,54 +225,18 @@ function extractTradePlan(sig: PivotSignal): TradePlan {
   };
 }
 
-/** Compute stable IV change % per signal */
-function computeIVChange(sig: PivotSignal): number {
-  const hash = sig.scripCode.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 1), 0);
-  const seed = ((hash * 17 + 13) % 21) - 8;
-  const breakoutBoost = sig.hasActiveBreakout ? 3 : 0;
-  const retestBoost = sig.hasConfirmedRetest ? 2 : 0;
-  return Math.round((seed + breakoutBoost + retestBoost) * 10) / 10;
-}
-
-/** Compute stable volume surge multiplier per signal */
-function computeVolumeSurge(sig: PivotSignal): number {
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const base = 1.2 + (hash % 20) / 10;
-  const volBoost = sig.hasActiveBreakout ? 0.8 : 0;
-  const retestBoost = sig.hasConfirmedRetest ? 0.3 : 0;
-  return Math.round((base + volBoost + retestBoost) * 10) / 10;
-}
-
-/** Compute stable option delta per signal */
-function computeDelta(sig: PivotSignal, plan: TradePlan): number {
-  const otmDist = Math.abs(plan.strike - plan.entry);
-  const interval = plan.strikeInterval;
-  const baseDelta = 0.50 - (otmDist / interval) * 0.12;
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const variance = ((hash % 9) - 4) / 100;
-  const delta = Math.max(0.20, Math.min(0.48, baseDelta + variance));
-  return sig.direction === 'BEARISH' ? -delta : delta;
-}
-
-/** Compute stable OI change % per signal */
-function computeOIChange(sig: PivotSignal): number {
-  const hash = sig.scripCode.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 3), 0);
-  const seed = ((hash * 13 + 7) % 31) - 15;
-  const trendBoost = sig.hasConfirmedRetest ? 3 : -2;
-  return Math.round(seed + trendBoost);
-}
 
 /** Confidence from signal's own score + HTF/LTF alignment + ML */
 function computeConfidence(sig: PivotSignal): number {
   let conf = 40;
-  conf += sig.htfStrength * 20;                           // 0-20 from HTF strength
+  conf += (sig.htfStrength ?? 0) * 20;                     // 0-20 from HTF strength
   conf += sig.ltfConfirmed ? 10 : 0;                      // +10 if LTF confirmed
-  conf += Math.min(10, sig.pivotNearbyLevels * 1.5);      // 0-10 from pivot levels
+  conf += Math.min(10, (sig.pivotNearbyLevels ?? 0) * 1.5); // 0-10 from pivot levels
   conf += sig.hasConfirmedRetest ? 7 : 0;                  // +7 for confirmed retest
   conf += sig.hasActiveBreakout ? 5 : 0;                   // +5 for active breakout
   const smcCount = [sig.smcInOrderBlock, sig.smcNearFVG, sig.smcAtLiquidityZone].filter(Boolean).length;
   conf += smcCount * 2;                                    // 0-6 from SMC
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const hash = (sig.scripCode ?? '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   conf += (hash % 5) - 2;                                 // per-symbol variance
 
   // ML boost: if ML agrees with direction and has high confidence, boost overall confidence
@@ -276,17 +264,13 @@ function computeConfidence(sig: PivotSignal): number {
 /** Composite strength score (0-100) */
 function computeStrength(sig: PivotSignal, plan: TradePlan): number {
   const conf = computeConfidence(sig);
-  const vol = computeVolumeSurge(sig);
   const rr = plan.rr;
-  const iv = computeIVChange(sig);
-  const confNorm = ((conf - 55) / 42) * 25;
-  const volNorm = Math.min(25, ((vol - 1) / 2.5) * 25);
-  const rrNorm = Math.min(25, (rr / 4) * 25);
-  const ivNorm = Math.max(0, Math.min(25, ((iv + 10) / 25) * 25));
-  return Math.min(100, Math.round(confNorm + volNorm + rrNorm + ivNorm));
+  const confNorm = ((conf - 55) / 42) * 50;
+  const rrNorm = Math.min(50, (rr / 4) * 50);
+  return Math.min(100, Math.round(confNorm + rrNorm));
 }
 
-// computeLotSizing: imported from ../../utils/tradingUtils
+// computeSlotSizing: imported from ../../utils/tradingUtils
 
 function getEpoch(sig: PivotSignal): number {
   if (sig.timestamp) return sig.timestamp;
@@ -314,15 +298,15 @@ function getRetestTimeframe(sig: PivotSignal): string {
   return '30m';
 }
 
-/** Clean retest level name for display (remove " (Retest)" suffix) */
+/** Clean retest level name for display (remove " (Retest)" suffix, all underscores) */
 function cleanRetestLevel(level: string | undefined): string {
   if (!level) return '--';
-  return level.replace(' (Retest)', '').replace('_', ' ');
+  return level.replace(' (Retest)', '').replace(/_/g, ' ');
 }
 
 /** Derive candle pattern from signal characteristics (deterministic) */
 function deriveCandlePattern(sig: PivotSignal): { pattern: string; timeframe: string } {
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const hash = (sig.scripCode ?? '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   const isLong = sig.direction === 'BULLISH';
 
   // Timeframe: derive from LTF reason
@@ -380,52 +364,61 @@ function parseSMCPriceRanges(sig: PivotSignal): { obRange: string | null; fvgRan
     }
   }
 
-  // FVG price range: derive from entry price vicinity
+  // FVG price range: use real backend data
   let fvgRange: string | null = null;
   if (sig.smcNearFVG) {
-    const gap = Math.max(0.5, Math.round(sig.risk * 0.3 * 100) / 100);
-    const base = sig.direction === 'BULLISH'
-      ? sig.entryPrice - gap
-      : sig.entryPrice + gap;
-    fvgRange = `${fmt(Math.min(base, base + gap))}–${fmt(Math.max(base, base + gap))}`;
+    if (sig.fvgHigh != null && sig.fvgLow != null && sig.fvgHigh > 0) {
+      fvgRange = `${fmt(sig.fvgLow)}–${fmt(sig.fvgHigh)}`;
+    } else {
+      // Fallback: derive from risk (guard NaN)
+      const risk = sig.risk ?? 0;
+      if (risk > 0) {
+        const gap = Math.round(risk * 0.3 * 100) / 100;
+        const base = sig.direction === 'BULLISH' ? sig.entryPrice - gap : sig.entryPrice + gap;
+        fvgRange = `${fmt(Math.min(base, base + gap))}–${fmt(Math.max(base, base + gap))}`;
+      }
+    }
   }
 
-  // LZ from swing levels (PWH/PWL)
+  // LZ from real backend data
   let lzRange: string | null = null;
   if (sig.smcAtLiquidityZone) {
-    const swingMatch = reason.match(/Swing_[SR]_(\d+)/);
-    if (swingMatch) {
-      lzRange = `~${swingMatch[1]}`;
+    if (sig.lzLevel != null && sig.lzLevel > 0) {
+      const src = sig.lzSource ? sig.lzSource.replace(/_/g, ' ') : '';
+      lzRange = `${fmt(sig.lzLevel)}${src ? ` (${src})` : ''}`;
     } else {
-      lzRange = `~${fmt(sig.pivotCurrentPrice)}`;
+      // Fallback: try htfReason
+      const swingMatch = reason.match(/Swing_[SR]_(\d+)/);
+      if (swingMatch) {
+        lzRange = `~${swingMatch[1]}`;
+      }
     }
   }
 
   return { obRange, fvgRange, lzRange };
 }
 
-/** Derive OI-based market activity label */
+/** Derive market activity label from signal direction and confluence */
 function deriveMarketActivity(sig: PivotSignal): { label: string; color: string } {
-  const oiVal = computeOIChange(sig);
   const isLong = sig.direction === 'BULLISH';
-
-  if (isLong && oiVal > 0) return { label: 'Long Buildup', color: 'text-green-400 bg-green-500/15' };
-  if (isLong && oiVal <= 0) return { label: 'Short Covering', color: 'text-green-300 bg-green-500/10' };
-  if (!isLong && oiVal > 0) return { label: 'Short Buildup', color: 'text-red-400 bg-red-500/15' };
-  return { label: 'Long Unwinding', color: 'text-red-300 bg-red-500/10' };
+  if (isLong && sig.hasActiveBreakout) return { label: 'Bullish Breakout', color: 'text-green-400 bg-green-500/15' };
+  if (isLong) return { label: 'Bullish Setup', color: 'text-green-300 bg-green-500/10' };
+  if (!isLong && sig.hasActiveBreakout) return { label: 'Bearish Breakout', color: 'text-red-400 bg-red-500/15' };
+  return { label: 'Bearish Setup', color: 'text-red-300 bg-red-500/10' };
 }
 
 /** Derive LTF alignment percentage from ltfAlignmentScore */
 function getLtfPct(sig: PivotSignal): number {
   // ltfAlignmentScore typically ranges 0-110; normalize to 0-100
-  return Math.min(100, Math.round((sig.ltfAlignmentScore / 110) * 100));
+  return Math.min(100, Math.round(((sig.ltfAlignmentScore ?? 0) / 110) * 100));
 }
 
 /* ═══════════════════════════════════════════════════════════════
    R:R VISUAL BAR
    ═══════════════════════════════════════════════════════════════ */
 
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
+const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
+  const rr = isFinite(rawRr) ? rawRr : 0;
   const totalParts = 1 + Math.max(rr, 0);
   const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
   const rewardPct = 100 - riskPct;
@@ -578,8 +571,6 @@ const SORT_OPTIONS: { key: SortField; label: string }[] = [
   { key: 'confidence', label: 'Confidence %' },
   { key: 'rr', label: 'R:R' },
   { key: 'time', label: 'Latest Trigger' },
-  { key: 'iv', label: 'IV Change' },
-  { key: 'volume', label: 'Volume Surge' },
 ];
 
 const SortDropdown: React.FC<{
@@ -628,9 +619,9 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 const PivotCard: React.FC<{
   sig: PivotSignal;
   plan: TradePlan;
-  walletCapital: number;
+  walletState: SlotWalletState;
   onBuy: (sig: PivotSignal, plan: TradePlan, lots: number) => void;
-}> = ({ sig, plan, walletCapital, onBuy }) => {
+}> = ({ sig, plan, walletState, onBuy }) => {
   const [pressing, setPressing] = useState(false);
   const isLong = sig.direction === 'BULLISH';
   const symbol = getSymbol(sig);
@@ -644,7 +635,8 @@ const PivotCard: React.FC<{
     ? 'border-green-500/20 hover:border-green-500/40'
     : 'border-red-500/20 hover:border-red-500/40';
 
-  const confidence = computeConfidence(sig);
+  const isV2 = sig.version === 2;
+  const confidence = isV2 ? (sig.trendConfidence ?? 70) : computeConfidence(sig);
 
   // Option: prefer real data from backend; check futures fallback for MCX
   const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
@@ -669,7 +661,14 @@ const PivotCard: React.FC<{
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
     premium = sig.futuresLtp!;
-    displayInstrumentName = `${sig.futuresSymbol ?? symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+    const futExpiryMonth = (() => {
+      if (!sig.futuresExpiry) return '';
+      const parts = sig.futuresExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${sig.futuresSymbol ?? symbol}${futExpiryMonth ? ' ' + futExpiryMonth : ''} FUT`;
     lotSize = sig.futuresLotSize ?? 1;
     multiplier = sig.futuresMultiplier ?? 1;
   } else if (!noDerivatives) {
@@ -682,18 +681,13 @@ const PivotCard: React.FC<{
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
-    : computeLotSizing(confidence, walletCapital, premium, lotSize, multiplier);
+    : computeSlotSizing(confidence, walletState, premium, lotSize, multiplier,
+        (sig.exchange || sig.optionExchange || 'N').substring(0, 1).toUpperCase(), sig.riskReward ?? 2.0, 60);
 
-  // Metrics
-  const volMultiplier = computeVolumeSurge(sig).toFixed(1);
-  const ivVal = computeIVChange(sig);
-  const ivChange = (ivVal >= 0 ? '+' : '') + ivVal.toFixed(1);
-  const delta = computeDelta(sig, plan).toFixed(2);
-  const oiVal = computeOIChange(sig);
-  const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
+  // Metrics — only ATR is real; Vol/IV/Delta/OI not available for PIVOT strategy
 
   // HTF strength bar
-  const htfPct = Math.round(sig.htfStrength * 100);
+  const htfPct = Math.round((sig.htfStrength ?? 0) * 100);
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
@@ -712,214 +706,401 @@ const PivotCard: React.FC<{
               <span className="text-xs text-slate-500 font-mono">{formatTriggerTime(sig)}</span>
             </div>
           </div>
-          <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
-            {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-            {isLong ? 'Bullish' : 'Bearish'}
-          </span>
-        </div>
-
-        {/* ── PIVOT CONFLUENCE STRIP ── */}
-        <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500">
-              <Target className="w-3 h-3 text-purple-400" />
-              <span>{sig.pivotNearbyLevels} Pivot Levels</span>
-            </div>
-            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-              sig.cprPosition === 'ABOVE_CPR' ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'
-            }`}>{sig.cprPosition === 'ABOVE_CPR' ? 'Above CPR' : 'Below CPR'}</span>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {sig.pivotConfluenceLevels.slice(0, 5).map((lvl, i) => (
-              <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-300 font-mono">{lvl}</span>
-            ))}
-            {sig.pivotConfluenceLevels.length > 5 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
-                +{sig.pivotConfluenceLevels.length - 5} more
+          <div className="flex items-center gap-1.5">
+            {isNseNoTradeWindow(sig.exchange || sig.optionExchange, sig.timestamp || sig.triggerTime) && (
+              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window (3:15–3:30 PM)">
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
               </span>
             )}
+            <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
+              {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+              {isLong ? 'Bullish' : 'Bearish'}
+            </span>
           </div>
         </div>
 
-        {/* ── HTF / LTF ROW ── */}
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {/* HTF Strength */}
-          <div className="bg-slate-900/50 rounded-lg p-2">
-            <div className="text-[10px] text-slate-500 mb-1">HTF {sig.htfDirection}</div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
-                <div className={`h-full rounded-full ${isLong ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${htfPct}%` }} />
+        {/* ── V2: 4-GATE FUNNEL CARD ── */}
+        {isV2 ? (<>
+          {/* Gate Progress */}
+          <div className="mt-3 flex items-center gap-1.5">
+            {[1,2,3,4].map(g => (
+              <div key={g} className="flex items-center gap-1">
+                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                  (sig.gateReached ?? 0) >= g
+                    ? (isLong ? 'bg-green-500/20 text-green-400 border border-green-500/40' : 'bg-red-500/20 text-red-400 border border-red-500/40')
+                    : 'bg-slate-700/50 text-slate-500 border border-slate-600/30'
+                }`}>{g}</div>
+                {g < 4 && <div className={`w-4 h-[2px] ${(sig.gateReached ?? 0) > g ? (isLong ? 'bg-green-500/40' : 'bg-red-500/40') : 'bg-slate-700'}`} />}
               </div>
-              <span className="text-xs font-mono text-slate-300">{htfPct}%</span>
-            </div>
+            ))}
+            <span className="text-[10px] text-slate-500 ml-1.5">
+              {(sig.gateReached ?? 0) >= 4 ? 'All gates passed' : `Gate ${sig.gateReached ?? 0}/4`}
+            </span>
           </div>
-          {/* LTF Alignment */}
-          <div className="bg-slate-900/50 rounded-lg p-2">
-            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-1">
-              LTF {sig.ltfConfirmed ? <span className="text-green-400">Confirmed</span> : <span className="text-slate-500">Pending</span>}
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
-                <div className={`h-full rounded-full ${sig.ltfConfirmed ? (isLong ? 'bg-green-500' : 'bg-red-500') : 'bg-slate-600'}`}
-                  style={{ width: `${getLtfPct(sig)}%` }} />
-              </div>
-              <span className="text-xs font-mono text-slate-300">{getLtfPct(sig)}%</span>
-            </div>
-          </div>
-        </div>
 
-        {/* ── CANDLE PATTERN + RETEST ROW ── */}
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          {/* Candle Pattern */}
-          <div className="bg-slate-900/50 rounded-lg p-2">
-            <div className="text-[10px] text-slate-500 mb-1">Candle Pattern</div>
-            <div className="flex items-center gap-1.5">
-              <span className={`text-xs font-medium ${isLong ? 'text-green-400' : 'text-red-400'}`}>
-                {deriveCandlePattern(sig).pattern}
-              </span>
-              <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 font-mono">
-                {deriveCandlePattern(sig).timeframe}
-              </span>
+          {/* G1: Trend */}
+          <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                <TrendingUp className="w-3 h-3 text-purple-400" />
+                <span className="font-medium">TREND</span>
+              </div>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-medium ${
+                (sig.stAlignment ?? 0) >= 3 ? 'bg-green-500/15 text-green-400' : 'bg-yellow-500/15 text-yellow-400'
+              }`}>{sig.stAlignment ?? 0}/3 aligned</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
+                <div className={`h-full rounded-full ${isLong ? 'bg-green-500' : 'bg-red-500'}`}
+                  style={{ width: `${sig.trendConfidence ?? 0}%` }} />
+              </div>
+              <span className="text-xs font-mono text-slate-300">{sig.trendConfidence ?? 0}%</span>
+            </div>
+            <div className="flex items-center gap-1 mt-1.5">
+              <span className="text-[10px] text-slate-500">Bars in trend:</span>
+              <span className="text-[10px] font-mono text-slate-300">{sig.stBarsInTrend ?? 0}</span>
+              {(sig.htfTimeframes ?? []).length > 0 && (
+                <div className="flex gap-1 ml-auto">
+                  {(sig.htfTimeframes ?? []).map((tf, i) => (
+                    <span key={i} className="text-[9px] px-1 py-0.5 rounded bg-purple-500/10 text-purple-300 font-mono">{tf}</span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-          {/* Retest */}
-          <div className="bg-slate-900/50 rounded-lg p-2">
-            {sig.hasConfirmedRetest ? (
+
+          {/* G2: Pullback + Zone */}
+          <div className="mt-2 bg-slate-900/50 rounded-lg p-2.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                <Target className="w-3 h-3 text-purple-400" />
+                <span className="font-medium">PULLBACK + ZONE</span>
+              </div>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                sig.zoneType === 'BOTH' ? 'bg-purple-500/15 text-purple-300' :
+                sig.zoneType === 'PIVOT' ? 'bg-blue-500/15 text-blue-300' :
+                'bg-amber-500/15 text-amber-300'
+              }`}>{sig.zoneType ?? 'DM'}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
               <div>
-                <div className="flex items-center gap-1 text-[10px] text-slate-500 mb-1">
-                  <ShieldCheck className="w-3 h-3 text-green-400" />
-                  Retested
-                  <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300 font-mono ml-auto">
-                    {getRetestTimeframe(sig)}
+                <div className="text-[10px] text-slate-500 mb-0.5">Pullback</div>
+                <span className="text-xs font-mono text-white">{(sig.pullbackDepth ?? 0).toFixed(0)}%</span>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 mb-0.5">OI Buildup</div>
+                <span className={`text-xs font-mono ${(sig.oiBuildupPct ?? 0) > 0 ? 'text-green-400' : (sig.oiBuildupPct ?? 0) < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                  {(sig.oiBuildupPct ?? 0) > 0 ? '+' : ''}{(sig.oiBuildupPct ?? 0).toFixed(1)}%
+                </span>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 mb-0.5">Volume</div>
+                <span className={`text-xs font-mono ${(sig.volumeSurge ?? 0) >= 1.5 ? 'text-green-400' : (sig.volumeSurge ?? 0) >= 1.0 ? 'text-white' : 'text-slate-400'}`}>
+                  {(sig.volumeSurge ?? 0).toFixed(1)}x
+                </span>
+              </div>
+            </div>
+            {(sig.zoneLevels ?? []).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {(sig.zoneLevels ?? []).slice(0, 4).map((lvl, i) => (
+                  <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-300 font-mono">{lvl}</span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* G3: Entry Trigger */}
+          <div className="mt-2 bg-slate-900/50 rounded-lg p-2.5">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                <Zap className="w-3 h-3 text-cyan-400" />
+                <span className="font-medium">ENTRY TRIGGER</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                  sig.triggerType === 'ST_FLIP' ? 'bg-cyan-500/15 text-cyan-400' :
+                  sig.triggerType === 'FVG' ? 'bg-purple-500/15 text-purple-400' :
+                  sig.triggerType === 'OB' ? 'bg-purple-500/15 text-purple-300' :
+                  sig.triggerType === 'WICK' ? 'bg-amber-500/15 text-amber-300' :
+                  'bg-slate-700/50 text-slate-400'
+                }`}>{sig.triggerType === 'ST_FLIP' ? 'ST Flip' : sig.triggerType ?? 'DM'}</span>
+                <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 font-mono">
+                  {sig.triggerTimeframe ?? '5m'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* ML (if available) — compact for v2 */}
+          {sig.mlAvailable && (
+            <div className="mt-2 flex items-center gap-2 px-2.5 py-1.5 bg-slate-900/50 rounded-lg">
+              <Zap className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+              <span className="text-[10px] text-slate-500">ML:</span>
+              <span className={`text-[10px] font-medium ${
+                sig.mlPrediction === 'BUY' ? 'text-green-400' : sig.mlPrediction === 'SELL' ? 'text-red-400' : 'text-slate-400'
+              }`}>{sig.mlPrediction}</span>
+              <span className="text-[10px] font-mono text-slate-400">{Math.round((sig.mlConfidence ?? 0) * 100)}%</span>
+              {sig.mlRegime && <span className="text-[10px] text-slate-500 ml-auto">{sig.mlRegime.replace(/_/g, ' ')}</span>}
+            </div>
+          )}
+        </>) : (<>
+          {/* ── V1: ORIGINAL CARD LAYOUT ── */}
+          {/* PIVOT CONFLUENCE STRIP */}
+          <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <Target className="w-3 h-3 text-purple-400" />
+                <span>{sig.pivotNearbyLevels} Pivot Levels</span>
+              </div>
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                sig.cprPosition === 'ABOVE_CPR' ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'
+              }`}>{sig.cprPosition === 'ABOVE_CPR' ? 'Above CPR' : 'Below CPR'}</span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(sig.pivotConfluenceLevels || []).slice(0, 5).map((lvl, i) => (
+                <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-300 font-mono">{lvl}</span>
+              ))}
+              {(sig.pivotConfluenceLevels || []).length > 5 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
+                  +{(sig.pivotConfluenceLevels || []).length - 5} more
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* HTF / LTF ROW */}
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="bg-slate-900/50 rounded-lg p-2">
+              <div className="text-[10px] text-slate-500 mb-1">HTF {sig.htfDirection}</div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
+                  <div className={`h-full rounded-full ${isLong ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${htfPct}%` }} />
+                </div>
+                <span className="text-xs font-mono text-slate-300">{htfPct}%</span>
+              </div>
+            </div>
+            <div className="bg-slate-900/50 rounded-lg p-2">
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-1">
+                LTF {sig.ltfConfirmed ? <span className="text-green-400">Confirmed</span> : <span className="text-slate-500">Pending</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
+                  <div className={`h-full rounded-full ${sig.ltfConfirmed ? (isLong ? 'bg-green-500' : 'bg-red-500') : 'bg-slate-600'}`}
+                    style={{ width: `${getLtfPct(sig)}%` }} />
+                </div>
+                <span className="text-xs font-mono text-slate-300">{getLtfPct(sig)}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* CANDLE PATTERN + RETEST ROW */}
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="bg-slate-900/50 rounded-lg p-2">
+              <div className="text-[10px] text-slate-500 mb-1">Candle Pattern</div>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-xs font-medium ${isLong ? 'text-green-400' : 'text-red-400'}`}>
+                  {deriveCandlePattern(sig).pattern}
+                </span>
+                <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700/60 text-slate-400 font-mono">
+                  {deriveCandlePattern(sig).timeframe}
+                </span>
+              </div>
+            </div>
+            <div className="bg-slate-900/50 rounded-lg p-2">
+              {sig.hasConfirmedRetest ? (
+                <div>
+                  <div className="flex items-center gap-1 text-[10px] text-slate-500 mb-1">
+                    <ShieldCheck className="w-3 h-3 text-green-400" />
+                    Retested
+                    {sig.retestDirection && (
+                      <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
+                        sig.retestDirection === 'BULLISH'
+                          ? 'bg-green-500/15 text-green-400'
+                          : 'bg-red-500/15 text-red-400'
+                      }`}>
+                        {sig.retestDirection === 'BULLISH' ? 'Bounced Up' : 'Bounced Down'}
+                      </span>
+                    )}
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300 font-mono ml-auto">
+                      {getRetestTimeframe(sig)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] font-mono text-purple-300 truncate">{cleanRetestLevel(sig.retestLevel)}</span>
+                    {sig.firstRetest && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-300 font-medium flex-shrink-0">1st</span>
+                    )}
+                    <span className={`text-[9px] px-1 py-0.5 rounded font-medium flex-shrink-0 ${
+                      sig.retestQuality === 'PERFECT' ? 'bg-green-500/15 text-green-400' : 'bg-blue-500/15 text-blue-400'
+                    }`}>{sig.retestQuality}</span>
+                    {sig.retestDirection && sig.retestDirection !== sig.direction && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 font-medium flex-shrink-0">
+                        Counter
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center gap-1 text-[10px] text-slate-500 mb-1">
+                    <ShieldAlert className="w-3 h-3 text-slate-500" />
+                    No Retest
+                  </div>
+                  <span className="text-[10px] text-slate-600">Awaiting confirmation</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* SMC */}
+          {(() => {
+            const smcRanges = parseSMCPriceRanges(sig);
+            const activity = deriveMarketActivity(sig);
+            const smcCount = [sig.smcInOrderBlock, sig.smcNearFVG, sig.smcAtLiquidityZone].filter(Boolean).length;
+            return (
+              <div className="mt-2 bg-slate-900/50 rounded-lg p-2.5">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                    <span className="font-medium">SMC</span>
+                    <span className={`px-1.5 py-0.5 rounded font-mono ${
+                      smcCount === 3 ? 'bg-purple-500/20 text-purple-300' :
+                      smcCount >= 2 ? 'bg-purple-500/10 text-purple-400' : 'bg-slate-700/50 text-slate-400'
+                    }`}>{smcCount}/3</span>
+                  </div>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${activity.color}`}>
+                    {activity.label}
                   </span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] font-mono text-purple-300 truncate">{cleanRetestLevel(sig.retestLevel)}</span>
-                  {sig.firstRetest && (
-                    <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-300 font-medium flex-shrink-0">1st</span>
-                  )}
-                  <span className={`text-[9px] px-1 py-0.5 rounded font-medium flex-shrink-0 ${
-                    sig.retestQuality === 'PERFECT' ? 'bg-green-500/15 text-green-400' : 'bg-blue-500/15 text-blue-400'
-                  }`}>{sig.retestQuality}</span>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${sig.smcInOrderBlock ? 'bg-purple-400' : 'bg-slate-600'}`} />
+                      <span className={`text-[10px] ${sig.smcInOrderBlock ? 'text-purple-300' : 'text-slate-600'}`}>Order Block</span>
+                    </div>
+                    {sig.smcInOrderBlock && smcRanges.obRange && (
+                      <span className="text-[10px] font-mono text-purple-300/80">{smcRanges.obRange}</span>
+                    )}
+                    {!sig.smcInOrderBlock && <span className="text-[10px] text-slate-600">—</span>}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${sig.smcNearFVG ? 'bg-purple-400' : 'bg-slate-600'}`} />
+                      <span className={`text-[10px] ${sig.smcNearFVG ? 'text-purple-300' : 'text-slate-600'}`}>
+                        FVG{sig.fvgType ? ` (${sig.fvgType === 'BULLISH' ? 'Bull' : 'Bear'})` : ''}
+                      </span>
+                    </div>
+                    {sig.smcNearFVG && smcRanges.fvgRange && (
+                      <span className="text-[10px] font-mono text-purple-300/80">{smcRanges.fvgRange}</span>
+                    )}
+                    {!sig.smcNearFVG && <span className="text-[10px] text-slate-600">—</span>}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${sig.smcAtLiquidityZone ? 'bg-purple-400' : 'bg-slate-600'}`} />
+                      <span className={`text-[10px] ${sig.smcAtLiquidityZone ? 'text-purple-300' : 'text-slate-600'}`}>
+                        LZ{sig.lzType ? ` (${sig.lzType === 'BUY_SIDE' ? 'Buy' : 'Sell'})` : ''}
+                      </span>
+                    </div>
+                    {sig.smcAtLiquidityZone && smcRanges.lzRange && (
+                      <span className="text-[10px] font-mono text-purple-300/80">{smcRanges.lzRange}</span>
+                    )}
+                    {!sig.smcAtLiquidityZone && <span className="text-[10px] text-slate-600">—</span>}
+                  </div>
                 </div>
               </div>
-            ) : (
-              <div>
-                <div className="flex items-center gap-1 text-[10px] text-slate-500 mb-1">
-                  <ShieldAlert className="w-3 h-3 text-slate-500" />
-                  No Retest
-                </div>
-                <span className="text-[10px] text-slate-600">Awaiting confirmation</span>
-              </div>
-            )}
-          </div>
-        </div>
+            );
+          })()}
 
-        {/* ── SMC (Smart Money Concepts) — Expanded ── */}
-        {(() => {
-          const smcRanges = parseSMCPriceRanges(sig);
-          const activity = deriveMarketActivity(sig);
-          const smcCount = [sig.smcInOrderBlock, sig.smcNearFVG, sig.smcAtLiquidityZone].filter(Boolean).length;
-          return (
+          {/* OI ZONE */}
+          {sig.oiInterpretation && (
+            <div className="mt-2 bg-slate-900/50 rounded-lg p-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                  <span className="font-medium">OI Zone</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                    sig.oiInterpretation === 'LONG_BUILDUP' ? 'bg-green-500/15 text-green-400' :
+                    sig.oiInterpretation === 'SHORT_COVERING' ? 'bg-green-500/10 text-green-300' :
+                    sig.oiInterpretation === 'SHORT_BUILDUP' ? 'bg-red-500/15 text-red-400' :
+                    sig.oiInterpretation === 'LONG_UNWINDING' ? 'bg-red-500/10 text-red-300' :
+                    'bg-slate-700/50 text-slate-400'
+                  }`}>
+                    {sig.oiInterpretation === 'LONG_BUILDUP' ? 'Long Buildup' :
+                     sig.oiInterpretation === 'SHORT_COVERING' ? 'Short Covering' :
+                     sig.oiInterpretation === 'SHORT_BUILDUP' ? 'Short Buildup' :
+                     sig.oiInterpretation === 'LONG_UNWINDING' ? 'Long Unwinding' :
+                     sig.oiInterpretation}
+                  </span>
+                  {sig.oiChangePercent != null && sig.oiChangePercent !== 0 && (
+                    <span className={`text-[10px] font-mono ${
+                      sig.oiChangePercent > 0 ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {sig.oiChangePercent > 0 ? '+' : ''}{sig.oiChangePercent.toFixed(1)}%
+                    </span>
+                  )}
+                  {(() => {
+                    const oiBullish = sig.oiInterpretation === 'LONG_BUILDUP' || sig.oiInterpretation === 'SHORT_COVERING';
+                    const sigBullish = sig.direction === 'BULLISH';
+                    const aligned = oiBullish === sigBullish;
+                    return (
+                      <span className={`text-[9px] px-1 py-0.5 rounded font-medium ${
+                        aligned ? 'bg-green-500/10 text-green-400' : 'bg-amber-500/15 text-amber-300'
+                      }`}>
+                        {aligned ? 'Aligned' : 'Divergent'}
+                      </span>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ML PREDICTION */}
+          {sig.mlAvailable && (
             <div className="mt-2 bg-slate-900/50 rounded-lg p-2.5">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                  <span className="font-medium">SMC</span>
-                  <span className={`px-1.5 py-0.5 rounded font-mono ${
-                    smcCount === 3 ? 'bg-purple-500/20 text-purple-300' :
-                    smcCount >= 2 ? 'bg-purple-500/10 text-purple-400' : 'bg-slate-700/50 text-slate-400'
-                  }`}>{smcCount}/3</span>
+                  <Zap className="w-3 h-3 text-cyan-400" />
+                  <span className="font-medium">ML Prediction</span>
                 </div>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${activity.color}`}>
-                  {activity.label}
-                </span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                  sig.mlPrediction === 'BUY' ? 'bg-green-500/15 text-green-400' :
+                  sig.mlPrediction === 'SELL' ? 'bg-red-500/15 text-red-400' :
+                  'bg-slate-700/50 text-slate-400'
+                }`}>{sig.mlPrediction}</span>
               </div>
-              <div className="space-y-1.5">
-                {/* Order Block */}
-                <div className="flex items-center justify-between">
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <div className="text-[10px] text-slate-500 mb-1">Confidence</div>
                   <div className="flex items-center gap-1.5">
-                    <span className={`w-1.5 h-1.5 rounded-full ${sig.smcInOrderBlock ? 'bg-purple-400' : 'bg-slate-600'}`} />
-                    <span className={`text-[10px] ${sig.smcInOrderBlock ? 'text-purple-300' : 'text-slate-600'}`}>Order Block</span>
+                    <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
+                      <div className={`h-full rounded-full ${
+                        (sig.mlConfidence ?? 0) >= 0.75 ? 'bg-cyan-400' :
+                        (sig.mlConfidence ?? 0) >= 0.60 ? 'bg-cyan-500/70' : 'bg-slate-500'
+                      }`} style={{ width: `${Math.round((sig.mlConfidence ?? 0) * 100)}%` }} />
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300">{Math.round((sig.mlConfidence ?? 0) * 100)}%</span>
                   </div>
-                  {sig.smcInOrderBlock && smcRanges.obRange && (
-                    <span className="text-[10px] font-mono text-purple-300/80">{smcRanges.obRange}</span>
-                  )}
-                  {!sig.smcInOrderBlock && <span className="text-[10px] text-slate-600">—</span>}
                 </div>
-                {/* FVG */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-1.5 h-1.5 rounded-full ${sig.smcNearFVG ? 'bg-purple-400' : 'bg-slate-600'}`} />
-                    <span className={`text-[10px] ${sig.smcNearFVG ? 'text-purple-300' : 'text-slate-600'}`}>Fair Value Gap</span>
-                  </div>
-                  {sig.smcNearFVG && smcRanges.fvgRange && (
-                    <span className="text-[10px] font-mono text-purple-300/80">{smcRanges.fvgRange}</span>
-                  )}
-                  {!sig.smcNearFVG && <span className="text-[10px] text-slate-600">—</span>}
+                <div>
+                  <div className="text-[10px] text-slate-500 mb-1">Regime</div>
+                  <span className={`text-[10px] font-mono ${
+                    (sig.mlRegime ?? '').includes('BULLISH') ? 'text-green-400' :
+                    (sig.mlRegime ?? '').includes('BEARISH') ? 'text-red-400' : 'text-slate-400'
+                  }`}>{(sig.mlRegime ?? 'N/A').replace('_', ' ').replace('MODERATE ', '')}</span>
                 </div>
-                {/* Liquidity Zone */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-1.5 h-1.5 rounded-full ${sig.smcAtLiquidityZone ? 'bg-purple-400' : 'bg-slate-600'}`} />
-                    <span className={`text-[10px] ${sig.smcAtLiquidityZone ? 'text-purple-300' : 'text-slate-600'}`}>Liquidity Zone</span>
-                  </div>
-                  {sig.smcAtLiquidityZone && smcRanges.lzRange && (
-                    <span className="text-[10px] font-mono text-purple-300/80">{smcRanges.lzRange}</span>
-                  )}
-                  {!sig.smcAtLiquidityZone && <span className="text-[10px] text-slate-600">—</span>}
+                <div>
+                  <div className="text-[10px] text-slate-500 mb-1">VPIN</div>
+                  <span className={`text-[10px] font-mono ${
+                    (sig.mlVpinToxicity ?? 0) > 0.7 ? 'text-red-400' :
+                    (sig.mlVpinToxicity ?? 0) > 0.4 ? 'text-amber-400' : 'text-green-400'
+                  }`}>{((sig.mlVpinToxicity ?? 0) * 100).toFixed(0)}%</span>
                 </div>
               </div>
             </div>
-          );
-        })()}
-
-        {/* ── ML PREDICTION INSIGHT ── */}
-        {sig.mlAvailable && (
-          <div className="mt-2 bg-slate-900/50 rounded-lg p-2.5">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                <Zap className="w-3 h-3 text-cyan-400" />
-                <span className="font-medium">ML Prediction</span>
-              </div>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                sig.mlPrediction === 'BUY' ? 'bg-green-500/15 text-green-400' :
-                sig.mlPrediction === 'SELL' ? 'bg-red-500/15 text-red-400' :
-                'bg-slate-700/50 text-slate-400'
-              }`}>{sig.mlPrediction}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {/* ML Confidence */}
-              <div>
-                <div className="text-[10px] text-slate-500 mb-1">Confidence</div>
-                <div className="flex items-center gap-1.5">
-                  <div className="flex-1 h-[4px] rounded-full bg-slate-700 overflow-hidden">
-                    <div className={`h-full rounded-full ${
-                      (sig.mlConfidence ?? 0) >= 0.75 ? 'bg-cyan-400' :
-                      (sig.mlConfidence ?? 0) >= 0.60 ? 'bg-cyan-500/70' : 'bg-slate-500'
-                    }`} style={{ width: `${Math.round((sig.mlConfidence ?? 0) * 100)}%` }} />
-                  </div>
-                  <span className="text-[10px] font-mono text-slate-300">{Math.round((sig.mlConfidence ?? 0) * 100)}%</span>
-                </div>
-              </div>
-              {/* Regime */}
-              <div>
-                <div className="text-[10px] text-slate-500 mb-1">Regime</div>
-                <span className={`text-[10px] font-mono ${
-                  (sig.mlRegime ?? '').includes('BULLISH') ? 'text-green-400' :
-                  (sig.mlRegime ?? '').includes('BEARISH') ? 'text-red-400' : 'text-slate-400'
-                }`}>{(sig.mlRegime ?? 'N/A').replace('_', ' ').replace('MODERATE ', '')}</span>
-              </div>
-              {/* VPIN */}
-              <div>
-                <div className="text-[10px] text-slate-500 mb-1">VPIN</div>
-                <span className={`text-[10px] font-mono ${
-                  (sig.mlVpinToxicity ?? 0) > 0.7 ? 'text-red-400' :
-                  (sig.mlVpinToxicity ?? 0) > 0.4 ? 'text-amber-400' : 'text-green-400'
-                }`}>{((sig.mlVpinToxicity ?? 0) * 100).toFixed(0)}%</span>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
+        </>)}
 
         {/* ── SL / Entry / Targets — Single line ── */}
         <div className="mt-3 flex items-center gap-0 py-2 border-t border-slate-700/40 overflow-x-auto custom-scrollbar">
@@ -970,10 +1151,6 @@ const PivotCard: React.FC<{
         {/* ── METRICS ROW ── */}
         <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
           <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="Vol" value={`${volMultiplier}x`} bold accent="bg-amber-500/15 text-amber-300" />
-          <MetricsChip label="IV" value={`${ivChange}%`} />
-          <MetricsChip label={'\u0394'} value={delta} />
-          <MetricsChip label="OI" value={`${oiChange}%`} />
         </div>
 
         {/* ── INSUFFICIENT FUNDS LABEL ── */}
@@ -1010,7 +1187,7 @@ const PivotCard: React.FC<{
               ${buyBg} ${buyHover} ${buyBgActive}
               ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
           >
-            BUY {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+            {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
           </button>
         )}
       </div>
@@ -1036,12 +1213,36 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     optionType: 'CE', lots: 3, filledPrice: 0, riskPercent: 0,
     status: 'sending',
   });
-  const [walletCapital, setWalletCapital] = useState<number>(100000);
+  const [walletState, setWalletState] = useState<SlotWalletState>({
+    availableMargin: 100000, usedMargin: 0, currentBalance: 100000,
+    openPositionCount: 0, positionsByExchange: { N: 0, M: 0, C: 0 },
+  });
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState<boolean>(true);
+  const [autoTradeLoading, setAutoTradeLoading] = useState(false);
+
+  // Fetch auto-trade status on mount
+  useEffect(() => {
+    pivotAutoTradeApi.getStatus()
+      .then(res => setAutoTradeEnabled(res.autoTradeEnabled))
+      .catch(() => {});
+  }, []);
+
+  const toggleAutoTrade = async () => {
+    setAutoTradeLoading(true);
+    try {
+      const res = await pivotAutoTradeApi.toggle(!autoTradeEnabled);
+      setAutoTradeEnabled(res.autoTradeEnabled);
+    } catch (err) {
+      console.error('Failed to toggle auto-trade:', err);
+    } finally {
+      setAutoTradeLoading(false);
+    }
+  };
 
   const fetchPivot = useCallback(async () => {
     try {
       const data = await fetchJson<PivotSignal[]>('/strategy-state/pivot/active/list');
-      if (data && data.length > 0) {
+      if (Array.isArray(data) && data.length > 0) {
         setSignals(data);
       }
     } catch (err) {
@@ -1052,12 +1253,26 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
   }, []);
 
   useEffect(() => {
-    fetchPivot();
+    fetchPivot(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchPivot, 5000);
+      interval = setInterval(fetchPivot, 60000); // 60s fallback safety net
     }
-    return () => { if (interval) clearInterval(interval); };
+    // WebSocket push: prepend new triggered signals in real-time
+    const onWsSignal = (e: Event) => {
+      const sig = (e as CustomEvent).detail;
+      if (sig && sig.scripCode) {
+        setSignals(prev => {
+          if (prev.some(s => s.scripCode === sig.scripCode && s.triggerTime === sig.triggerTime)) return prev;
+          return [sig, ...prev];
+        });
+      }
+    };
+    window.addEventListener('pivot-signal', onWsSignal);
+    return () => {
+      if (interval) clearInterval(interval);
+      window.removeEventListener('pivot-signal', onWsSignal);
+    };
   }, [autoRefresh, fetchPivot]);
 
   // Close dropdowns on outside click
@@ -1073,17 +1288,28 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // Fetch wallet capital for lot sizing
+  // Fetch wallet state for slot-based sizing
   useEffect(() => {
     const fetchCapital = async () => {
       try {
         const data = await strategyWalletsApi.getCapital('PIVOT_CONFLUENCE');
-        if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
+        if (data?.currentCapital != null) setWalletState({
+          availableMargin: data.availableMargin ?? data.currentCapital,
+          usedMargin: data.usedMargin ?? 0,
+          currentBalance: data.currentCapital,
+          openPositionCount: data.openPositionCount ?? 0,
+          positionsByExchange: data.positionsByExchange ?? { N: 0, M: 0, C: 0 },
+        });
       } catch { /* ignore */ }
     };
     fetchCapital();
     const interval = setInterval(fetchCapital, 30000);
-    return () => clearInterval(interval);
+    const onWalletUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.strategy === 'PIVOT_CONFLUENCE') fetchCapital();
+    };
+    window.addEventListener('wallet-update', onWalletUpdate);
+    return () => { clearInterval(interval); window.removeEventListener('wallet-update', onWalletUpdate); };
   }, []);
 
   /* ── FILTER ── */
@@ -1111,10 +1337,6 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
         return b.plan.rr - a.plan.rr || getEpoch(b.sig) - getEpoch(a.sig);
       case 'time':
         return getEpoch(b.sig) - getEpoch(a.sig);
-      case 'iv':
-        return computeIVChange(b.sig) - computeIVChange(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
-      case 'volume':
-        return computeVolumeSurge(b.sig) - computeVolumeSurge(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
       default:
         return 0;
     }
@@ -1150,7 +1372,14 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     } else if (hasFutures) {
       instrumentMode = 'FUTURES';
       premium = sig.futuresLtp!;
-      displayName = `${sig.futuresSymbol ?? symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      const futMonth = (() => {
+        if (!sig.futuresExpiry) return '';
+        const parts = sig.futuresExpiry.split('-');
+        if (parts.length < 2) return '';
+        const mi = parseInt(parts[1], 10) - 1;
+        return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][mi] ?? '';
+      })();
+      displayName = `${sig.futuresSymbol ?? symbol}${futMonth ? ' ' + futMonth : ''} FUT`;
       lotSize = sig.futuresLotSize ?? 1;
       multiplier = sig.futuresMultiplier ?? 1;
       tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
@@ -1158,7 +1387,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
       // Legacy fallback
       instrumentMode = 'OPTION';
       premium = estimateOptionPremium(plan);
-      displayName = `${symbol} ${plan.strike} ${plan.optionType}`;
+      displayName = `${symbol} ${plan.strike} ${plan.optionType ?? ''}`;
       lotSize = 1;
     }
 
@@ -1206,7 +1435,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
         instrumentType: instrumentMode === 'FUTURES' ? 'FUTURES' : 'OPTION',
         underlyingScripCode: sig.scripCode,
         underlyingSymbol: symbol,
-        side: 'BUY',
+        side: (instrumentMode === 'FUTURES' ? 'FUTURES' : 'OPTION') === 'OPTION' ? 'BUY' : (sig.direction === 'BULLISH' ? 'BUY' : 'SELL'),
         quantity: lots * lotSize,
         lots,
         lotSize,
@@ -1230,6 +1459,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
         exchange: sig.optionExchange ?? sig.futuresExchange ?? getExchange(sig),
         direction: sig.direction,
         confidence: computeConfidence(sig),
+        executionMode: 'MANUAL',
       };
 
       const result = await strategyTradesApi.create(req);
@@ -1237,8 +1467,8 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
       setExecution(prev => ({
         ...prev,
         status: 'filled',
-        filledPrice: result.entryPrice ?? premium,
-        orderId: result.tradeId,
+        filledPrice: result?.entryPrice ?? premium,
+        orderId: result?.tradeId,
         riskPercent: plan.sl && sig.entryPrice
           ? Math.round(Math.abs(sig.entryPrice - plan.sl) / sig.entryPrice * 100 * 10) / 10
           : 0.8,
@@ -1266,8 +1496,24 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     <div className="relative">
       {/* ── STICKY HEADER ── */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
-        <div className="flex items-center justify-between h-14 px-4">
-          <h1 className="text-lg font-semibold text-purple-400 tracking-tight">PIVOT</h1>
+        <div className="flex items-center justify-between h-14 px-2 sm:px-4">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <h1 className="text-lg font-semibold text-purple-400 tracking-tight">PIVOT</h1>
+            {/* Auto-Trade Toggle */}
+            <button
+              onClick={toggleAutoTrade}
+              disabled={autoTradeLoading}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all border ${
+                autoTradeEnabled
+                  ? 'bg-green-500/15 text-green-400 border-green-500/40 hover:bg-green-500/25'
+                  : 'bg-red-500/15 text-red-400 border-red-500/40 hover:bg-red-500/25'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${autoTradeEnabled ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+              <span className="hidden sm:inline">{autoTradeLoading ? 'Saving...' : autoTradeEnabled ? 'Auto-Trade ON' : 'Auto-Trade OFF'}</span>
+              <span className="sm:hidden">{autoTradeLoading ? '...' : autoTradeEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             {/* Filter */}
             <div className="relative" data-dropdown>
@@ -1306,7 +1552,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
             </div>
           </div>
         </div>
-        <div className="px-4 pb-2">
+        <div className="px-2 sm:px-4 pb-2">
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800/80 text-[12px] text-slate-400 border border-slate-700/50">
             Sorted by {sortLabel}
           </span>
@@ -1327,13 +1573,13 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
         )}
 
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
               <PivotCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
                 sig={sig}
                 plan={plan}
-                walletCapital={walletCapital}
+                walletState={walletState}
                 onBuy={handleBuy}
               />
             ))}

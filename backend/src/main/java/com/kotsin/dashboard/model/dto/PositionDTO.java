@@ -39,6 +39,7 @@ public class PositionDTO {
 
     // Strategy
     private String strategy;
+    private String executionMode;  // "AUTO" or "MANUAL"
 
     // Dual equity/option levels for strategy trades
     private Double equitySl;

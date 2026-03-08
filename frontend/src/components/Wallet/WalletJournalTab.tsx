@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { fetchJson, putJson } from '../../services/api'
+import { getStrategyTextColor } from '../../utils/strategyColors'
 
 interface TradeEntry {
   id: string
@@ -136,12 +137,7 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
                         <div><span className="text-slate-500">Duration:</span> <span className="text-white">{trade.durationMinutes}m</span></div>
                         <div>
                           <span className="text-slate-500">Strategy:</span>{' '}
-                          <span className={`font-medium ${
-                            trade.strategy === 'FUDKII' ? 'text-orange-400'
-                            : trade.strategy === 'FUKAA' ? 'text-amber-400'
-                            : trade.strategy === 'PIVOT' ? 'text-blue-400'
-                            : 'text-white'
-                          }`}>{trade.strategy}</span>
+                          <span className={`font-medium ${getStrategyTextColor(trade.strategy)}`}>{trade.strategy}</span>
                         </div>
                         <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
                         <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>
@@ -231,12 +227,7 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
                               <div><span className="text-slate-500">Duration:</span> <span className="text-white">{trade.durationMinutes}m</span></div>
                               <div>
                                 <span className="text-slate-500">Strategy:</span>{' '}
-                                <span className={`font-medium ${
-                                  trade.strategy === 'FUDKII' ? 'text-orange-400'
-                                  : trade.strategy === 'FUKAA' ? 'text-amber-400'
-                                  : trade.strategy === 'PIVOT' ? 'text-blue-400'
-                                  : 'text-white'
-                                }`}>{trade.strategy}</span>
+                                <span className={`font-medium ${getStrategyTextColor(trade.strategy)}`}>{trade.strategy}</span>
                               </div>
                               <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
                               <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>

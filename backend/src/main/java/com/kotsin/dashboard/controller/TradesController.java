@@ -1,6 +1,7 @@
 package com.kotsin.dashboard.controller;
 
 import com.kotsin.dashboard.model.dto.TradeDTO;
+import com.kotsin.dashboard.service.StrategyNameResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -162,17 +163,8 @@ public class TradesController {
 
             double pnlPercent = entryPrice > 0 ? (pnl / entryPrice) * 100 : 0;
 
-            // Extract strategy with fallback chain: signalSource -> strategy -> signalType -> UNKNOWN
-            String strategy = doc.getString("signalSource");
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = doc.getString("strategy");
-            }
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = doc.getString("signalType");
-            }
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = "UNKNOWN";
-            }
+            // Extract strategy via shared resolver (unified fallback chain + normalization)
+            String strategy = StrategyNameResolver.extractFromDocument(doc);
 
             return TradeDTO.builder()
                     .tradeId(doc.getString("signalId"))
@@ -203,9 +195,24 @@ public class TradesController {
     }
 
     private String determineSide(Document doc) {
+        // 1. Read stored side field (BUY/SELL from VirtualEngineService)
+        String side = doc.getString("side");
+        if ("SELL".equalsIgnoreCase(side)) return "SHORT";
+        if ("BUY".equalsIgnoreCase(side)) return "LONG";
+
+        // 2. Read stored direction field (BULLISH/BEARISH)
+        String direction = doc.getString("direction");
+        if ("BEARISH".equalsIgnoreCase(direction)) return "SHORT";
+        if ("BULLISH".equalsIgnoreCase(direction)) return "LONG";
+
+        // 3. Fallback: derive from entry vs stop (only when stop > 0)
         double entry = getDouble(doc, "entryPrice");
         double stop = getDouble(doc, "stopLoss");
-        return entry > stop ? "LONG" : "SHORT";
+        if (stop > 0 && entry > 0) {
+            return entry > stop ? "LONG" : "SHORT";
+        }
+
+        return "LONG";
     }
 
     private LocalDateTime parseDateTime(Object obj) {

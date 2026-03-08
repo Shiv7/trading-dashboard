@@ -15,6 +15,7 @@ const MAX_VISIBLE = 4
 export default function ToastContainer() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const notifications = useDashboardStore((s) => s.notifications)
+  const notificationsMuted = useDashboardStore((s) => s.notificationsMuted)
   const lastCountRef = useRef(0)
   const navigate = useNavigate()
   const autoTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
@@ -22,42 +23,55 @@ export default function ToastContainer() {
   // Watch for new notifications
   useEffect(() => {
     if (notifications.length > lastCountRef.current) {
-      const newNotifications = notifications.slice(0, notifications.length - lastCountRef.current)
+      // Skip popup toasts and sounds when muted
+      if (!notificationsMuted) {
+        const newNotifications = notifications.slice(0, notifications.length - lastCountRef.current)
 
-      newNotifications.forEach((notification) => {
-        const id = `${notification.timestamp}-${Math.random()}`
-        setToasts((prev) => [...prev, { id, notification, visible: true }])
+        newNotifications.forEach((notification) => {
+          const id = `${notification.timestamp}-${Math.random()}`
+          setToasts((prev) => [...prev, { id, notification, visible: true }])
 
-        // Play sound based on notification type
-        if (notification.type.includes('BULLISH') || notification.type.includes('LONG')) {
-          alertService.playSignalAlert('bullish')
-        } else if (notification.type.includes('BEARISH') || notification.type.includes('SHORT')) {
-          alertService.playSignalAlert('bearish')
-        } else if (notification.type.includes('XFACTOR')) {
-          alertService.playXFactor()
-        } else if (notification.type.includes('SL_HIT')) {
-          alertService.playTradeAlert('sl_hit')
-        } else if (notification.type.includes('TP_HIT') || notification.type.includes('WIN')) {
-          alertService.playTradeAlert('tp_hit')
-        } else {
-          alertService.playSignalAlert('neutral')
-        }
+          // Play sound based on notification type
+          if (notification.type.includes('BULLISH') || notification.type.includes('LONG')) {
+            alertService.playSignalAlert('bullish')
+          } else if (notification.type.includes('BEARISH') || notification.type.includes('SHORT')) {
+            alertService.playSignalAlert('bearish')
+          } else if (notification.type.includes('XFACTOR')) {
+            alertService.playXFactor()
+          } else if (notification.type.includes('SL_HIT')) {
+            alertService.playTradeAlert('sl_hit')
+          } else if (notification.type.includes('TP_HIT') || notification.type.includes('WIN')) {
+            alertService.playTradeAlert('tp_hit')
+          } else {
+            alertService.playSignalAlert('neutral')
+          }
 
-        // Auto-remove after 5 seconds
-        const t1 = setTimeout(() => {
-          setToasts((prev) =>
-            prev.map((t) => (t.id === id ? { ...t, visible: false } : t))
-          )
-          const t2 = setTimeout(() => {
-            setToasts((prev) => prev.filter((t) => t.id !== id))
-          }, 300)
-          autoTimersRef.current.add(t2)
-        }, 5000)
-        autoTimersRef.current.add(t1)
-      })
+          // Auto-remove after 5 seconds
+          const t1 = setTimeout(() => {
+            setToasts((prev) =>
+              prev.map((t) => (t.id === id ? { ...t, visible: false } : t))
+            )
+            const t2 = setTimeout(() => {
+              setToasts((prev) => prev.filter((t) => t.id !== id))
+            }, 300)
+            autoTimersRef.current.add(t2)
+          }, 5000)
+          autoTimersRef.current.add(t1)
+        })
+      }
     }
     lastCountRef.current = notifications.length
-  }, [notifications])
+  }, [notifications, notificationsMuted])
+
+  // When muted, immediately clear all existing toasts
+  useEffect(() => {
+    if (notificationsMuted && toasts.length > 0) {
+      autoTimersRef.current.forEach(clearTimeout)
+      autoTimersRef.current.clear()
+      setToasts((prev) => prev.map((t) => ({ ...t, visible: false })))
+      setTimeout(() => setToasts([]), 300)
+    }
+  }, [notificationsMuted])
 
   // Dismiss ALL toasts at once — clicking X on any toast clears the entire stack
   const dismissAll = useCallback(() => {

@@ -25,9 +25,9 @@ public class UserWallet {
     private String walletType; // PAPER, REAL
 
     @Builder.Default
-    private double initialCapital = 100000;
+    private double initialCapital = 1000000;
     @Builder.Default
-    private double currentCapital = 100000;
+    private double currentCapital = 1000000;
 
     private double realizedPnl;
     private double unrealizedPnl;

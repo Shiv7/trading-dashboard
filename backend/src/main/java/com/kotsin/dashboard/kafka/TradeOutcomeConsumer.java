@@ -303,7 +303,31 @@ public class TradeOutcomeConsumer {
                     .append("target3Hit", root.path("target3Hit").asBoolean(false))
                     .append("stopHit", root.path("stopHit").asBoolean(false))
                     .append("exchange", root.path("exchange").asText("N"))
-                    .append("durationMinutes", trade.getDurationMinutes());
+                    .append("durationMinutes", trade.getDurationMinutes())
+                    .append("target2", optionalJsonDouble(root, "target2"))
+                    .append("target3", optionalJsonDouble(root, "target3"))
+                    .append("target4", optionalJsonDouble(root, "target4"))
+                    .append("target4Hit", root.path("target4Hit").asBoolean(false))
+                    .append("instrumentType", root.path("instrumentType").asText(null))
+                    .append("instrumentSymbol", root.path("instrumentSymbol").asText(null))
+                    .append("confidence", optionalJsonDouble(root, "confidence"))
+                    .append("equitySl", optionalJsonDouble(root, "equitySl"))
+                    .append("equityT1", optionalJsonDouble(root, "equityT1"))
+                    .append("equityT2", optionalJsonDouble(root, "equityT2"))
+                    .append("equityT3", optionalJsonDouble(root, "equityT3"))
+                    .append("equityT4", optionalJsonDouble(root, "equityT4"))
+                    .append("optionSl", optionalJsonDouble(root, "optionSl"))
+                    .append("optionT1", optionalJsonDouble(root, "optionT1"))
+                    .append("optionT2", optionalJsonDouble(root, "optionT2"))
+                    .append("optionT3", optionalJsonDouble(root, "optionT3"))
+                    .append("optionT4", optionalJsonDouble(root, "optionT4"))
+                    // Signal-level metrics for analytics
+                    .append("atr", optionalJsonDouble(root, "atr"))
+                    .append("volumeSurge", optionalJsonDouble(root, "volumeSurge"))
+                    .append("oiChangePercent", optionalJsonDouble(root, "oiChangePercent"))
+                    .append("blockDealPercent", optionalJsonDouble(root, "blockDealPercent"))
+                    .append("riskReward", optionalJsonDouble(root, "riskReward"))
+                    .append("executionMode", root.path("executionMode").asText(null));
 
             // Store times as Date objects for MongoDB queries
             if (trade.getEntryTime() != null) {
@@ -320,6 +344,13 @@ public class TradeOutcomeConsumer {
         } catch (Exception e) {
             log.error("Failed to persist trade outcome: {}", e.getMessage(), e);
         }
+    }
+
+    private Double optionalJsonDouble(JsonNode root, String field) {
+        JsonNode node = root.path(field);
+        if (node.isNull() || node.isMissingNode()) return null;
+        double val = node.asDouble(0);
+        return val != 0 ? val : null;
     }
 
     private LocalDateTime parseDateTime(JsonNode node) {

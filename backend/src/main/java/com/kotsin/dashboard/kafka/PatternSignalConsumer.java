@@ -281,6 +281,26 @@ public class PatternSignalConsumer {
                 .gexRegime(root.path("gexRegime").asText(""))
                 .session(root.path("session").asText(""))
                 .daysToExpiry(root.has("daysToExpiry") ? root.path("daysToExpiry").asInt() : null)
+                .volumeConfirmed(root.has("volumeConfirmed") ? root.path("volumeConfirmed").asBoolean() : null)
+                .volumeRatio(root.has("volumeRatio") ? root.path("volumeRatio").asDouble() : null)
+                // Option/futures enrichment
+                .optionAvailable(root.has("optionAvailable") ? root.path("optionAvailable").asBoolean() : null)
+                .optionFailureReason(root.path("optionFailureReason").asText(null))
+                .optionScripCode(root.path("optionScripCode").asText(null))
+                .optionSymbol(root.path("optionSymbol").asText(null))
+                .optionStrike(nullableDouble(root, "optionStrike"))
+                .optionType(root.path("optionType").asText(null))
+                .optionExpiry(root.path("optionExpiry").asText(null))
+                .optionLtp(nullableDouble(root, "optionLtp"))
+                .optionLotSize(root.has("optionLotSize") ? root.path("optionLotSize").asInt() : null)
+                .optionMultiplier(root.has("optionMultiplier") ? root.path("optionMultiplier").asInt() : null)
+                .futuresAvailable(root.has("futuresAvailable") ? root.path("futuresAvailable").asBoolean() : null)
+                .futuresScripCode(root.path("futuresScripCode").asText(null))
+                .futuresSymbol(root.path("futuresSymbol").asText(null))
+                .futuresLtp(nullableDouble(root, "futuresLtp"))
+                .futuresLotSize(root.has("futuresLotSize") ? root.path("futuresLotSize").asInt() : null)
+                .futuresMultiplier(root.has("futuresMultiplier") ? root.path("futuresMultiplier").asInt() : null)
+                .futuresExpiry(root.path("futuresExpiry").asText(null))
                 .build();
     }
 

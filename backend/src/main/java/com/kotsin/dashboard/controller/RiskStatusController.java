@@ -38,9 +38,9 @@ public class RiskStatusController {
         } catch (Exception e) {
             log.error("Failed to get risk status: {}", e.getMessage());
             return ResponseEntity.ok(Map.of(
-                    "healthy", true,
-                    "status", "UNKNOWN",
-                    "message", "Unable to connect to execution service"
+                    "healthy", false,
+                    "status", "DOWN",
+                    "message", "Unable to connect to execution service: " + e.getMessage()
             ));
         }
     }

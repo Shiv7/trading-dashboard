@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Check, AlertTriangle, Loader2, Activity
+  Check, AlertTriangle, Loader2, Activity, Clock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyWalletsApi, strategyTradesApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
+import { computeSlotSizing, SlotWalletState, isNseNoTradeWindow } from '../../utils/tradingUtils';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -57,6 +58,15 @@ interface MicroAlphaSignal {
   futuresExchange?: string;
   futuresExchangeType?: string;
   futuresVolume?: number;
+  // Raw metrics for enhanced card
+  oiChangePercent?: number;
+  oiInterpretation?: string;
+  volumeXFactor?: number;
+  pcrValue?: number;
+  maxPainDistPercent?: number;
+  modeReason?: string;
+  blockCount?: number;
+  modeWeights?: Record<string, number>;
 }
 
 interface TradePlan {
@@ -98,7 +108,8 @@ interface MicroAlphaTabContentProps {
    UTILITY FUNCTIONS
    ═══════════════════════════════════════════════════════════════ */
 
-function fmt(v: number): string {
+function fmt(v: number | null | undefined): string {
+  if (v == null || isNaN(v)) return 'DM';
   return Number(v.toFixed(2)).toString();
 }
 
@@ -134,14 +145,10 @@ function formatTriggerTime(sig: MicroAlphaSignal): string {
   if (!sig.triggerTime) return '--';
   const d = new Date(sig.triggerTime);
   if (isNaN(d.getTime())) return '--';
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+  const day = d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric' });
+  const month = d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short' }).toUpperCase();
+  const time = d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+  return `${day} ${month} ${time}`;
 }
 
 function estimateOptionPremium(plan: TradePlan): number {
@@ -178,20 +185,22 @@ function mapToOptionLevels(
 function extractTradePlan(sig: MicroAlphaSignal): TradePlan {
   const isLong = sig.direction === 'BULLISH';
   const optionType: 'CE' | 'PE' = isLong ? 'CE' : 'PE';
-  const { strike, interval } = getOTMStrike(sig.entryPrice, sig.direction);
+  const entry = sig.entryPrice ?? 0;
+  const sl = sig.stopLoss ?? 0;
+  const { strike, interval } = getOTMStrike(entry, sig.direction);
 
-  const risk = Math.abs(sig.entryPrice - sig.stopLoss);
-  const atr = risk > 0 ? risk : sig.entryPrice * 0.004;
+  const risk = Math.abs(entry - sl);
+  const atr = risk > 0 ? risk : entry * 0.004;
 
-  const t1 = sig.target;
-  const t2 = isLong ? sig.entryPrice + risk * 3 : sig.entryPrice - risk * 3;
-  const t3 = isLong ? sig.entryPrice + risk * 4 : sig.entryPrice - risk * 4;
+  const t1 = sig.target ?? entry;
+  const t2 = isLong ? entry + risk * 3 : entry - risk * 3;
+  const t3 = isLong ? entry + risk * 4 : entry - risk * 4;
 
   return {
-    entry: sig.entryPrice,
-    sl: sig.stopLoss,
+    entry,
+    sl,
     t1, t2, t3,
-    rr: sig.riskReward,
+    rr: sig.riskReward ?? 0,
     atr,
     optionType,
     strike,
@@ -201,7 +210,7 @@ function extractTradePlan(sig: MicroAlphaSignal): TradePlan {
 
 /** Confidence from absConviction (already 0-100 scale) */
 function computeConfidence(sig: MicroAlphaSignal): number {
-  return Math.min(97, Math.max(40, Math.round(sig.absConviction)));
+  return Math.min(97, Math.max(0, Math.round(sig.absConviction ?? 0)));
 }
 
 /** Composite strength score */
@@ -213,32 +222,7 @@ function computeStrength(sig: MicroAlphaSignal, plan: TradePlan): number {
   return Math.min(100, Math.round(confNorm + rrNorm));
 }
 
-/** Compute lot sizing based on confidence and wallet capital */
-function computeLotSizing(
-  confidence: number,
-  walletCapital: number,
-  optionLtp: number,
-  lotSize: number
-): { lots: number; quantity: number; disabled: boolean; insufficientFunds: boolean; creditAmount: number; allocPct: number } {
-  if (confidence < 60) {
-    return { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 };
-  }
-  const allocPct = confidence > 75 ? 0.75 : 0.50;
-  const allocatedCapital = walletCapital * allocPct;
-  const costPerLot = optionLtp * lotSize;
-  if (costPerLot <= 0) {
-    return { lots: 1, quantity: lotSize, disabled: false, insufficientFunds: false, creditAmount: 0, allocPct };
-  }
-  let lots = Math.floor(allocatedCapital / costPerLot);
-  let insufficientFunds = false;
-  let creditAmount = 0;
-  if (lots < 1) {
-    lots = 1;
-    insufficientFunds = true;
-    creditAmount = Math.round((costPerLot - walletCapital) * 100) / 100;
-  }
-  return { lots, quantity: lots * lotSize, disabled: false, insufficientFunds, creditAmount, allocPct };
-}
+// computeSlotSizing: imported from ../../utils/tradingUtils (threshold=12 for MicroAlpha)
 
 /** Trading mode badge color */
 function getModeColor(mode: string): string {
@@ -252,18 +236,88 @@ function getModeColor(mode: string): string {
 
 function getModeLabel(mode: string): string {
   switch (mode) {
-    case 'TREND_FOLLOWING': return 'Trend';
-    case 'MEAN_REVERSION': return 'Reversion';
-    case 'BREAKOUT_AWAITING': return 'Breakout';
+    case 'TREND_FOLLOWING': return 'Trend Following';
+    case 'MEAN_REVERSION': return 'Mean Reversion';
+    case 'BREAKOUT_AWAITING': return 'Breakout Awaiting';
+    case 'TREND_WITH_CAUTION': return 'Trend w/ Caution';
+    case 'CAUTIOUS': return 'Cautious';
+    case 'AVOID': return 'Avoid';
     default: return mode;
   }
+}
+
+function getModeIcon(mode: string): string {
+  switch (mode) {
+    case 'TREND_FOLLOWING': return '\u2197'; // ↗
+    case 'MEAN_REVERSION': return '\u21C4'; // ⇄
+    case 'BREAKOUT_AWAITING': return '\u26A1'; // ⚡
+    case 'TREND_WITH_CAUTION': return '\u26A0'; // ⚠
+    default: return '\u2022'; // •
+  }
+}
+
+/** OI interpretation → human-readable label */
+function getOIInterpLabel(interp: string | undefined): string {
+  switch (interp) {
+    case 'LONG_BUILDUP': return 'Long Buildup';
+    case 'SHORT_COVERING': return 'Short Covering';
+    case 'SHORT_BUILDUP': return 'Short Buildup';
+    case 'LONG_UNWINDING': return 'Long Unwinding';
+    default: return 'Neutral';
+  }
+}
+
+/** OI interpretation → meaning */
+function getOIInterpMeaning(interp: string | undefined): string {
+  switch (interp) {
+    case 'LONG_BUILDUP': return 'new longs entering, bullish';
+    case 'SHORT_COVERING': return 'shorts exiting, mildly bullish';
+    case 'SHORT_BUILDUP': return 'new shorts entering, bearish';
+    case 'LONG_UNWINDING': return 'longs exiting, bearish pressure';
+    default: return 'no clear directional bias';
+  }
+}
+
+/**
+ * Build smart inference text — interpretation only, no raw numbers
+ * (raw numbers are already shown in the x-factor metrics row).
+ */
+function buildSmartInference(sig: MicroAlphaSignal): string {
+  const parts: string[] = [];
+  const blockCount = sig.blockCount ?? 0;
+  const oiInterp = sig.oiInterpretation;
+  const pcr = sig.pcrValue ?? 0;
+  const isLong = sig.direction === 'BULLISH';
+
+  // OI interpretation (most important signal)
+  if (oiInterp && oiInterp !== 'NEUTRAL') {
+    const interpLabel = getOIInterpLabel(oiInterp);
+    const meaning = getOIInterpMeaning(oiInterp);
+    parts.push(`${interpLabel} \u2014 ${meaning}`);
+  }
+
+  // Block deal interpretation
+  if (blockCount > 0) {
+    const side = isLong ? 'buy-side' : 'sell-side';
+    parts.push(`Institutional ${side} positioning via block deals`);
+  }
+
+  // PCR interpretation
+  if (pcr > 0.8) {
+    parts.push('Elevated puts suggest institutional hedging');
+  } else if (pcr < 0.3 && pcr > 0) {
+    parts.push('Extreme call-side greed \u2014 contrarian caution');
+  }
+
+  return parts.length > 0 ? parts.join('. ') + '.' : '';
 }
 
 /* ═══════════════════════════════════════════════════════════════
    R:R VISUAL BAR
    ═══════════════════════════════════════════════════════════════ */
 
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
+const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
+  const rr = isFinite(rawRr) ? rawRr : 0;
   const totalParts = 1 + Math.max(rr, 0);
   const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
   const rewardPct = 100 - riskPct;
@@ -288,13 +342,40 @@ const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
    METRICS CHIP
    ═══════════════════════════════════════════════════════════════ */
 
-const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
-    ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
-    <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
-  </div>
-);
+/* ═══════════════════════════════════════════════════════════════
+   SUB-SCORE BAR (horizontal fill bar with weight annotation)
+   ═══════════════════════════════════════════════════════════════ */
+
+const SubScoreBar: React.FC<{
+  label: string;
+  score: number;
+  weight: number;
+  callout?: string;
+}> = ({ label, score, weight, callout }) => {
+  const absScore = Math.abs(score);
+  const fillPct = Math.min(100, absScore); // Cap visual at 100% width
+  const isPositive = score > 0;
+  const barColor = absScore < 5 ? 'bg-slate-600' : isPositive ? 'bg-green-500/70' : 'bg-red-500/70';
+  const textColor = absScore < 5 ? 'text-slate-500' : isPositive ? 'text-green-400' : 'text-red-400';
+  const weightPct = Math.round(weight * 100);
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-slate-500 w-[52px] text-right shrink-0 capitalize">{label}</span>
+      <div className="flex-1 h-[6px] bg-slate-800 rounded-full overflow-hidden relative">
+        <div className={`h-full rounded-full ${barColor} transition-all duration-300`} style={{ width: `${fillPct}%` }} />
+        {absScore > 100 && (
+          <div className="absolute right-0 top-0 h-full w-1 bg-yellow-400 animate-pulse" />
+        )}
+      </div>
+      <span className={`font-mono text-[11px] font-semibold w-[36px] text-right ${textColor}`}>
+        {score > 0 ? '+' : ''}{score.toFixed(0)}
+      </span>
+      <span className="text-[9px] text-slate-600 w-[28px] text-right">{weightPct}%</span>
+      {callout && <span className="text-[9px] text-slate-500 truncate max-w-[70px]">{callout}</span>}
+    </div>
+  );
+};
 
 /* ═══════════════════════════════════════════════════════════════
    EXECUTION OVERLAY
@@ -465,9 +546,9 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 const MicroAlphaCard: React.FC<{
   sig: MicroAlphaSignal;
   plan: TradePlan;
-  walletCapital: number;
+  walletState: SlotWalletState;
   onBuy: (sig: MicroAlphaSignal, plan: TradePlan, lots: number) => void;
-}> = ({ sig, plan, walletCapital, onBuy }) => {
+}> = ({ sig, plan, walletState, onBuy }) => {
   const [pressing, setPressing] = useState(false);
   const isLong = sig.direction === 'BULLISH';
 
@@ -502,7 +583,14 @@ const MicroAlphaCard: React.FC<{
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
     premium = sig.futuresLtp!;
-    displayInstrumentName = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+    const futExpiryMonth = (() => {
+      if (!sig.futuresExpiry) return '';
+      const parts = sig.futuresExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode}${futExpiryMonth ? ' ' + futExpiryMonth : ''} FUT`;
     lotSize = sig.futuresLotSize ?? 1;
   } else if (!noDerivatives) {
     // Legacy fallback (old signals without optionAvailable field)
@@ -514,31 +602,62 @@ const MicroAlphaCard: React.FC<{
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
-    : computeLotSizing(confidence, walletCapital, premium, lotSize);
+    : computeSlotSizing(confidence, walletState, premium, lotSize, 1,
+        (sig.exchange || 'N').substring(0, 1).toUpperCase(), sig.riskReward ?? 2.0, 12);
+
+  // Sub-score callouts
+  const weights = sig.modeWeights ?? {};
+  const subScores = sig.subScores ?? {};
+  const oiCallout = (sig.oiChangePercent && Math.abs(sig.oiChangePercent) > 0.5)
+    ? `${sig.oiChangePercent > 0 ? '+' : ''}${sig.oiChangePercent.toFixed(1)}%` : undefined;
+  const gammaCallout = (sig.maxPainDistPercent && Math.abs(sig.maxPainDistPercent) > 0.1)
+    ? `${Math.abs(sig.maxPainDistPercent).toFixed(1)}% MP` : undefined;
+  const optsCallout = sig.pcrValue ? `PCR ${sig.pcrValue.toFixed(2)}` : undefined;
+  const blockCallout = (sig.blockCount && sig.blockCount > 0)
+    ? `${sig.blockCount} deal${sig.blockCount > 1 ? 's' : ''}` : undefined;
+  const volCallout = (sig.volumeXFactor && sig.volumeXFactor > 1.1)
+    ? `${sig.volumeXFactor.toFixed(1)}\u00D7 vol` : undefined;
+
+  // Smart inference
+  const smartInference = buildSmartInference(sig);
+
+  // Conviction color intensity
+  const convColor = confidence >= 100 ? 'text-cyan-300 animate-pulse'
+    : confidence >= 60 ? 'text-green-400' : confidence >= 30 ? 'text-amber-400' : 'text-slate-400';
+
+  // Direction label for mode banner
+  const dirLabel = sig.direction === 'BULLISH' ? 'Continue Bullish' : sig.direction === 'BEARISH' ? 'Continue Bearish' : 'Neutral';
+  // Equity-equivalent position for banner (shares @ price = amount)
+  const equityCapital = walletState.availableMargin * 0.50;
+  const equityShares = sig.entryPrice > 0 ? Math.floor(equityCapital / sig.entryPrice) : 0;
+  const equityAmount = equityShares * sig.entryPrice;
+  const sharesLabel = equityShares > 0
+    ? `${equityShares.toLocaleString('en-IN')} shares @ \u20B9${fmt(sig.entryPrice)}/- (\u20B9${Math.round(equityAmount).toLocaleString('en-IN')}/-)`
+    : '';
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
       overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
       <div className="p-3 sm:p-4">
 
-        {/* ── TOP SECTION ── */}
+        {/* ── TOP: Symbol + Direction + Conviction + Time ── */}
         <div className="flex items-start justify-between mb-1">
           <div>
             <h3 className="text-lg font-semibold text-white leading-tight">
               {sig.symbol || sig.scripCode}
             </h3>
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-slate-500">
-                Conviction <span className="font-mono text-slate-400">{confidence}%</span>
-              </span>
+              <span className={`text-xl font-bold font-mono ${convColor}`}>{confidence}%</span>
               <span className="text-slate-700">|</span>
-              <span className="text-xs text-slate-500 font-mono">{formatTriggerTime(sig)}</span>
+              <span className="text-[11px] text-slate-500 font-mono">{formatTriggerTime(sig)}</span>
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${getModeColor(sig.tradingMode)}`}>
-              {getModeLabel(sig.tradingMode)}
-            </span>
+            {isNseNoTradeWindow(sig.exchange, sig.triggerTime) && (
+              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window (3:15–3:30 PM)">
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
+              </span>
+            )}
             <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
               {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               {isLong ? 'Bullish' : 'Bearish'}
@@ -546,25 +665,60 @@ const MicroAlphaCard: React.FC<{
           </div>
         </div>
 
-        {/* ── SUB-SCORES BREAKDOWN ── */}
-        {sig.subScores && (
-          <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2">
-              <Activity className="w-3 h-3 text-cyan-400" />
-              Sub-Scores
-            </div>
-            <div className="grid grid-cols-5 gap-1.5 text-center">
-              {Object.entries(sig.subScores).map(([key, val]) => (
-                <div key={key}>
-                  <div className="text-[10px] text-slate-500 capitalize">{key}</div>
-                  <div className={`font-mono text-xs font-semibold ${
-                    val > 0.5 ? 'text-green-400' : val < -0.5 ? 'text-red-400' : 'text-slate-400'
-                  }`}>{typeof val === 'number' ? val.toFixed(1) : val}</div>
-                </div>
-              ))}
-            </div>
+        {/* ── MODE BANNER (hero element) ── */}
+        <div className={`mt-2 rounded-lg px-3 py-2 border ${getModeColor(sig.tradingMode)}`}>
+          <div className="flex items-center gap-2">
+            <span className="text-base">{getModeIcon(sig.tradingMode)}</span>
+            <span className="font-bold text-sm tracking-wide">{getModeLabel(sig.tradingMode)}</span>
+            <span className="text-slate-500 text-[10px]">|</span>
+            <span className={`text-[11px] font-semibold ${isLong ? 'text-green-400' : 'text-red-400'}`}>
+              {dirLabel}
+            </span>
+            {sharesLabel && (
+              <>
+                <span className="text-slate-500 text-[10px]">|</span>
+                <span className="text-[11px] font-medium text-cyan-400">{sharesLabel}</span>
+              </>
+            )}
+          </div>
+          {sig.modeReason && (
+            <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">{sig.modeReason}</p>
+          )}
+        </div>
+
+        {/* ── SMART INFERENCE ── */}
+        {smartInference && (
+          <div className="mt-2 px-3 py-2 bg-slate-900/60 rounded-lg border border-slate-700/50">
+            <p className="text-[11px] text-slate-300 leading-relaxed">{smartInference}</p>
           </div>
         )}
+
+        {/* ── SUB-SCORES (horizontal bars with weights) ── */}
+        {sig.subScores && (
+          <div className="mt-3 space-y-1">
+            <SubScoreBar label="Flow" score={subScores.flow ?? 0} weight={weights.flow ?? 0} callout={volCallout} />
+            <SubScoreBar label="OI" score={subScores.oi ?? 0} weight={weights.oi ?? 0} callout={oiCallout} />
+            <SubScoreBar label="Gamma" score={subScores.gamma ?? 0} weight={weights.gamma ?? 0} callout={gammaCallout} />
+            <SubScoreBar label="Options" score={subScores.options ?? 0} weight={weights.options ?? 0} callout={optsCallout} />
+            <SubScoreBar label="Session" score={subScores.session ?? 0} weight={weights.session ?? 0} />
+            <SubScoreBar label="Block" score={subScores.block ?? 0} weight={weights.block ?? 0} callout={blockCallout} />
+          </div>
+        )}
+
+        {/* ── KEY X-FACTORS (quick-scan) ── */}
+        <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          {[
+            { label: 'Block\u00D7', value: sig.blockCount ? `${sig.blockCount}` : 'DM', active: (sig.blockCount ?? 0) > 0 },
+            { label: 'Vol\u00D7', value: sig.volumeXFactor ? `${sig.volumeXFactor.toFixed(1)}\u00D7` : 'DM', active: (sig.volumeXFactor ?? 1) > 1.1 },
+            { label: 'OI\u0394%', value: sig.oiChangePercent ? `${sig.oiChangePercent > 0 ? '+' : ''}${sig.oiChangePercent.toFixed(1)}%` : 'DM', active: Math.abs(sig.oiChangePercent ?? 0) > 0.5 },
+            { label: 'PCR', value: sig.pcrValue ? sig.pcrValue.toFixed(2) : 'DM', active: (sig.pcrValue ?? 0) > 0 },
+          ].map(({ label, value, active }) => (
+            <div key={label} className={`text-center py-1.5 rounded-lg ${active ? 'bg-slate-700/50' : 'bg-slate-800/30'}`}>
+              <div className="text-[9px] text-slate-500 uppercase">{label}</div>
+              <div className={`font-mono text-[11px] font-semibold ${active ? 'text-white' : 'text-slate-600 italic'}`}>{value}</div>
+            </div>
+          ))}
+        </div>
 
         {/* ── DATA QUALITY FLAGS ── */}
         <div className="mt-2 flex gap-1.5 flex-wrap">
@@ -574,14 +728,17 @@ const MicroAlphaCard: React.FC<{
             { key: 'Options', has: sig.hasOptions },
             { key: 'Session', has: sig.hasSession },
           ].map(({ key, has }) => (
-            <span key={key} className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+            <span key={key} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium ${
               has ? 'bg-cyan-500/10 text-cyan-400' : 'bg-slate-700/30 text-slate-600'
-            }`}>{key}</span>
+            }`}>
+              <span className="text-[9px]">{has ? '\u2713' : '\u2717'}</span>
+              {key}
+            </span>
           ))}
         </div>
 
         {/* ── SL / Entry / Targets ── */}
-        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-2">
           <div className="flex flex-col">
             <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
             <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
@@ -605,13 +762,6 @@ const MicroAlphaCard: React.FC<{
           <RiskRewardBar rr={plan.rr} />
         </div>
 
-        {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="Conv" value={`${sig.absConviction.toFixed(0)}%`} bold accent="bg-cyan-500/15 text-cyan-300" />
-          <MetricsChip label="Score" value={sig.score.toFixed(1)} />
-          <MetricsChip label="Mode" value={getModeLabel(sig.tradingMode)} />
-        </div>
-
         {/* ── INSUFFICIENT FUNDS LABEL ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
           <div className="mt-3 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30">
@@ -633,7 +783,7 @@ const MicroAlphaCard: React.FC<{
             disabled
             className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
           >
-            Conviction {confidence}% &lt; 60% — No Trade
+            Conviction {confidence}% &lt; 12% — No Trade
           </button>
         ) : (
           <button
@@ -646,7 +796,7 @@ const MicroAlphaCard: React.FC<{
               ${buyBg} ${buyHover} ${buyBgActive}
               ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
           >
-            BUY {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+            {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{fmt(premium)}/- x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
           </button>
         )}
       </div>
@@ -672,12 +822,15 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
     optionType: 'CE', lots: 3, filledPrice: 0, riskPercent: 0,
     status: 'sending',
   });
-  const [walletCapital, setWalletCapital] = useState<number>(100000);
+  const [walletState, setWalletState] = useState<SlotWalletState>({
+    availableMargin: 100000, usedMargin: 0, currentBalance: 100000,
+    openPositionCount: 0, positionsByExchange: { N: 0, M: 0, C: 0 },
+  });
 
   const fetchSignals = useCallback(async () => {
     try {
       const data = await fetchJson<MicroAlphaSignal[]>('/strategy-state/microalpha/history/list');
-      if (data) {
+      if (Array.isArray(data)) {
         setSignals(data);
       }
     } catch (err) {
@@ -688,12 +841,26 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
   }, []);
 
   useEffect(() => {
-    fetchSignals();
+    fetchSignals(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchSignals, 5000);
+      interval = setInterval(fetchSignals, 60000); // 60s fallback safety net
     }
-    return () => { if (interval) clearInterval(interval); };
+    // WebSocket push: prepend new triggered signals in real-time
+    const onWsSignal = (e: Event) => {
+      const sig = (e as CustomEvent).detail;
+      if (sig && sig.scripCode) {
+        setSignals(prev => {
+          if (prev.some(s => s.scripCode === sig.scripCode && s.triggerTimeEpoch === sig.triggerTimeEpoch)) return prev;
+          return [sig, ...prev];
+        });
+      }
+    };
+    window.addEventListener('microalpha-signal', onWsSignal);
+    return () => {
+      if (interval) clearInterval(interval);
+      window.removeEventListener('microalpha-signal', onWsSignal);
+    };
   }, [autoRefresh, fetchSignals]);
 
   // Close dropdowns on outside click
@@ -709,17 +876,28 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // Fetch wallet capital for lot sizing
+  // Fetch wallet state for slot-based sizing
   useEffect(() => {
     const fetchCapital = async () => {
       try {
         const data = await strategyWalletsApi.getCapital('MICROALPHA');
-        if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
+        if (data?.currentCapital != null) setWalletState({
+          availableMargin: data.availableMargin ?? data.currentCapital,
+          usedMargin: data.usedMargin ?? 0,
+          currentBalance: data.currentCapital,
+          openPositionCount: data.openPositionCount ?? 0,
+          positionsByExchange: data.positionsByExchange ?? { N: 0, M: 0, C: 0 },
+        });
       } catch { /* ignore */ }
     };
     fetchCapital();
     const interval = setInterval(fetchCapital, 30000);
-    return () => clearInterval(interval);
+    const onWalletUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.strategy === 'MICROALPHA') fetchCapital();
+    };
+    window.addEventListener('wallet-update', onWalletUpdate);
+    return () => { clearInterval(interval); window.removeEventListener('wallet-update', onWalletUpdate); };
   }, []);
 
   /* ── FILTER ── */
@@ -784,7 +962,14 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
       premium = sig.futuresLtp!;
       displayStrike = 0;
       displayOptionType = plan.optionType;
-      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      const futMonth = (() => {
+        if (!sig.futuresExpiry) return '';
+        const parts = sig.futuresExpiry.split('-');
+        if (parts.length < 2) return '';
+        const mi = parseInt(parts[1], 10) - 1;
+        return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][mi] ?? '';
+      })();
+      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode}${futMonth ? ' ' + futMonth : ''} FUT`;
       lotSize = sig.futuresLotSize ?? 1;
       tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
       exchange = sig.futuresExchange ?? sig.exchange;
@@ -794,7 +979,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
       premium = estimateOptionPremium(plan);
       displayStrike = plan.strike;
       displayOptionType = plan.optionType;
-      instrumentSymbol = `${sig.symbol || sig.scripCode} ${plan.strike} ${plan.optionType}`;
+      instrumentSymbol = `${sig.symbol || sig.scripCode} ${plan.strike} ${plan.optionType ?? ''}`;
       lotSize = 1;
       tradingScripCode = sig.scripCode;
       exchange = sig.exchange;
@@ -850,7 +1035,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
         instrumentType,
         underlyingScripCode: sig.scripCode,
         underlyingSymbol: sig.symbol || sig.scripCode,
-        side: 'BUY',
+        side: instrumentType === 'OPTION' ? 'BUY' : (sig.direction === 'BULLISH' ? 'BUY' : 'SELL'),
         quantity: lots * lotSize,
         lots,
         lotSize,
@@ -874,16 +1059,17 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
         exchange,
         direction: sig.direction as 'BULLISH' | 'BEARISH',
         confidence: computeConfidence(sig),
+        executionMode: 'MANUAL',
       };
 
       const result = await strategyTradesApi.create(req);
 
-      if (result.success) {
+      if (result?.success) {
         setExecution(prev => ({
           ...prev,
           status: 'filled',
-          filledPrice: result.entryPrice ?? premium,
-          orderId: result.tradeId,
+          filledPrice: result?.entryPrice ?? premium,
+          orderId: result?.tradeId,
           riskPercent: plan.sl && sig.entryPrice
             ? Math.round(Math.abs(sig.entryPrice - plan.sl) / sig.entryPrice * 100 * 10) / 10
             : 0.8,
@@ -918,7 +1104,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
     <div className="relative">
       {/* ── STICKY HEADER ── */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
-        <div className="flex items-center justify-between h-14 px-4">
+        <div className="flex items-center justify-between h-14 px-2 sm:px-4">
           <h1 className="text-lg font-semibold text-cyan-400 tracking-tight">MICROALPHA</h1>
           <div className="flex items-center gap-2">
             {/* Filter */}
@@ -958,7 +1144,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
             </div>
           </div>
         </div>
-        <div className="px-4 pb-2">
+        <div className="px-2 sm:px-4 pb-2">
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800/80 text-[12px] text-slate-400 border border-slate-700/50">
             Sorted by {sortLabel}
           </span>
@@ -979,13 +1165,13 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
         )}
 
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
               <MicroAlphaCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
                 sig={sig}
                 plan={plan}
-                walletCapital={walletCapital}
+                walletState={walletState}
                 onBuy={handleBuy}
               />
             ))}

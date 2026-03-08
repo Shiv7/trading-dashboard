@@ -3,6 +3,7 @@ package com.kotsin.dashboard.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.kafka.FUDKIIConsumer;
+import com.kotsin.dashboard.kafka.FUDKOIConsumer;
 import com.kotsin.dashboard.kafka.FUKAAConsumer;
 import com.kotsin.dashboard.kafka.MereConsumer;
 import com.kotsin.dashboard.kafka.MicroAlphaConsumer;
@@ -45,6 +46,7 @@ public class StrategyStateController {
     private final StrategyStateConsumer stateConsumer;
     private final StrategyOpportunityConsumer opportunityConsumer;
     private final FUDKIIConsumer fudkiiConsumer;
+    private final FUDKOIConsumer fudkoiConsumer;
     private final FUKAAConsumer fukaaConsumer;
     private final MereConsumer mereConsumer;
     private final PivotConfluenceConsumer pivotConfluenceConsumer;
@@ -339,6 +341,47 @@ public class StrategyStateController {
         ));
     }
 
+    // ==================== PIVOT AUTO-TRADE CONTROL ====================
+
+    private static final String PIVOT_PAUSE_KEY = "pivot:auto-trade:paused";
+
+    /**
+     * Get pivot auto-trade status (reads shared Redis flag).
+     */
+    @GetMapping("/pivot/auto-trade/status")
+    public ResponseEntity<Map<String, Object>> getPivotAutoTradeStatus() {
+        String val = redisTemplate.opsForValue().get(PIVOT_PAUSE_KEY);
+        boolean paused = "true".equalsIgnoreCase(val);
+        return ResponseEntity.ok(Map.of(
+                "autoTradeEnabled", !paused,
+                "paused", paused
+        ));
+    }
+
+    /**
+     * Toggle pivot auto-trade on/off (writes shared Redis flag).
+     */
+    @PostMapping("/pivot/auto-trade/toggle")
+    public ResponseEntity<Map<String, Object>> togglePivotAutoTrade(@RequestBody(required = false) Map<String, Object> body) {
+        String val = redisTemplate.opsForValue().get(PIVOT_PAUSE_KEY);
+        boolean currentlyPaused = "true".equalsIgnoreCase(val);
+        boolean newPaused;
+
+        if (body != null && body.containsKey("enabled")) {
+            newPaused = !Boolean.parseBoolean(body.get("enabled").toString());
+        } else {
+            newPaused = !currentlyPaused;
+        }
+
+        redisTemplate.opsForValue().set(PIVOT_PAUSE_KEY, String.valueOf(newPaused));
+        log.info("pivot_auto_trade toggled: paused={}", newPaused);
+
+        return ResponseEntity.ok(Map.of(
+                "autoTradeEnabled", !newPaused,
+                "paused", newPaused
+        ));
+    }
+
     // ==================== FUKAA STRATEGY ENDPOINTS (Volume-filtered FUDKII) ====================
 
     /**
@@ -411,54 +454,41 @@ public class StrategyStateController {
         ));
     }
 
-    // ==================== FUDKOI STRATEGY ENDPOINTS (OI-filtered FUDKII) ====================
+    // ==================== FUDKOI STRATEGY ENDPOINTS (dedicated consumer) ====================
+
+    @GetMapping("/fudkoi/active")
+    public ResponseEntity<Map<String, Map<String, Object>>> getActiveFudkoiTriggers() {
+        Map<String, Map<String, Object>> triggers = fudkoiConsumer.getActiveTriggers();
+        log.debug("[API] GET /strategy-state/fudkoi/active | {} active triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/fudkoi/active/list")
+    public ResponseEntity<List<Map<String, Object>>> getActiveFudkoiList() {
+        Map<String, Map<String, Object>> triggers = fudkoiConsumer.getActiveTriggers();
+        List<Map<String, Object>> list = new ArrayList<>(triggers.values());
+        log.debug("[API] GET /strategy-state/fudkoi/active/list | {} active triggers", list.size());
+        return ResponseEntity.ok(list);
+    }
+
+    @GetMapping("/fudkoi/{scripCode}")
+    public ResponseEntity<Map<String, Object>> getFudkoiByScripCode(@PathVariable String scripCode) {
+        Map<String, Map<String, Object>> triggers = fudkoiConsumer.getActiveTriggers();
+        Map<String, Object> trigger = triggers.get(scripCode);
+        if (trigger == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(trigger);
+    }
 
     /**
-     * Get today's FUDKOI signal history — FUDKII signals filtered by OI Change% thresholds:
-     *   MCX (M):      oiChangeRatio > 100
-     *   NSE (N):      oiChangeRatio > 150
-     *   Currency (C): oiChangeRatio > 100
-     * Only positive OI change values qualify.
+     * Get today's FUDKOI signal history from dedicated consumer.
      */
     @GetMapping("/fudkoi/history/list")
     public ResponseEntity<List<Map<String, Object>>> getFudkoiSignalHistory() {
-        List<Map<String, Object>> fudkiiHistory = fudkiiConsumer.getTodaySignalHistory();
-        List<Map<String, Object>> fudkoiSignals = new ArrayList<>();
-
-        for (Map<String, Object> signal : fudkiiHistory) {
-            Object oiRaw = signal.get("oiChangeRatio");
-            Object exchangeRaw = signal.get("exchange");
-            if (oiRaw == null || exchangeRaw == null) continue;
-
-            double oiChange = ((Number) oiRaw).doubleValue();
-            if (oiChange <= 0) continue; // positive only
-
-            String exchange = exchangeRaw.toString();
-            boolean qualifies = false;
-
-            switch (exchange) {
-                case "M": // MCX
-                    qualifies = oiChange > 100;
-                    break;
-                case "N": // NSE
-                    qualifies = oiChange > 150;
-                    break;
-                case "C": // Currency
-                    qualifies = oiChange > 100;
-                    break;
-            }
-
-            if (qualifies) {
-                // Tag the signal as FUDKOI
-                Map<String, Object> tagged = new HashMap<>(signal);
-                tagged.put("signalSource", "FUDKOI");
-                fudkoiSignals.add(tagged);
-            }
-        }
-
-        log.debug("[API] GET /strategy-state/fudkoi/history/list | {} FUDKOI signals (from {} FUDKII)",
-                fudkoiSignals.size(), fudkiiHistory.size());
-        return ResponseEntity.ok(fudkoiSignals);
+        List<Map<String, Object>> history = fudkoiConsumer.getTodaySignalHistory();
+        log.debug("[API] GET /strategy-state/fudkoi/history/list | {} FUDKOI signals", history.size());
+        return ResponseEntity.ok(history);
     }
 
     /**
@@ -466,26 +496,9 @@ public class StrategyStateController {
      */
     @GetMapping("/fudkoi/count")
     public ResponseEntity<Map<String, Object>> getFudkoiCount() {
-        // Compute by running the same filter logic
-        List<Map<String, Object>> fudkiiHistory = fudkiiConsumer.getTodaySignalHistory();
-        long count = fudkiiHistory.stream().filter(signal -> {
-            Object oiRaw = signal.get("oiChangeRatio");
-            Object exchangeRaw = signal.get("exchange");
-            if (oiRaw == null || exchangeRaw == null) return false;
-            double oiChange = ((Number) oiRaw).doubleValue();
-            if (oiChange <= 0) return false;
-            String exchange = exchangeRaw.toString();
-            return switch (exchange) {
-                case "M" -> oiChange > 100;
-                case "N" -> oiChange > 150;
-                case "C" -> oiChange > 100;
-                default -> false;
-            };
-        }).count();
-
         return ResponseEntity.ok(Map.of(
-                "fudkoiCount", count,
-                "fudkiiHistoryCount", fudkiiHistory.size(),
+                "fudkoiCount", fudkoiConsumer.getTodaySignalHistoryCount(),
+                "activeCount", fudkoiConsumer.getActiveTriggerCount(),
                 "timestamp", System.currentTimeMillis()
         ));
     }
@@ -612,11 +625,11 @@ public class StrategyStateController {
         ));
     }
 
-    // ==================== COMBINED SIGNAL HISTORY (FUDKII + FUKAA) ====================
+    // ==================== COMBINED SIGNAL HISTORY (FUDKII + FUKAA + FUDKOI + MERE) ====================
 
     /**
-     * Get combined FUDKII + FUKAA signal history for today.
-     * Returns ALL triggered signals from both strategies, sorted by trigger time (newest first).
+     * Get combined FUDKII + FUKAA + FUDKOI + MERE signal history for today.
+     * Returns ALL triggered signals from all strategies, sorted by trigger time (newest first).
      * Survives restart via Redis persistence.
      */
     @GetMapping("/signals/combined/list")
@@ -628,6 +641,9 @@ public class StrategyStateController {
 
         // Add all FUKAA history
         combined.addAll(fukaaConsumer.getTodaySignalHistory());
+
+        // Add all FUDKOI history
+        combined.addAll(fudkoiConsumer.getTodaySignalHistory());
 
         // Add all MERE history
         combined.addAll(mereConsumer.getTodaySignalHistory());
@@ -643,9 +659,10 @@ public class StrategyStateController {
             return Long.compare(epochB, epochA); // newest first
         });
 
-        log.debug("[API] GET /strategy-state/signals/combined/list | {} total (fudkii={}, fukaa={}, mere={})",
+        log.debug("[API] GET /strategy-state/signals/combined/list | {} total (fudkii={}, fukaa={}, fudkoi={}, mere={})",
                 combined.size(), fudkiiConsumer.getTodaySignalHistoryCount(),
-                fukaaConsumer.getTodaySignalHistoryCount(), mereConsumer.getTodaySignalHistoryCount());
+                fukaaConsumer.getTodaySignalHistoryCount(), fudkoiConsumer.getTodaySignalHistoryCount(),
+                mereConsumer.getTodaySignalHistoryCount());
         return ResponseEntity.ok(combined);
     }
 
@@ -670,6 +687,11 @@ public class StrategyStateController {
         Map<String, Map<String, Object>> fukaaTriggers = fukaaConsumer.getActiveTriggers();
         result.put("fukaaSignals", new ArrayList<>(fukaaTriggers.values()));
         result.put("fukaaCount", fukaaTriggers.size());
+
+        // FUDKOI signals (OI-confirmed FUDKII)
+        Map<String, Map<String, Object>> fudkoiTriggers = fudkoiConsumer.getActiveTriggers();
+        result.put("fudkoiSignals", new ArrayList<>(fudkoiTriggers.values()));
+        result.put("fudkoiCount", fudkoiTriggers.size());
 
         // Pivot Confluence signals (Strategy 2: HTF/LTF + Pivot + SMC)
         Map<String, Map<String, Object>> pivotTriggers = pivotConfluenceConsumer.getActiveTriggers();
@@ -697,11 +719,11 @@ public class StrategyStateController {
         result.put("opportunityCount", opportunities.size());
 
         // Stats
-        result.put("totalActive", fudkiiIgnitions.size() + fukaaTriggers.size() + pivotTriggers.size() + microAlphaTriggers.size() + mereTriggers.size() + pendingSignals.size());
+        result.put("totalActive", fudkiiIgnitions.size() + fukaaTriggers.size() + fudkoiTriggers.size() + pivotTriggers.size() + microAlphaTriggers.size() + mereTriggers.size() + pendingSignals.size());
         result.put("timestamp", System.currentTimeMillis());
 
-        log.debug("[API] GET /strategy-state/signals/active | fudkii={}, fukaa={}, pivot={}, trading={}, opportunities={}",
-                fudkiiIgnitions.size(), fukaaTriggers.size(), pivotTriggers.size(), pendingSignals.size(), opportunities.size());
+        log.debug("[API] GET /strategy-state/signals/active | fudkii={}, fukaa={}, fudkoi={}, pivot={}, trading={}, opportunities={}",
+                fudkiiIgnitions.size(), fukaaTriggers.size(), fudkoiTriggers.size(), pivotTriggers.size(), pendingSignals.size(), opportunities.size());
         return ResponseEntity.ok(result);
     }
 
@@ -755,6 +777,7 @@ public class StrategyStateController {
         stateCounts.put("WATCHING", stateConsumer.getWatchingCount());
         stateCounts.put("FUDKII_ACTIVE", fudkiiConsumer.getActiveIgnitionCount());
         stateCounts.put("FUKAA_ACTIVE", fukaaConsumer.getActiveTriggerCount());
+        stateCounts.put("FUDKOI_ACTIVE", fudkoiConsumer.getActiveTriggerCount());
         stateCounts.put("PIVOT_ACTIVE", pivotConfluenceConsumer.getActiveTriggerCount());
         stateCounts.put("MICROALPHA_ACTIVE", microAlphaConsumer.getActiveTriggerCount());
         stateCounts.put("TRADING_SIGNALS", tradingSignalService.getPendingSignals().size());

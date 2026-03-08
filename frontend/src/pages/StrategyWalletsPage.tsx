@@ -1,22 +1,223 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target, Briefcase } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target, Briefcase, Plus, X, ChevronDown } from 'lucide-react'
 import { strategyWalletsApi, walletApi } from '../services/api'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
 import type { Position } from '../types'
 import PositionCard from '../components/Wallet/PositionCard'
+import FundTopUpModal from '../components/Wallet/FundTopUpModal'
+import { STRATEGY_COLORS } from '../utils/strategyColors'
+import type { StrategyFilter } from '../utils/strategyColors'
 
 // ─── Types ───────────────────────────────────────────────
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH'
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
-type StrategyFilter = 'ALL' | 'FUDKII' | 'FUKAA' | 'PIVOT' | 'MICROALPHA'
 type SortField = 'exitTime' | 'pnl' | 'pnlPercent' | 'companyName' | 'strategy'
 
-// ─── Strategy color map ──────────────────────────────────
-const STRATEGY_COLORS: Record<string, { border: string; bg: string; text: string; accent: string }> = {
-  FUDKII:     { border: 'border-amber-500/40',  bg: 'bg-amber-500/10',  text: 'text-amber-400',  accent: 'from-amber-500 to-amber-600' },
-  FUKAA:      { border: 'border-orange-500/40',  bg: 'bg-orange-500/10', text: 'text-orange-400', accent: 'from-orange-500 to-orange-600' },
-  PIVOT:      { border: 'border-blue-500/40',    bg: 'bg-blue-500/10',   text: 'text-blue-400',   accent: 'from-blue-500 to-blue-600' },
-  MICROALPHA: { border: 'border-purple-500/40',  bg: 'bg-purple-500/10', text: 'text-purple-400', accent: 'from-purple-500 to-purple-600' },
+// ─── Section Filter Types ────────────────────────────────
+type SectionFilterTag =
+  | 'NSE' | 'MCX' | 'CURRENCY'
+  | 'OPTIONS' | 'FUT' | 'EQUITY'
+  | 'PROFIT' | 'LOSS'
+  | 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'MICROALPHA' | 'MERE' | 'QUANT'
+  | 'MOST_RECENT'
+
+const SECTION_FILTER_GROUPS: { label: string; tags: { key: SectionFilterTag; label: string; color: string }[] }[] = [
+  {
+    label: 'Exchange',
+    tags: [
+      { key: 'NSE', label: 'NSE', color: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+      { key: 'MCX', label: 'MCX', color: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
+      { key: 'CURRENCY', label: 'CDS', color: 'bg-teal-500/15 text-teal-400 border-teal-500/30' },
+    ],
+  },
+  {
+    label: 'Instrument',
+    tags: [
+      { key: 'OPTIONS', label: 'Options', color: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
+      { key: 'FUT', label: 'Futures', color: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30' },
+      { key: 'EQUITY', label: 'Equity', color: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
+    ],
+  },
+  {
+    label: 'P&L',
+    tags: [
+      { key: 'PROFIT', label: 'Profit', color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+      { key: 'LOSS', label: 'Loss', color: 'bg-red-500/15 text-red-400 border-red-500/30' },
+    ],
+  },
+  {
+    label: 'Strategy',
+    tags: [
+      { key: 'FUDKII', label: 'FUDKII', color: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
+      { key: 'FUKAA', label: 'FUKAA', color: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
+      { key: 'FUDKOI', label: 'FUDKOI', color: 'bg-pink-500/15 text-pink-400 border-pink-500/30' },
+      { key: 'PIVOT', label: 'PIVOT', color: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
+      { key: 'MICROALPHA', label: 'MICRO', color: 'bg-lime-500/15 text-lime-400 border-lime-500/30' },
+      { key: 'MERE', label: 'MERE', color: 'bg-violet-500/15 text-violet-400 border-violet-500/30' },
+      { key: 'QUANT', label: 'QUANT', color: 'bg-rose-500/15 text-rose-400 border-rose-500/30' },
+    ],
+  },
+  {
+    label: 'Sort',
+    tags: [
+      { key: 'MOST_RECENT', label: 'Most Recent', color: 'bg-slate-500/15 text-slate-300 border-slate-500/30' },
+    ],
+  },
+]
+
+function useSectionFilter() {
+  const [active, setActive] = useState<Set<SectionFilterTag>>(new Set())
+  const toggle = useCallback((tag: SectionFilterTag) => {
+    setActive(prev => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag)
+      else next.add(tag)
+      return next
+    })
+  }, [])
+  const clear = useCallback(() => setActive(new Set()), [])
+  return { active, toggle, clear }
+}
+
+function getExchangeTag(exchange?: string): SectionFilterTag | null {
+  if (!exchange) return null
+  const e = exchange.toUpperCase()
+  if (e === 'N' || e === 'NSE' || e === 'B' || e === 'BSE') return 'NSE'
+  if (e === 'M' || e === 'MCX') return 'MCX'
+  if (e === 'C' || e === 'CDS' || e === 'CURRENCY') return 'CURRENCY'
+  return null
+}
+
+function getInstrumentTag(instrumentType?: string): SectionFilterTag | null {
+  if (!instrumentType) return 'EQUITY'
+  const t = instrumentType.toUpperCase()
+  if (t === 'OPTION') return 'OPTIONS'
+  if (t === 'FUTURES' || t === 'FUT') return 'FUT'
+  return 'EQUITY'
+}
+
+function getStrategyTag(strategy?: string): SectionFilterTag | null {
+  if (!strategy) return null
+  const s = strategy.toUpperCase()
+  if (s.includes('FUDKOI')) return 'FUDKOI'
+  if (s.includes('FUDKII')) return 'FUDKII'
+  if (s.includes('FUKAA')) return 'FUKAA'
+  if (s.includes('PIVOT')) return 'PIVOT'
+  if (s.includes('MICRO')) return 'MICROALPHA'
+  if (s.includes('MERE')) return 'MERE'
+  if (s.includes('QUANT')) return 'QUANT'
+  return null
+}
+
+function matchesSectionFilters(
+  active: Set<SectionFilterTag>,
+  exchange?: string,
+  instrumentType?: string,
+  strategy?: string,
+  pnl?: number,
+): boolean {
+  if (active.size === 0) return true
+
+  const exchangeTags: SectionFilterTag[] = ['NSE', 'MCX', 'CURRENCY']
+  const instrumentTags: SectionFilterTag[] = ['OPTIONS', 'FUT', 'EQUITY']
+  const pnlTags: SectionFilterTag[] = ['PROFIT', 'LOSS']
+  const strategyTags: SectionFilterTag[] = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT']
+
+  const activeExchange = exchangeTags.filter(t => active.has(t))
+  const activeInstrument = instrumentTags.filter(t => active.has(t))
+  const activePnl = pnlTags.filter(t => active.has(t))
+  const activeStrategy = strategyTags.filter(t => active.has(t))
+
+  // Within each group: OR logic. Between groups: AND logic.
+  if (activeExchange.length > 0) {
+    const tag = getExchangeTag(exchange)
+    if (!tag || !activeExchange.includes(tag)) return false
+  }
+  if (activeInstrument.length > 0) {
+    const tag = getInstrumentTag(instrumentType)
+    if (!tag || !activeInstrument.includes(tag)) return false
+  }
+  if (activePnl.length > 0) {
+    const isProfit = (pnl ?? 0) >= 0
+    if (activePnl.includes('PROFIT') && !activePnl.includes('LOSS') && !isProfit) return false
+    if (activePnl.includes('LOSS') && !activePnl.includes('PROFIT') && isProfit) return false
+  }
+  if (activeStrategy.length > 0) {
+    const tag = getStrategyTag(strategy)
+    if (!tag || !activeStrategy.includes(tag)) return false
+  }
+  return true
+}
+
+// ─── Section Filter Bar ──────────────────────────────────
+const SectionFilterBar: React.FC<{
+  active: Set<SectionFilterTag>
+  onToggle: (tag: SectionFilterTag) => void
+  onClear: () => void
+}> = ({ active, onToggle, onClear }) => {
+  const [expanded, setExpanded] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setExpanded(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-colors ${
+          active.size > 0
+            ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+            : 'bg-slate-700/50 text-slate-400 border border-transparent hover:text-white hover:bg-slate-700'
+        }`}
+      >
+        <Filter className="w-3 h-3" />
+        <span>Filter</span>
+        {active.size > 0 && (
+          <span className="ml-0.5 px-1.5 py-0 rounded-full bg-orange-500/30 text-orange-300 text-[9px] font-bold">{active.size}</span>
+        )}
+        <ChevronDown className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+      {expanded && (
+        <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-3 min-w-[260px] sm:min-w-[320px] animate-slideDown">
+          {SECTION_FILTER_GROUPS.map(group => (
+            <div key={group.label} className="mb-3 last:mb-0">
+              <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 font-medium">{group.label}</div>
+              <div className="flex gap-1.5 flex-wrap">
+                {group.tags.map(({ key, label, color }) => (
+                  <button
+                    key={key}
+                    onClick={() => onToggle(key)}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-medium transition-all border ${
+                      active.has(key)
+                        ? `${color} ring-1 ring-offset-0 ring-current`
+                        : 'bg-slate-700/40 text-slate-500 border-transparent hover:bg-slate-700 hover:text-slate-300'
+                    }`}
+                  >
+                    {active.has(key) && <Check className="w-2.5 h-2.5 inline mr-0.5" />}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          {active.size > 0 && (
+            <button
+              onClick={() => { onClear(); setExpanded(false) }}
+              className="mt-2 w-full text-center text-[10px] text-slate-500 hover:text-red-400 transition-colors py-1"
+            >
+              Clear All Filters
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const SORT_OPTIONS: { key: SortField; label: string }[] = [
@@ -117,8 +318,11 @@ const FilterDropdown: React.FC<{
           { key: 'ALL' as StrategyFilter, label: 'All' },
           { key: 'FUDKII' as StrategyFilter, label: 'FUDKII' },
           { key: 'FUKAA' as StrategyFilter, label: 'FUKAA' },
+          { key: 'FUDKOI' as StrategyFilter, label: 'FUDKOI' },
           { key: 'PIVOT' as StrategyFilter, label: 'PIVOT' },
           { key: 'MICROALPHA' as StrategyFilter, label: 'MICRO' },
+          { key: 'MERE' as StrategyFilter, label: 'MERE' },
+          { key: 'QUANT' as StrategyFilter, label: 'QUANT' },
         ]).map(({ key, label }) => (
           <button
             key={key}
@@ -195,6 +399,278 @@ function TargetBadge({ trade }: { trade: StrategyWalletTrade }) {
   return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-700 text-slate-500">-</span>
 }
 
+// ─── Drawer Helpers ──────────────────────────────────────
+function DM() {
+  return <span className="text-slate-500 italic text-[10px]">DM</span>
+}
+
+function valOrDM(val: number | null | undefined, formatter: (n: number) => string = formatNum): ReactNode {
+  return val != null ? <span className="font-mono">{formatter(val)}</span> : <DM />
+}
+
+function DrawerSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
+      <div className="text-[10px] text-slate-500 uppercase tracking-wider font-medium mb-2">{title}</div>
+      <div className="space-y-2">{children}</div>
+    </div>
+  )
+}
+
+function DrawerRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-xs text-slate-400">{label}</span>
+      <span className="text-xs text-white">{value}</span>
+    </div>
+  )
+}
+
+function getTradeDisplayName(t: StrategyWalletTrade): string {
+  return t.instrumentSymbol || t.companyName || t.scripCode
+}
+
+function getInstrumentTypeLabel(t: StrategyWalletTrade): string | null {
+  if (t.instrumentType === 'OPTION') return 'OPT'
+  if (t.instrumentType === 'FUTURES') return 'FUT'
+  if (t.instrumentType) return t.instrumentType
+  return null
+}
+
+// ─── Trade Detail Drawer ─────────────────────────────────
+function TradeDetailDrawer({ trade, onClose }: { trade: StrategyWalletTrade; onClose: () => void }) {
+  const positive = trade.pnl >= 0
+  const sc = STRATEGY_COLORS[trade.strategy] || STRATEGY_COLORS['FUDKII']
+  const displayName = getTradeDisplayName(trade)
+
+  const hasDualLegs = trade.equitySl != null || trade.optionSl != null
+    || trade.equityT1 != null || trade.optionT1 != null
+
+  const exitLevel = trade.stopHit ? 'SL'
+    : trade.target4Hit ? 'T4'
+    : trade.target3Hit ? 'T3'
+    : trade.target2Hit ? 'T2'
+    : trade.target1Hit ? 'T1'
+    : trade.exitReason === 'ACTIVE' ? 'Active'
+    : trade.exitReason || 'Unknown'
+
+  const exitLevelColor = trade.stopHit ? 'text-red-400'
+    : (trade.target1Hit || trade.target2Hit || trade.target3Hit || trade.target4Hit) ? 'text-emerald-400'
+    : trade.exitReason === 'ACTIVE' ? 'text-cyan-400'
+    : 'text-slate-400'
+
+  // Duration formatting
+  const durationStr = trade.durationMinutes != null
+    ? `${Math.floor(trade.durationMinutes / 60)}h ${trade.durationMinutes % 60}m`
+    : trade.exitReason === 'ACTIVE' ? null : null
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fadeIn" />
+      {/* Drawer panel */}
+      <div
+        className="relative w-full max-w-md bg-slate-900 border-l border-slate-700 overflow-y-auto animate-slideRight"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="sticky top-0 bg-slate-900/95 backdrop-blur border-b border-slate-700 px-4 py-3 flex items-center justify-between z-10">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold text-white truncate">{displayName}</div>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
+                {trade.strategy}
+              </span>
+              {trade.variant && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 text-violet-400 border border-violet-500/30">
+                  {trade.variant.replace('MERE_', '').replace('_', ' ')}
+                </span>
+              )}
+              {trade.executionMode === 'MANUAL' && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">
+                  MANUAL
+                </span>
+              )}
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                trade.direction === 'BULLISH'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-red-500/20 text-red-400 border border-red-500/30'
+              }`}>
+                {trade.direction}
+              </span>
+              {(() => {
+                const itype = getInstrumentTypeLabel(trade)
+                return itype ? (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">{itype}</span>
+                ) : null
+              })()}
+              <span className="text-[9px] text-slate-500 font-mono">{trade.scripCode}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors ml-2 shrink-0">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3">
+          {/* P&L Card */}
+          <div className={`rounded-xl p-4 border ${positive ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Profit & Loss</div>
+            <div className={`text-2xl font-bold font-mono tabular-nums ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+              {positive ? '+' : ''}{formatINR(trade.pnl)}
+            </div>
+            <div className="flex items-center gap-3 mt-1">
+              <span className={`text-sm font-mono ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                {positive ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
+              </span>
+              {trade.rMultiple != null && (
+                <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${
+                  trade.rMultiple >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                }`}>
+                  {trade.rMultiple >= 0 ? '+' : ''}{trade.rMultiple.toFixed(2)}R
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Entry / Exit */}
+          <DrawerSection title="Entry / Exit">
+            <DrawerRow label="Entry Price" value={<span className="font-mono">{formatNum(trade.entryPrice)}</span>} />
+            <DrawerRow label="Exit Price" value={
+              trade.exitReason === 'ACTIVE'
+                ? <span className="text-cyan-400 font-mono">{formatNum(trade.exitPrice)} (Live)</span>
+                : <span className="font-mono">{formatNum(trade.exitPrice)}</span>
+            } />
+            <DrawerRow label="Entry Time" value={formatTime(trade.entryTime)} />
+            <DrawerRow label="Exit Time" value={
+              trade.exitTime
+                ? formatTime(trade.exitTime)
+                : trade.exitReason === 'ACTIVE'
+                  ? <span className="text-cyan-400 text-[10px] font-bold animate-pulse">Active</span>
+                  : <DM />
+            } />
+            <DrawerRow label="Exited At" value={<span className={`font-bold ${exitLevelColor}`}>{exitLevel}</span>} />
+            <DrawerRow label="Exit Reason" value={trade.exitReason || <DM />} />
+          </DrawerSection>
+
+          {/* Levels */}
+          {hasDualLegs ? (
+            <>
+              <DrawerSection title="Equity / FUT Leg">
+                <DrawerRow label="SL" value={valOrDM(trade.equitySl)} />
+                <DrawerRow label="T1" value={valOrDM(trade.equityT1)} />
+                <DrawerRow label="T2" value={valOrDM(trade.equityT2)} />
+                <DrawerRow label="T3" value={valOrDM(trade.equityT3)} />
+                <DrawerRow label="T4" value={valOrDM(trade.equityT4)} />
+              </DrawerSection>
+              <DrawerSection title="Option Leg">
+                <DrawerRow label="SL" value={valOrDM(trade.optionSl)} />
+                <DrawerRow label="T1" value={valOrDM(trade.optionT1)} />
+                <DrawerRow label="T2" value={valOrDM(trade.optionT2)} />
+                <DrawerRow label="T3" value={valOrDM(trade.optionT3)} />
+                <DrawerRow label="T4" value={valOrDM(trade.optionT4)} />
+              </DrawerSection>
+            </>
+          ) : (() => {
+            // Only show levels that have data; hide section if all are missing
+            const levels = [
+              { label: 'Stop Loss', val: trade.stopLoss },
+              { label: 'Target 1', val: trade.target1 },
+              { label: 'Target 2', val: trade.target2 },
+              { label: 'Target 3', val: trade.target3 },
+              { label: 'Target 4', val: trade.target4 },
+            ]
+            const available = levels.filter(l => l.val != null)
+            if (available.length === 0) return null
+            return (
+              <DrawerSection title="Levels">
+                {available.map(l => (
+                  <DrawerRow key={l.label} label={l.label} value={<span className="font-mono">{formatNum(l.val!)}</span>} />
+                ))}
+              </DrawerSection>
+            )
+          })()}
+
+          {/* Trade Details */}
+          <DrawerSection title="Details">
+            <DrawerRow label="Direction" value={
+              <span className={trade.direction === 'BULLISH' ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>
+                {trade.direction}
+              </span>
+            } />
+            <DrawerRow label="Side" value={trade.side} />
+            <DrawerRow label="Quantity" value={<span className="font-mono">{trade.quantity}</span>} />
+            <DrawerRow label="Capital Used" value={<span className="font-mono">{formatINR(trade.capitalEmployed)}</span>} />
+            <DrawerRow label="Strategy" value={
+              <span className="flex items-center gap-1.5">
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>{trade.strategy}</span>
+                {trade.variant && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 text-violet-400 border border-violet-500/30">
+                    {trade.variant.replace('MERE_', '').replace('_', ' ')}
+                  </span>
+                )}
+                {trade.executionMode === 'MANUAL' && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">MANUAL</span>
+                )}
+              </span>
+            } />
+            {trade.rMultiple != null && (
+              <DrawerRow label="R-Multiple" value={
+                <span className={`font-mono ${trade.rMultiple >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {trade.rMultiple >= 0 ? '+' : ''}{trade.rMultiple.toFixed(2)}R
+                </span>
+              } />
+            )}
+            <DrawerRow label="Duration" value={
+              durationStr
+                ? durationStr
+                : trade.exitReason === 'ACTIVE'
+                  ? <span className="text-cyan-400">Running</span>
+                  : <DM />
+            } />
+            {trade.confidence != null && (
+              <DrawerRow label="Confidence" value={`${trade.confidence.toFixed(0)}%`} />
+            )}
+          </DrawerSection>
+
+          {/* Target Hit Status */}
+          <DrawerSection title="Target Status">
+            <div className="grid grid-cols-5 gap-2 mt-1">
+              {([
+                { label: 'SL', hit: trade.stopHit, isStop: true },
+                { label: 'T1', hit: trade.target1Hit, isStop: false },
+                { label: 'T2', hit: trade.target2Hit, isStop: false },
+                { label: 'T3', hit: trade.target3Hit, isStop: false },
+                { label: 'T4', hit: trade.target4Hit, isStop: false },
+              ] as const).map(({ label, hit, isStop }) => (
+                <div key={label} className={`text-center py-2 rounded-lg text-[10px] font-bold border ${
+                  hit
+                    ? isStop
+                      ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                      : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    : 'bg-slate-800 text-slate-600 border-slate-700'
+                }`}>
+                  {label}
+                </div>
+              ))}
+            </div>
+          </DrawerSection>
+        </div>
+
+        {/* Close button footer */}
+        <div className="sticky bottom-0 bg-slate-900/95 backdrop-blur border-t border-slate-700 p-3">
+          <button
+            onClick={onClose}
+            className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-medium text-slate-300 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ═════════════════════════════════════════════════════════
 //  MAIN PAGE COMPONENT
 // ═════════════════════════════════════════════════════════
@@ -204,12 +680,21 @@ export default function StrategyWalletsPage() {
   const [positions, setPositions] = useState<Position[]>([])
   const [loading, setLoading] = useState(true)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [selectedTrade, setSelectedTrade] = useState<StrategyWalletTrade | null>(null)
 
   // Filters
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL')
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL')
   const [strategyFilter, setStrategyFilter] = useState<StrategyFilter>('ALL')
   const [sortField, setSortField] = useState<SortField>('exitTime')
+
+  // Section-level filters (independent per section)
+  const activeFilter = useSectionFilter()
+  const exitedFilter = useSectionFilter()
+  const weeklyFilter = useSectionFilter()
+
+  // Fund top-up modal
+  const [fundModalStrategy, setFundModalStrategy] = useState<string | null>(null)
 
   // Dropdown toggles
   const [showFilter, setShowFilter] = useState(false)
@@ -366,20 +851,21 @@ export default function StrategyWalletsPage() {
       {/* ══ Content ══ */}
       <div className="px-1.5 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
 
-        {/* ── 4 Wallet Cards ── */}
-        <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-4">
-          {(summaries.length > 0 ? summaries : Array.from({ length: 4 }, (_, i) => ({
-            strategy: ['FUDKII', 'FUKAA', 'PIVOT_CONFLUENCE', 'MICROALPHA'][i],
-            displayName: ['FUDKII', 'FUKAA', 'PIVOT', 'MICROALPHA'][i],
-            initialCapital: 100000, currentCapital: 100000, totalPnl: 0, totalPnlPercent: 0,
-            totalTrades: 0, wins: 0, losses: 0, winRate: 0,
+        {/* ── Wallet Cards (horizontal scroll) ── */}
+        <div className="overflow-x-auto pb-2 -mx-1.5 sm:-mx-4 px-1.5 sm:px-4 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+          <div className="flex gap-2 sm:gap-4" style={{ minWidth: 'max-content' }}>
+          {(summaries.length > 0 ? summaries : Array.from({ length: 7 }, (_, i) => ({
+            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT'][i],
+            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT'][i],
+            initialCapital: 1000000, currentCapital: 1000000, totalPnl: 0, totalPnlPercent: 0,
+            totalTrades: 0, wins: 0, losses: 0, winRate: 0, mcxUsedMargin: 0,
           }))).map(s => {
             const colors = STRATEGY_COLORS[s.displayName] || STRATEGY_COLORS['FUDKII']
             const positive = s.totalPnl >= 0
             return (
               <div
                 key={s.strategy}
-                className={`bg-slate-800/60 backdrop-blur border ${colors.border} rounded-xl p-3 sm:p-6 hover:bg-slate-800/80 transition-all`}
+                className={`bg-slate-800/60 backdrop-blur border ${colors.border} rounded-xl p-3 sm:p-6 hover:bg-slate-800/80 transition-all min-w-[150px] sm:min-w-[200px] flex-shrink-0`}
               >
                 {/* Header */}
                 <div className="flex items-center justify-between mb-2 sm:mb-4">
@@ -411,6 +897,14 @@ export default function StrategyWalletsPage() {
                   <span className="text-red-500">{s.losses}L</span>
                 </div>
 
+                {/* MCX Capital */}
+                {(s.mcxUsedMargin ?? 0) > 0 && (
+                  <div className="mt-1.5 sm:mt-2 flex items-center justify-between text-[10px] sm:text-xs">
+                    <span className="text-slate-500">MCX</span>
+                    <span className="text-yellow-400 font-mono tabular-nums">{formatINR(s.mcxUsedMargin ?? 0)}</span>
+                  </div>
+                )}
+
                 {/* Win/Loss bar */}
                 {s.totalTrades > 0 && (
                   <div className="mt-1.5 sm:mt-2 h-1 sm:h-1.5 rounded-full bg-slate-700 overflow-hidden flex">
@@ -418,32 +912,84 @@ export default function StrategyWalletsPage() {
                     <div className="bg-red-500 rounded-r-full flex-1" />
                   </div>
                 )}
+
+                {/* Add Funds button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setFundModalStrategy(s.strategy) }}
+                  className="mt-2 sm:mt-3 w-full flex items-center justify-center gap-1 text-[10px] sm:text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 rounded px-2 py-1 transition-all"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Funds
+                </button>
               </div>
             )
           })}
+          </div>
         </div>
+
+        {/* Fund Top-Up Modal */}
+        {fundModalStrategy && (
+          <FundTopUpModal
+            strategyKey={fundModalStrategy}
+            walletEvent={null}
+            onClose={() => setFundModalStrategy(null)}
+            onFunded={() => { setFundModalStrategy(null); loadData() }}
+          />
+        )}
 
         {/* ── Active Trades ── */}
         {(() => {
           const activePositions = positions.filter(p => p.quantity > 0)
           const exitedPositions = positions.filter(p => p.quantity <= 0)
+
+          const filterPos = (list: Position[], filter: { active: Set<SectionFilterTag> }) => {
+            let filtered = list.filter(p => matchesSectionFilters(
+              filter.active,
+              p.exchange,
+              p.instrumentType,
+              p.strategy,
+              p.unrealizedPnl ?? p.realizedPnl ?? 0,
+            ))
+            if (filter.active.has('MOST_RECENT')) {
+              filtered = [...filtered].sort((a, b) => {
+                const ta = a.openedAt ? new Date(a.openedAt).getTime() : 0
+                const tb = b.openedAt ? new Date(b.openedAt).getTime() : 0
+                return tb - ta
+              })
+            }
+            return filtered
+          }
+
+          const filteredActive = filterPos(activePositions, activeFilter)
+          const filteredExited = filterPos(exitedPositions, exitedFilter)
+
           return (
             <>
               {activePositions.length > 0 && (
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
-                    <Briefcase className="w-4 h-4 text-cyan-400" />
-                    <h2 className="text-sm font-bold text-white">Active Trades</h2>
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
-                      {activePositions.length}
-                    </span>
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="w-4 h-4 text-cyan-400" />
+                      <h2 className="text-sm font-bold text-white">Active Trades</h2>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
+                        {activeFilter.active.size > 0 ? `${filteredActive.length}/${activePositions.length}` : activePositions.length}
+                      </span>
+                    </div>
+                    <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
                   </div>
                   <div className="p-2 sm:p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                      {activePositions.map(pos => (
-                        <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
-                      ))}
-                    </div>
+                    {filteredActive.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                        {filteredActive.map(pos => (
+                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 text-xs text-slate-500">
+                        No trades match filters
+                        <button onClick={activeFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -451,19 +997,29 @@ export default function StrategyWalletsPage() {
               {/* ── Exited Today ── */}
               {exitedPositions.length > 0 && (
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
-                    <Briefcase className="w-4 h-4 text-slate-400" />
-                    <h2 className="text-sm font-bold text-white">Exited Today</h2>
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
-                      {exitedPositions.length}
-                    </span>
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="w-4 h-4 text-slate-400" />
+                      <h2 className="text-sm font-bold text-white">Exited Today</h2>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
+                        {exitedFilter.active.size > 0 ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
+                      </span>
+                    </div>
+                    <SectionFilterBar active={exitedFilter.active} onToggle={exitedFilter.toggle} onClear={exitedFilter.clear} />
                   </div>
                   <div className="p-2 sm:p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                      {exitedPositions.map(pos => (
-                        <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
-                      ))}
-                    </div>
+                    {filteredExited.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                        {filteredExited.map(pos => (
+                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 text-xs text-slate-500">
+                        No trades match filters
+                        <button onClick={exitedFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -472,10 +1028,31 @@ export default function StrategyWalletsPage() {
         })()}
 
         {/* ── Weekly Trades Table ── */}
+        {(() => {
+          let filteredWeekly = trades.filter(t => matchesSectionFilters(
+            weeklyFilter.active,
+            t.exchange,
+            t.instrumentType ?? undefined,
+            t.strategy,
+            t.pnl,
+          ))
+          if (weeklyFilter.active.has('MOST_RECENT')) {
+            filteredWeekly = [...filteredWeekly].sort((a, b) => {
+              const ta = a.entryTime ? new Date(a.entryTime).getTime() : 0
+              const tb = b.entryTime ? new Date(b.entryTime).getTime() : 0
+              return tb - ta
+            })
+          }
+          return (
         <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-white">Trades This Week</h2>
-            <span className="text-xs text-slate-500">{trades.length} trade{trades.length !== 1 ? 's' : ''}</span>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-white">Trades This Week</h2>
+              <span className="text-xs text-slate-500">
+                {weeklyFilter.active.size > 0 ? `${filteredWeekly.length}/${trades.length}` : trades.length} trade{trades.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <SectionFilterBar active={weeklyFilter.active} onToggle={weeklyFilter.toggle} onClear={weeklyFilter.clear} />
           </div>
 
           {loading && trades.length === 0 ? (
@@ -483,14 +1060,14 @@ export default function StrategyWalletsPage() {
               <RefreshCw className="w-6 h-6 animate-spin text-slate-600 mx-auto mb-2" />
               <p className="text-sm text-slate-500">Loading trades...</p>
             </div>
-          ) : trades.length === 0 ? (
+          ) : filteredWeekly.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center px-6">
               <div className="w-14 h-14 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-4">
                 <Target className="w-6 h-6 text-slate-600" />
               </div>
-              <p className="text-sm text-slate-400 mb-1">No trades this week</p>
-              {hasFilters && (
-                <button onClick={resetFilters} className="text-xs text-blue-400 hover:text-blue-300 mt-2">
+              <p className="text-sm text-slate-400 mb-1">{trades.length === 0 ? 'No trades this week' : 'No trades match filters'}</p>
+              {(hasFilters || weeklyFilter.active.size > 0) && (
+                <button onClick={() => { resetFilters(); weeklyFilter.clear() }} className="text-xs text-blue-400 hover:text-blue-300 mt-2">
                   Clear filters
                 </button>
               )}
@@ -499,29 +1076,44 @@ export default function StrategyWalletsPage() {
             <>
               {/* Mobile Card Layout */}
               <div className="md:hidden divide-y divide-slate-700/30">
-                {trades.map((t, i) => {
+                {filteredWeekly.map((t, i) => {
                   const positive = t.pnl >= 0
                   const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
                   return (
-                    <div key={t.tradeId || i} className="px-3 py-3 space-y-2">
-                      {/* Row 1: Security + P&L */}
+                    <div key={t.tradeId || i} className="px-3 py-3 space-y-2 cursor-pointer hover:bg-slate-700/20 transition-colors" onClick={() => setSelectedTrade(t)}>
+                      {/* Row 1: Security name + P&L */}
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-medium text-sm text-white truncate">{t.companyName || t.scripCode}</span>
+                          <div className="font-medium text-sm text-white truncate">{getTradeDisplayName(t)}</div>
+                          {/* Row 2: All badges */}
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
                               t.direction === 'BULLISH'
                                 ? 'bg-green-500/15 text-green-400 border border-green-500/30'
                                 : 'bg-red-500/15 text-red-400 border border-red-500/30'
                             }`}>
-                              {t.direction === 'BULLISH' ? 'BULL' : 'BEAR'}
+                              {t.side === 'BUY' ? 'LONG' : t.side === 'SELL' ? 'SHORT' : (t.direction === 'BULLISH' ? 'LONG' : 'SHORT')}
                             </span>
-                            <TargetBadge trade={t} />
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
                               {t.strategy}
                             </span>
+                            {t.variant && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 text-violet-400 border border-violet-500/30">
+                                {t.variant.replace('MERE_', '').replace('_', ' ')}
+                              </span>
+                            )}
+                            {(() => {
+                              const itype = getInstrumentTypeLabel(t)
+                              return itype ? (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
+                                  {itype}
+                                </span>
+                              ) : null
+                            })()}
+                            {t.executionMode === 'MANUAL' && (
+                              <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">MANUAL</span>
+                            )}
+                            <TargetBadge trade={t} />
                             <span className="text-[10px] text-slate-500">{t.quantity} qty</span>
                           </div>
                         </div>
@@ -572,14 +1164,24 @@ export default function StrategyWalletsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700/30">
-                    {trades.map((t, i) => {
+                    {filteredWeekly.map((t, i) => {
                       const positive = t.pnl >= 0
                       const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
                       return (
-                        <tr key={t.tradeId || i} className="hover:bg-slate-700/20 transition-colors">
+                        <tr key={t.tradeId || i} className="hover:bg-slate-700/20 transition-colors cursor-pointer" onClick={() => setSelectedTrade(t)}>
                           <td className="px-4 py-3">
-                            <div className="font-medium text-white truncate max-w-[160px]">{t.companyName || t.scripCode}</div>
-                            <div className="text-[10px] text-slate-500">{t.scripCode}</div>
+                            <div className="font-medium text-white truncate max-w-[240px]">
+                              {getTradeDisplayName(t)}
+                            </div>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="text-[10px] text-slate-500">{t.scripCode}</span>
+                              {(() => {
+                                const itype = getInstrumentTypeLabel(t)
+                                return itype ? (
+                                  <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">{itype}</span>
+                                ) : null
+                              })()}
+                            </div>
                           </td>
                           <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{formatNum(t.entryPrice)}</td>
                           <td className="px-3 py-3 text-right font-mono text-xs">
@@ -594,7 +1196,7 @@ export default function StrategyWalletsPage() {
                                 ? 'bg-green-500/15 text-green-400 border border-green-500/30'
                                 : 'bg-red-500/15 text-red-400 border border-red-500/30'
                             }`}>
-                              {t.direction === 'BULLISH' ? 'BULL' : 'BEAR'}
+                              {t.side === 'BUY' ? 'LONG' : t.side === 'SELL' ? 'SHORT' : (t.direction === 'BULLISH' ? 'LONG' : 'SHORT')}
                             </span>
                           </td>
                           <td className="px-3 py-3 text-right font-mono text-xs text-slate-300">{formatINR(t.capitalEmployed)}</td>
@@ -616,8 +1218,18 @@ export default function StrategyWalletsPage() {
                             }
                           </td>
                           <td className="px-3 py-3">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
-                              {t.strategy}
+                            <span className="inline-flex items-center gap-1">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
+                                {t.strategy}
+                              </span>
+                              {t.variant && (
+                                <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 text-violet-400 border border-violet-500/30">
+                                  {t.variant.replace('MERE_', '').replace('_', ' ')}
+                                </span>
+                              )}
+                              {t.executionMode === 'MANUAL' && (
+                                <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">M</span>
+                              )}
                             </span>
                           </td>
                         </tr>
@@ -629,7 +1241,17 @@ export default function StrategyWalletsPage() {
             </>
           )}
         </div>
+          )
+        })()}
       </div>
+
+      {/* Trade Detail Drawer */}
+      {selectedTrade && (
+        <TradeDetailDrawer
+          trade={selectedTrade}
+          onClose={() => setSelectedTrade(null)}
+        />
+      )}
     </div>
   )
 }

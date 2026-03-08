@@ -310,6 +310,22 @@ body {
   animation: flash-red 0.6s ease-out;
 }
 
+/* Right-side drawer slide animation */
+@keyframes slideRight {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slideRight {
+  animation: slideRight 0.25s ease-out;
+}
+
 /* Bottom sheet slide-up animation */
 @keyframes slide-up {
   from {

@@ -12,7 +12,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere' | 'quant';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -22,7 +22,7 @@ export const StrategyTransparencyPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useState<TabType>('fudkii');
 
   const fetchData = async () => {
     try {
@@ -82,7 +82,7 @@ export const StrategyTransparencyPage: React.FC = () => {
   const positionedCount = states.filter(s => s.state === 'POSITIONED').length;
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 mobile-page-bottom">
+    <div className="bg-slate-900 text-slate-100 mobile-page-bottom">
       {/* Header */}
       <div className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
         <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
@@ -137,13 +137,14 @@ export const StrategyTransparencyPage: React.FC = () => {
           {/* Tabs — scrollable on mobile */}
           <div className="flex gap-0.5 sm:gap-1 mt-3 sm:mt-4 overflow-x-auto">
             {[
-              { id: 'overview' as TabType, label: 'Overview', shortLabel: 'Overview', icon: BarChart2 },
               { id: 'fudkii' as TabType, label: 'FUDKII', shortLabel: 'FUDKII', icon: Zap, accent: 'text-orange-400' },
               { id: 'fukaa' as TabType, label: 'FUKAA', shortLabel: 'FUKAA', icon: Volume2, accent: 'text-amber-400' },
               { id: 'fudkoi' as TabType, label: 'FUDKOI', shortLabel: 'FUDKOI', icon: BarChart2, accent: 'text-teal-400' },
               { id: 'mere' as TabType, label: 'MERE', shortLabel: 'MERE', icon: TrendingUp, accent: 'text-emerald-400' },
-              { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
+              { id: 'quant' as TabType, label: 'QUANT', shortLabel: 'QUANT', icon: BarChart2, accent: 'text-sky-400' },
               { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
+              { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
+              { id: 'overview' as TabType, label: 'Overview', shortLabel: 'Overview', icon: BarChart2 },
             ].map(tab => (
               <button
                 key={tab.id}

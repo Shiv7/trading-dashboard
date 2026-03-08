@@ -1,14 +1,15 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Volume2, Check, Zap, AlertTriangle, Loader2
+  Volume2, Check, Zap, AlertTriangle, Loader2, Clock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyTradesApi, strategyWalletsApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeLotSizing } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow } from '../../utils/tradingUtils';
+import FundTopUpModal from '../Wallet/FundTopUpModal';
 
-type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'iv' | 'volume' | 'timestamp';
+type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 
@@ -56,10 +57,16 @@ interface FukaaTrigger {
   pivotSource?: boolean;
   atr30m?: number;
   oiChangeRatio?: number;
+  oiChangePct?: number;
   oiInterpretation?: string;
   oiLabel?: string;
+  blockTradeDetected?: boolean;
+  blockTradeVol?: number;
+  blockTradePct?: number;
+  oiBuildupPct?: number;
   // Option enrichment from backend (real LTP, strike, lot size)
   optionAvailable?: boolean;
+  optionFailureReason?: string;
   optionScripCode?: string;
   optionSymbol?: string;
   optionStrike?: number;
@@ -119,7 +126,8 @@ interface FukaaTabContentProps {
    UTILITY FUNCTIONS
    ═══════════════════════════════════════════════════════════════ */
 
-function fmt(v: number): string {
+function fmt(v: number | null | undefined): string {
+  if (v == null || isNaN(v)) return 'DM';
   return Number(v.toFixed(2)).toString();
 }
 
@@ -142,8 +150,6 @@ function computeConfidence(sig: FukaaTrigger): number {
   // FUKAA bonus: volume-confirmed signals get extra confidence from surge magnitude
   const surgeBoost = Math.min(10, sig.surgeT / 5);
   conf += surgeBoost;
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  conf += (hash % 7) - 3;
   return Math.min(97, Math.max(55, Math.round(conf)));
 }
 
@@ -220,33 +226,10 @@ function extractTradePlan(sig: FukaaTrigger): TradePlan {
   };
 }
 
-/** Compute stable IV change % per signal */
-function computeIVChange(sig: FukaaTrigger): number {
-  const hash = sig.scripCode.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 1), 0);
-  const seed = ((hash * 17 + 13) % 21) - 8;
-  const isLong = sig.direction === 'BULLISH';
-  const beyondBB = isLong
-    ? sig.triggerPrice - (sig.bbUpper || sig.triggerPrice)
-    : (sig.bbLower || sig.triggerPrice) - sig.triggerPrice;
-  const bbWidth = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  const breakoutBoost = bbWidth > 0 ? (beyondBB / bbWidth) * 5 : 0;
-  return Math.round((seed + breakoutBoost) * 10) / 10;
-}
 
-/** Compute stable option delta per signal */
-function computeDelta(sig: FukaaTrigger, plan: TradePlan): number {
-  const otmDist = Math.abs(plan.strike - plan.entry);
-  const interval = plan.strikeInterval;
-  const baseDelta = 0.50 - (otmDist / interval) * 0.12;
-  const hash = sig.scripCode.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const variance = ((hash % 9) - 4) / 100;
-  const delta = Math.max(0.20, Math.min(0.48, baseDelta + variance));
-  return sig.direction === 'BEARISH' ? -delta : delta;
-}
-
-/** OI change ratio from real FUT OI data (3-window cumulative trend); falls back to 0 if unavailable */
+/** OI surge ratio from real FUT OI data (median-based abnormality); falls back to 0 if unavailable */
 function computeOIChange(sig: FukaaTrigger): number {
-  if (sig.oiChangeRatio != null) return Math.round(sig.oiChangeRatio);
+  if (sig.oiChangeRatio != null) return Math.round(sig.oiChangeRatio * 10) / 10;
   return 0;
 }
 
@@ -262,16 +245,6 @@ function getOILabelStyle(label?: string): { text: string; color: string } {
 }
 
 /** OI chip accent based on whether OI confirms signal direction */
-function getOIAccent(label?: string): string {
-  if (label === 'LONG_BUILDUP' || label === 'SHORT_BUILDUP') {
-    return 'bg-green-500/15 text-green-300';
-  }
-  if (label === 'SHORT_COVERING' || label === 'LONG_UNWINDING') {
-    return 'bg-orange-500/15 text-orange-300';
-  }
-  return 'bg-slate-700/50 text-slate-300';
-}
-
 function formatVolume(vol: number): string {
   if (vol >= 1_000_000) return (vol / 1_000_000).toFixed(1) + 'M';
   if (vol >= 1_000) return (vol / 1_000).toFixed(1) + 'K';
@@ -292,21 +265,22 @@ function computeStrength(sig: FukaaTrigger, plan: TradePlan): number {
   const conf = computeConfidence(sig);
   const vol = sig.surgeT;
   const rr = plan.rr;
-  const iv = computeIVChange(sig);
+  const oi = Math.abs(computeOIChange(sig));
   const confNorm = ((conf - 55) / 42) * 25;
   const volNorm = Math.min(25, ((vol - 1) / 10) * 25);   // FUKAA has higher surge values
   const rrNorm = Math.min(25, (rr / 4) * 25);
-  const ivNorm = Math.max(0, Math.min(25, ((iv + 10) / 25) * 25));
-  return Math.min(100, Math.round(confNorm + volNorm + rrNorm + ivNorm));
+  const oiNorm = Math.min(25, (oi / 300) * 25);  // scaled for uncapped real OI%
+  return Math.min(100, Math.round(confNorm + volNorm + rrNorm + oiNorm));
 }
 
-// computeLotSizing: imported from ../../utils/tradingUtils
+// computeSlotSizing: imported from ../../utils/tradingUtils
 
 /* ═══════════════════════════════════════════════════════════════
    R:R VISUAL BAR
    ═══════════════════════════════════════════════════════════════ */
 
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
+const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
+  const rr = isFinite(rawRr) ? rawRr : 0;
   const totalParts = 1 + Math.max(rr, 0);
   const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
   const rewardPct = 100 - riskPct;
@@ -521,7 +495,6 @@ const SORT_OPTIONS: { key: SortField; label: string }[] = [
   { key: 'confidence', label: 'Confidence %' },
   { key: 'rr', label: 'R:R' },
   { key: 'time', label: 'Latest Trigger' },
-  { key: 'iv', label: 'IV Change' },
   { key: 'volume', label: 'Volume Surge' },
 ];
 
@@ -581,9 +554,11 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 const FukaaCard: React.FC<{
   trigger: FukaaTrigger;
   plan: TradePlan;
-  walletCapital: number;
+  walletState: SlotWalletState;
   onBuy: (sig: FukaaTrigger, plan: TradePlan, lots: number) => void;
-}> = ({ trigger, plan, walletCapital, onBuy }) => {
+  onRequestFunds: (sig: FukaaTrigger, plan: TradePlan, creditAmount: number, premium: number, lotSize: number, multiplier: number, confidence: number) => void;
+  isFunded: boolean;
+}> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded }) => {
   const [pressing, setPressing] = useState(false);
   const isLong = trigger.direction === 'BULLISH';
 
@@ -612,42 +587,67 @@ const FukaaCard: React.FC<{
   let displayInstrumentName = '';
   let lotSize = 1;
   let multiplier = 1;
+  let isEstimatedPremium = false;
 
   if (hasRealOption) {
     instrumentMode = 'OPTION';
     premium = trigger.optionLtp!;
     const displayStrike = trigger.optionStrike ?? plan.strike;
     const displayOptionType = trigger.optionType ?? plan.optionType;
-    displayInstrumentName = `${trigger.symbol} ${displayStrike} ${displayOptionType}`;
+    const expiryMonth = (() => {
+      if (!trigger.optionExpiry) return '';
+      const parts = trigger.optionExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${trigger.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike}${displayOptionType}`;
     lotSize = trigger.optionLotSize ?? 1;
     multiplier = trigger.optionMultiplier ?? 1;
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
     premium = trigger.futuresLtp!;
-    displayInstrumentName = `${trigger.futuresSymbol ?? trigger.symbol} FUT${trigger.futuresExpiry ? ' ' + trigger.futuresExpiry : ''}`;
+    const futExpiryMonth = (() => {
+      if (!trigger.futuresExpiry) return '';
+      const parts = trigger.futuresExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${trigger.futuresSymbol ?? trigger.symbol}${futExpiryMonth ? ' ' + futExpiryMonth : ''} FUT`;
     lotSize = trigger.futuresLotSize ?? 1;
     multiplier = trigger.futuresMultiplier ?? 1;
   } else if (!noDerivatives) {
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
+    displayInstrumentName = `${trigger.symbol} ${plan.strike}${plan.optionType}`;
     lotSize = 1;
+    isEstimatedPremium = true;
   }
+
+  // Near-expiry warning: option expires within 2 trading days
+  const isNearExpiry = (() => {
+    const expiry = trigger.optionExpiry ?? trigger.futuresExpiry;
+    if (!expiry || instrumentMode !== 'OPTION') return false;
+    const expiryDate = new Date(expiry + 'T00:00:00');
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diffDays = Math.floor((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays >= 0 && diffDays <= 2;
+  })();
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
-    : computeLotSizing(confidence, walletCapital, premium, lotSize, multiplier);
+    : computeSlotSizing(confidence, walletState, premium, lotSize, multiplier,
+        (trigger.exchange || 'N').substring(0, 1).toUpperCase(), trigger.riskReward ?? 2.0, 60);
 
-  // Metrics — use real FUKAA surge data, computed IV/Delta/OI
-  const surgeVal = trigger.surgeT.toFixed(1);
-  const ivVal = computeIVChange(trigger);
-  const ivChange = (ivVal >= 0 ? '+' : '') + ivVal.toFixed(1);
-  const delta = computeDelta(trigger, plan).toFixed(2);
+  // Metrics — use real FUKAA surge data and OI
+  const surgeVal = (trigger.surgeT ?? 0).toFixed(1);
   const oiVal = computeOIChange(trigger);
   const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
   const oiStyle = getOILabelStyle(trigger.oiLabel);
-  const oiAccent = getOIAccent(trigger.oiLabel);
+  const absOi = Math.abs(oiVal);
+  const oiAccent = absOi >= 200 ? 'bg-emerald-500/20 text-emerald-300 font-bold' : absOi >= 100 ? 'bg-orange-500/15 text-orange-300' : absOi >= 30 ? 'bg-slate-500/15 text-slate-300' : 'bg-red-500/15 text-red-300';
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
@@ -668,49 +668,56 @@ const FukaaCard: React.FC<{
               </span>
             </div>
           </div>
-          <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
-            {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-            {isLong ? 'Bullish' : 'Bearish'}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {isNseNoTradeWindow(trigger.exchange, trigger.triggerTime) && (
+              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window (3:15–3:30 PM)">
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
+              </span>
+            )}
+            <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
+              {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+              {isLong ? 'Bullish' : 'Bearish'}
+            </span>
+          </div>
         </div>
 
         {/* ── VOLUME SURGE STRIP ── */}
         <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
           <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2">
             <Volume2 className="w-3 h-3" />
-            Volume Surge (vs {formatVolume(trigger.avgVolume)} avg)
+            Volume Surge (vs {formatVolume(trigger.avgVolume ?? 0)} avg)
           </div>
           <div className="grid grid-cols-3 gap-2 text-xs">
             <div className="text-center">
               <div className="text-slate-500">T-1</div>
-              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTMinus1)}</div>
+              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTMinus1 ?? 0)}</div>
               <div className={`font-mono ${
-                trigger.surgeTMinus1 >= 10 ? 'text-amber-300 font-bold' :
-                trigger.surgeTMinus1 >= 5 ? 'text-green-400 font-semibold' :
-                trigger.surgeTMinus1 >= 2 ? 'text-green-400' : 'text-slate-400'
+                (trigger.surgeTMinus1 ?? 0) >= 10 ? 'text-amber-300 font-bold' :
+                (trigger.surgeTMinus1 ?? 0) >= 5 ? 'text-green-400 font-semibold' :
+                (trigger.surgeTMinus1 ?? 0) >= 2 ? 'text-green-400' : 'text-slate-400'
               }`}>
-                {trigger.surgeTMinus1 > 0 ? trigger.surgeTMinus1.toFixed(1) + 'x' : '-'}
+                {(trigger.surgeTMinus1 ?? 0) > 0 ? (trigger.surgeTMinus1 ?? 0).toFixed(1) + 'x' : '-'}
               </div>
             </div>
             <div className="text-center">
               <div className="text-slate-500">T</div>
-              <div className="font-mono text-white font-semibold">{formatVolume(trigger.volumeT)}</div>
+              <div className="font-mono text-white font-semibold">{formatVolume(trigger.volumeT ?? 0)}</div>
               <div className={`font-mono ${
-                trigger.surgeT >= 10 ? 'text-amber-300 font-bold' :
-                trigger.surgeT >= 5 ? 'text-green-400 font-semibold' : 'text-green-400'
+                (trigger.surgeT ?? 0) >= 10 ? 'text-amber-300 font-bold' :
+                (trigger.surgeT ?? 0) >= 5 ? 'text-green-400 font-semibold' : 'text-green-400'
               }`}>
-                {trigger.surgeT.toFixed(1)}x
+                {(trigger.surgeT ?? 0).toFixed(1)}x
               </div>
             </div>
             <div className="text-center">
               <div className="text-slate-500">T+1</div>
-              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTPlus1)}</div>
+              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTPlus1 ?? 0)}</div>
               <div className={`font-mono ${
-                trigger.surgeTPlus1 >= 10 ? 'text-amber-300 font-bold' :
-                trigger.surgeTPlus1 >= 5 ? 'text-green-400 font-semibold' :
-                trigger.surgeTPlus1 >= 2 ? 'text-green-400' : 'text-slate-400'
+                (trigger.surgeTPlus1 ?? 0) >= 10 ? 'text-amber-300 font-bold' :
+                (trigger.surgeTPlus1 ?? 0) >= 5 ? 'text-green-400 font-semibold' :
+                (trigger.surgeTPlus1 ?? 0) >= 2 ? 'text-green-400' : 'text-slate-400'
               }`}>
-                {trigger.surgeTPlus1 > 0 ? trigger.surgeTPlus1.toFixed(1) + 'x' : '-'}
+                {(trigger.surgeTPlus1 ?? 0) > 0 ? (trigger.surgeTPlus1 ?? 0).toFixed(1) + 'x' : '-'}
               </div>
             </div>
           </div>
@@ -766,9 +773,14 @@ const FukaaCard: React.FC<{
         <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
           <MetricsChip label="ATR" value={fmt(plan.atr)} />
           <MetricsChip label="Vol" value={`${surgeVal}x`} bold accent="bg-amber-500/15 text-amber-300" />
-          <MetricsChip label="IV" value={`${ivChange}%`} />
-          <MetricsChip label={'\u0394'} value={delta} />
-          <MetricsChip label="OI" value={`${oiChange}%`} accent={oiAccent} />
+          <MetricsChip label="OIChange%" value={`${oiChange}%`} accent={oiAccent} />
+          {trigger.oiBuildupPct != null && trigger.oiBuildupPct !== 0 && (
+            <MetricsChip
+              label="OIBuildUp%"
+              value={`${trigger.oiBuildupPct > 0 ? '+' : ''}${trigger.oiBuildupPct.toFixed(1)}%`}
+              accent={trigger.oiBuildupPct > 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}
+            />
+          )}
         </div>
 
         {/* ── OI LABEL ── */}
@@ -780,13 +792,73 @@ const FukaaCard: React.FC<{
           </div>
         )}
 
-        {/* ── INSUFFICIENT FUNDS LABEL ── */}
-        {sizing.insufficientFunds && !sizing.disabled && (
-          <div className="mt-3 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30">
-            <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+        {/* ── BLOCK TRADE LABEL ── */}
+        {trigger.blockTradeDetected && (
+          <div className="mt-1.5 px-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-300">
+              Block Trade Detected
+            </span>
+            <span className="ml-1.5 text-[10px] text-purple-400/70">
+              {Math.round(trigger.blockTradePct ?? 0)}% vol stripped, {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
+            </span>
           </div>
         )}
+
+        {/* ── INSUFFICIENT FUNDS LABEL (clickable → Add Funds) ── */}
+        {sizing.insufficientFunds && !sizing.disabled && (
+          <button
+            onClick={() => onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence)}
+            className="mt-3 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 transition-colors cursor-pointer text-left"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
+            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+            <span className="ml-auto text-[10px] text-orange-300 font-semibold whitespace-nowrap">Add Funds →</span>
+          </button>
+        )}
+
+        {/* ── FUNDED TRADE BADGE ── */}
+        {isFunded && (
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
+            <span className="text-emerald-400 font-bold text-sm">₹</span>
+            <span className="text-[10px] text-emerald-400">Trade executed with added funds</span>
+          </div>
+        )}
+
+        {/* ── FUTURES FALLBACK REASON ── */}
+        {instrumentMode === 'FUTURES' && trigger.optionFailureReason && (
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/25">
+            <Zap className="w-3 h-3 text-blue-400/80 flex-shrink-0" />
+            <span className="text-[10px] text-blue-400/80">
+              FUT: {trigger.optionFailureReason}
+            </span>
+          </div>
+        )}
+
+        {/* ── ESTIMATED DATA WARNING ── */}
+        {isEstimatedPremium && instrumentMode !== 'NONE' && (
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/25">
+            <AlertTriangle className="w-3 h-3 text-yellow-400/80 flex-shrink-0" />
+            <span className="text-[10px] text-yellow-400/80">
+              DM: Option LTP, lot size, strike — premium is estimated from ATR
+            </span>
+          </div>
+        )}
+
+        {/* DEBUG STRIP */}
+        <div className="mt-2 flex gap-1 text-[9px] font-mono opacity-60 overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
+          <span className={`px-1 rounded whitespace-nowrap ${instrumentMode === 'NONE' ? 'bg-red-500/30 text-red-300' : instrumentMode === 'FUTURES' ? 'bg-blue-500/30 text-blue-300' : 'bg-green-500/30 text-green-300'}`}>
+            {instrumentMode}
+          </span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">conf={confidence}%</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lots={sizing.lots}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={Number(premium.toFixed(2))}</span>
+          {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
+          {trigger.blockTradeDetected && <span className="px-1 rounded bg-purple-500/30 text-purple-300 whitespace-nowrap">BLK {Math.round(trigger.blockTradePct ?? 0)}%</span>}
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">alloc={sizing.allocPct}%</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
+        </div>
 
         {/* ── BUY BUTTON ── */}
         {instrumentMode === 'NONE' ? (
@@ -804,18 +876,25 @@ const FukaaCard: React.FC<{
             Confidence {confidence}% &lt; 60% — No Trade
           </button>
         ) : (
-          <button
-            onClick={() => onBuy(trigger, plan, sizing.lots)}
-            onMouseDown={() => setPressing(true)}
-            onMouseUp={() => setPressing(false)}
-            onMouseLeave={() => setPressing(false)}
-            className={`w-full h-12 rounded-xl mt-4 text-white font-semibold text-sm
-              transition-all duration-100 select-none
-              ${buyBg} ${buyHover} ${buyBgActive}
-              ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
-          >
-            BUY {displayInstrumentName} @ &#8377;{Number(premium.toFixed(2))}/-  x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
-          </button>
+          <div className="relative mt-4">
+            {isNearExpiry && (
+              <span className="absolute -top-2 right-2 z-10 px-2 py-0.5 rounded text-[10px] font-bold text-white bg-red-500">
+                Expiry in 2 days!
+              </span>
+            )}
+            <button
+              onClick={() => onBuy(trigger, plan, sizing.lots)}
+              onMouseDown={() => setPressing(true)}
+              onMouseUp={() => setPressing(false)}
+              onMouseLeave={() => setPressing(false)}
+              className={`w-full h-12 rounded-xl text-white font-semibold text-sm
+                transition-all duration-100 select-none
+                ${buyBg} ${buyHover} ${buyBgActive}
+                ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
+            >
+              {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{Number(premium.toFixed(2))}/- * {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -840,13 +919,21 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     optionType: 'CE', lots: 3, filledPrice: 0, riskPercent: 0,
     status: 'sending',
   });
-  const [walletCapital, setWalletCapital] = useState<number>(100000);
+  const [walletState, setWalletState] = useState<SlotWalletState>({
+    availableMargin: 100000, usedMargin: 0, currentBalance: 100000,
+    openPositionCount: 0, positionsByExchange: { N: 0, M: 0, C: 0 },
+  });
+  const [fundModal, setFundModal] = useState<{
+    strategyKey: string; creditAmount: number; sig: FukaaTrigger; plan: TradePlan;
+    premium: number; lotSize: number; multiplier: number; confidence: number;
+  } | null>(null);
+  const [fundedScripCodes, setFundedScripCodes] = useState<Set<string>>(new Set());
 
   const fetchFukaa = useCallback(async () => {
     try {
       // Use history endpoint — returns ALL triggered signals for today, persisted in Redis
       const data = await fetchJson<FukaaTrigger[]>('/strategy-state/fukaa/history/list');
-      if (data) {
+      if (Array.isArray(data)) {
         setTriggers(data);
       }
     } catch (err) {
@@ -857,12 +944,26 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   }, []);
 
   useEffect(() => {
-    fetchFukaa();
+    fetchFukaa(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchFukaa, 5000);
+      interval = setInterval(fetchFukaa, 60000); // 60s fallback safety net
     }
-    return () => { if (interval) clearInterval(interval); };
+    // WebSocket push: prepend new triggered signals in real-time
+    const onWsSignal = (e: Event) => {
+      const sig = (e as CustomEvent).detail;
+      if (sig && sig.scripCode) {
+        setTriggers(prev => {
+          if (prev.some(s => s.scripCode === sig.scripCode && s.triggerTimeEpoch === sig.triggerTimeEpoch)) return prev;
+          return [sig, ...prev];
+        });
+      }
+    };
+    window.addEventListener('fukaa-signal', onWsSignal);
+    return () => {
+      if (interval) clearInterval(interval);
+      window.removeEventListener('fukaa-signal', onWsSignal);
+    };
   }, [autoRefresh, fetchFukaa]);
 
   // Close dropdowns on outside click
@@ -878,17 +979,28 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // Fetch wallet capital for lot sizing
+  // Fetch wallet state for slot-based sizing
   useEffect(() => {
     const fetchCapital = async () => {
       try {
         const data = await strategyWalletsApi.getCapital('FUKAA');
-        if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
+        if (data?.currentCapital != null) setWalletState({
+          availableMargin: data.availableMargin ?? data.currentCapital,
+          usedMargin: data.usedMargin ?? 0,
+          currentBalance: data.currentCapital,
+          openPositionCount: data.openPositionCount ?? 0,
+          positionsByExchange: data.positionsByExchange ?? { N: 0, M: 0, C: 0 },
+        });
       } catch { /* ignore */ }
     };
     fetchCapital();
     const interval = setInterval(fetchCapital, 30000);
-    return () => clearInterval(interval);
+    const onWalletUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.strategy === 'FUKAA') fetchCapital();
+    };
+    window.addEventListener('wallet-update', onWalletUpdate);
+    return () => { clearInterval(interval); window.removeEventListener('wallet-update', onWalletUpdate); };
   }, []);
 
   /* ── FILTER ── */
@@ -916,8 +1028,6 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         return b.plan.rr - a.plan.rr || getEpoch(b.sig) - getEpoch(a.sig);
       case 'time':
         return getEpoch(b.sig) - getEpoch(a.sig);
-      case 'iv':
-        return computeIVChange(b.sig) - computeIVChange(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
       case 'volume':
         return b.sig.surgeT - a.sig.surgeT || getEpoch(b.sig) - getEpoch(a.sig);
       case 'timestamp':
@@ -933,6 +1043,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
   const handleBuy = useCallback(async (sig: FukaaTrigger, plan: TradePlan, lots: number) => {
     const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
     const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+    const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(sig.symbol);
     const isLong = sig.direction === 'BULLISH';
 
     // Determine instrument details based on mode
@@ -956,14 +1067,28 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       instrumentType = 'OPTION';
     } else if (hasFutures) {
       premium = sig.futuresLtp!;
-      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      const futMonth = (() => {
+        if (!sig.futuresExpiry) return '';
+        const parts = sig.futuresExpiry.split('-');
+        if (parts.length < 2) return '';
+        const mi = parseInt(parts[1], 10) - 1;
+        return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][mi] ?? '';
+      })();
+      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol}${futMonth ? ' ' + futMonth : ''} FUT`;
       lotSize = sig.futuresLotSize ?? 1;
       multiplier = sig.futuresMultiplier ?? 1;
       tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
       instrumentType = 'FUTURES';
+    } else if (isCurrencyPair) {
+      // Currency FUT fallback: signal scrip IS the FUT contract
+      premium = sig.triggerPrice;
+      instrumentSymbol = `${sig.symbol}`;
+      tradingScripCode = sig.scripCode;
+      lotSize = 1;
+      instrumentType = 'FUTURES';
     } else {
       premium = estimateOptionPremium(plan);
-      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType}`;
+      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType ?? ''}`;
       instrumentType = 'OPTION';
     }
 
@@ -1013,7 +1138,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         instrumentType,
         underlyingScripCode: sig.scripCode,
         underlyingSymbol: sig.symbol || sig.scripCode,
-        side: 'BUY',
+        side: instrumentType === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL'),
         quantity: lots * lotSize,
         lots,
         lotSize,
@@ -1037,6 +1162,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         exchange: sig.exchange,
         direction: isLong ? 'BULLISH' : 'BEARISH',
         confidence,
+        executionMode: 'MANUAL',
       };
 
       const result = await strategyTradesApi.create(req);
@@ -1044,8 +1170,8 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       setExecution(prev => ({
         ...prev,
         status: 'filled',
-        filledPrice: result.entryPrice ?? premium,
-        orderId: result.tradeId,
+        filledPrice: result?.entryPrice ?? premium,
+        orderId: result?.tradeId,
         riskPercent: plan.sl && sig.triggerPrice
           ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
           : 0.8,
@@ -1073,7 +1199,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     <div className="relative">
       {/* ── STICKY HEADER (56px) ── */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
-        <div className="flex items-center justify-between h-14 px-4">
+        <div className="flex items-center justify-between h-14 px-2 sm:px-4">
           {/* Left: Title */}
           <h1 className="text-lg font-semibold text-orange-400 tracking-tight">FUKAA</h1>
 
@@ -1122,7 +1248,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         </div>
 
         {/* Sort chip below header */}
-        <div className="px-4 pb-2">
+        <div className="px-2 sm:px-4 pb-2">
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800/80 text-[12px] text-slate-400 border border-slate-700/50">
             Sorted by {sortLabel}
           </span>
@@ -1146,14 +1272,18 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
         {/* Cards Grid: 1 col mobile, 3 col desktop */}
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
               <FukaaCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
                 trigger={sig}
                 plan={plan}
-                walletCapital={walletCapital}
+                walletState={walletState}
                 onBuy={handleBuy}
+                onRequestFunds={(s, p, credit, prem, lotSz, mult, conf) => {
+                  setFundModal({ strategyKey: 'FUKAA', creditAmount: credit, sig: s, plan: p, premium: prem, lotSize: lotSz, multiplier: mult, confidence: conf });
+                }}
+                isFunded={fundedScripCodes.has(sig.scripCode)}
               />
             ))}
           </div>
@@ -1169,6 +1299,35 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
           navigate('/wallets');
         }}
       />
+
+      {/* ── FUND TOP-UP MODAL ── */}
+      {fundModal && (
+        <FundTopUpModal
+          strategyKey={fundModal.strategyKey}
+          walletEvent={null}
+          onClose={() => setFundModal(null)}
+          onFunded={async () => {
+            const ctx = fundModal;
+            setFundModal(null);
+            try {
+              const data = await strategyWalletsApi.getCapital(ctx.strategyKey);
+              const newWallet: SlotWalletState = {
+                availableMargin: data?.availableMargin ?? data?.currentCapital ?? walletState.availableMargin,
+                usedMargin: data?.usedMargin ?? 0,
+                currentBalance: data?.currentCapital ?? walletState.currentBalance,
+                openPositionCount: data?.openPositionCount ?? 0,
+                positionsByExchange: data?.positionsByExchange ?? { N: 0, M: 0, C: 0 },
+              };
+              setWalletState(newWallet);
+              const newSizing = computeSlotSizing(ctx.confidence, newWallet, ctx.premium, ctx.lotSize, ctx.multiplier, 'N', 2.0, 60);
+              if (!newSizing.disabled && newSizing.lots > 0) {
+                setFundedScripCodes(prev => new Set(prev).add(ctx.sig.scripCode));
+                handleBuy(ctx.sig, ctx.plan, newSizing.lots);
+              }
+            } catch { /* ignore */ }
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -45,7 +45,7 @@ public class WalletService {
     private final Object cacheLock = new Object();
 
     // Configuration
-    private static final double INITIAL_CAPITAL = 100000.0;
+    private static final double INITIAL_CAPITAL = 1_000_000.0; // 10 Lakh
 
     /**
      * Get current wallet state
@@ -210,17 +210,9 @@ public class WalletService {
             // FIX: Read signal ID for linking
             String signalId = (String) data.get("signalId");
 
-            // Extract strategy with fallback chain: signalSource -> strategy -> signalType -> UNKNOWN
-            String strategy = data.get("signalSource") != null ? data.get("signalSource").toString() : null;
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = data.get("strategy") != null ? data.get("strategy").toString() : null;
-            }
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = data.get("signalType") != null ? data.get("signalType").toString() : null;
-            }
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = "UNKNOWN";
-            }
+            // Extract strategy via shared resolver (unified fallback chain)
+            String strategy = StrategyNameResolver.extractFromRedis(data);
+            String executionMode = StrategyNameResolver.extractExecutionMode(data);
 
             // FIX: Read timestamps
             long openedAtMs = data.get("openedAt") != null ? ((Number) data.get("openedAt")).longValue() : System.currentTimeMillis();
@@ -333,6 +325,7 @@ public class WalletService {
                     .openedAt(openedAt)
                     .lastUpdated(lastUpdated)
                     .strategy(strategy)
+                    .executionMode(executionMode)
                     // Strategy trade dual levels
                     .equitySl(equitySl)
                     .equityT1(equityT1)

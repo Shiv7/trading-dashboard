@@ -7,6 +7,7 @@ import { useAuth } from '../../context/AuthContext'
 import NotificationPanel from './NotificationPanel'
 import ScripFinder from '../Search/ScripFinder'
 import ToastContainer from '../Alerts/ToastContainer'
+import FundTopUpModal from '../Wallet/FundTopUpModal'
 import TradingModeToggle from '../Trading/TradingModeToggle'
 import { alertService } from '../../services/alertService'
 import MobileTabBar from './MobileTabBar'
@@ -239,7 +240,7 @@ export default function Layout({ children }: LayoutProps) {
 
               <button
                 onClick={toggleSound}
-                className={`p-2 rounded-lg transition-colors hidden sm:block ${soundEnabled ? 'text-emerald-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-800'}`}
+                className={`p-2 rounded-lg transition-colors ${soundEnabled ? 'text-emerald-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-800'}`}
                 title={soundEnabled ? 'Sound ON' : 'Sound OFF'}
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -322,6 +323,27 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Toast Notifications */}
       <ToastContainer />
+
+      {/* Fund Top-Up Modal (auto-triggered by MARGIN_INSUFFICIENT events) */}
+      <FundTopUpOverlay />
     </div>
+  )
+}
+
+function FundTopUpOverlay() {
+  const { pendingFundRequests, removePendingFundRequest } = useDashboardStore()
+
+  const current = pendingFundRequests[0]
+  if (!current) return null
+
+  const strategyKey = current.strategyKey || current.walletId?.replace('strategy-wallet-', '') || 'UNKNOWN'
+
+  return (
+    <FundTopUpModal
+      strategyKey={strategyKey}
+      walletEvent={current}
+      onClose={() => removePendingFundRequest(current.walletId)}
+      onFunded={() => removePendingFundRequest(current.walletId)}
+    />
   )
 }

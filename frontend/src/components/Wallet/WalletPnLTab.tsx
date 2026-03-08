@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { fetchJson } from '../../services/api'
+import { getStrategyTextColor } from '../../utils/strategyColors'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 type Period = '1W' | '1M' | '3M' | '6M' | '1Y' | 'ALL'
@@ -202,12 +203,7 @@ export default function WalletPnLTab({ walletType }: WalletPnLTabProps) {
                 const width = (Math.abs(strat.totalPnl) / maxPnl) * 100
                 return (
                   <div key={strat.strategy} className="flex items-center gap-2 sm:gap-3">
-                    <span className={`text-xs sm:text-sm font-medium w-16 sm:w-24 truncate ${
-                      strat.strategy === 'FUDKII' ? 'text-orange-400'
-                      : strat.strategy === 'FUKAA' ? 'text-amber-400'
-                      : strat.strategy === 'PIVOT' ? 'text-blue-400'
-                      : 'text-white'
-                    }`}>{strat.strategy}</span>
+                    <span className={`text-xs sm:text-sm font-medium w-16 sm:w-24 truncate ${getStrategyTextColor(strat.strategy)}`}>{strat.strategy}</span>
                     <div className="flex-1 h-4 sm:h-5 bg-slate-700/30 rounded overflow-hidden">
                       <div
                         className={`h-full rounded ${strat.totalPnl >= 0 ? 'bg-emerald-500/40' : 'bg-red-500/40'}`}

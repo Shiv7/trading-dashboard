@@ -162,20 +162,14 @@ public class PivotConfluenceConsumer {
                                 displayName,
                                 pivotData.get("htfDirection"),
                                 ((Number) pivotData.getOrDefault("riskReward", 0)).doubleValue()));
+                // Broadcast triggered signal to /topic/pivot-confluence (WebSocket push to frontend)
+                sessionManager.broadcastPivotConfluence(scripCode, pivotData);
             } else {
                 activeTriggers.invalidate(scripCode);
             }
 
             // Cache latest
             latestPivotSignals.put(scripCode, pivotData);
-
-            // Broadcast to WebSocket
-            sessionManager.broadcastSignal(Map.of(
-                    "type", "PIVOT_CONFLUENCE_UPDATE",
-                    "scripCode", scripCode,
-                    "triggered", triggered,
-                    "data", pivotData
-            ));
 
         } catch (Exception e) {
             log.error("Error processing Pivot Confluence: {}", e.getMessage(), e);
@@ -222,6 +216,16 @@ public class PivotConfluenceConsumer {
         data.put("smcNearFVG", root.path("smcNearFVG").asBoolean(false));
         data.put("smcAtLiquidityZone", root.path("smcAtLiquidityZone").asBoolean(false));
         data.put("smcBias", root.path("smcBias").asText("NEUTRAL"));
+        // FVG actual price range
+        if (root.has("fvgHigh")) data.put("fvgHigh", root.path("fvgHigh").asDouble());
+        if (root.has("fvgLow")) data.put("fvgLow", root.path("fvgLow").asDouble());
+        if (root.has("fvgType")) data.put("fvgType", root.path("fvgType").asText());
+        // LZ actual price data
+        if (root.has("lzLevel")) data.put("lzLevel", root.path("lzLevel").asDouble());
+        if (root.has("lzZoneHigh")) data.put("lzZoneHigh", root.path("lzZoneHigh").asDouble());
+        if (root.has("lzZoneLow")) data.put("lzZoneLow", root.path("lzZoneLow").asDouble());
+        if (root.has("lzType")) data.put("lzType", root.path("lzType").asText());
+        if (root.has("lzSource")) data.put("lzSource", root.path("lzSource").asText());
 
         // Risk:Reward
         data.put("entryPrice", root.path("entryPrice").asDouble(0));
@@ -235,6 +239,11 @@ public class PivotConfluenceConsumer {
         data.put("retestLevel", root.path("retestLevel").asText(""));
         data.put("retestQuality", root.path("retestQuality").asText(""));
         data.put("firstRetest", root.path("firstRetest").asBoolean(false));
+        if (root.has("retestDirection")) data.put("retestDirection", root.path("retestDirection").asText(""));
+
+        // OI context
+        if (root.has("oiInterpretation")) data.put("oiInterpretation", root.path("oiInterpretation").asText(""));
+        if (root.has("oiChangePercent")) data.put("oiChangePercent", root.path("oiChangePercent").asDouble(0));
 
         // ML Enrichment (from Python fastAnalayticsKotsin via Redis → StreamingCandle)
         data.put("mlAvailable", root.path("mlAvailable").asBoolean(false));
@@ -250,8 +259,40 @@ public class PivotConfluenceConsumer {
             data.put("mlOrderFlowImbalance", root.path("mlOrderFlowImbalance").asDouble(0));
         }
 
+        // V2 4-Gate Funnel fields (present when version=2)
+        int version = root.path("version").asInt(1);
+        data.put("version", version);
+        if (version >= 2) {
+            // Gate 1: Trend
+            data.put("stAlignment", root.path("stAlignment").asInt(0));
+            data.put("stBarsInTrend", root.path("stBarsInTrend").asInt(0));
+            data.put("trendConfidence", root.path("trendConfidence").asInt(0));
+            if (root.has("htfTimeframes")) {
+                data.put("htfTimeframes", objectMapper.convertValue(root.path("htfTimeframes"), java.util.List.class));
+            }
+
+            // Gate 2: Pullback + Zone
+            data.put("pullbackDepth", root.path("pullbackDepth").asDouble(0));
+            data.put("zoneType", root.path("zoneType").asText(""));
+            data.put("pullbackScore", root.path("pullbackScore").asInt(0));
+            data.put("volumeSurge", root.path("volumeSurge").asDouble(0));
+            data.put("oiBuildupPct", root.path("oiBuildupPct").asDouble(0));
+            if (root.has("zoneLevels")) {
+                data.put("zoneLevels", objectMapper.convertValue(root.path("zoneLevels"), java.util.List.class));
+            }
+
+            // Gate 3: Entry Trigger
+            data.put("triggerType", root.path("triggerType").asText(""));
+            data.put("triggerTimeframe", root.path("triggerTimeframe").asText(""));
+            data.put("atrMultiple", root.path("atrMultiple").asDouble(0));
+
+            // Gate metadata
+            data.put("gateReached", root.path("gateReached").asInt(0));
+        }
+
         // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
+        if (root.has("optionFailureReason")) data.put("optionFailureReason", root.path("optionFailureReason").asText());
         if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
         if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
         if (root.has("optionStrike")) data.put("optionStrike", root.path("optionStrike").asDouble());

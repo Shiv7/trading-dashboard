@@ -58,4 +58,27 @@ public class PatternSignalDTO {
     // Outcome (for completed patterns)
     private Double actualPnl;
     private Double rMultiple;
+
+    // Volume gate (from StreamingCandle PatternAnalyzer)
+    private Boolean volumeConfirmed;    // true = volume expanded + directional pressure aligned
+    private Double volumeRatio;         // current volume / 20-period avg volume
+
+    // Option/futures enrichment (populated by OptionDataEnricher in streaming candle)
+    private Boolean optionAvailable;
+    private String optionFailureReason;
+    private String optionScripCode;
+    private String optionSymbol;
+    private Double optionStrike;
+    private String optionType;          // CE or PE
+    private String optionExpiry;
+    private Double optionLtp;
+    private Integer optionLotSize;
+    private Integer optionMultiplier;
+    private Boolean futuresAvailable;
+    private String futuresScripCode;
+    private String futuresSymbol;
+    private Double futuresLtp;
+    private Integer futuresLotSize;
+    private Integer futuresMultiplier;
+    private String futuresExpiry;
 }

@@ -767,6 +767,38 @@ export interface StrategyWalletSummary {
   wins: number
   losses: number
   winRate: number
+  availableMargin?: number
+  usedMargin?: number
+  mcxUsedMargin?: number
+  dayPnl?: number
+  circuitBreakerTripped?: boolean
+}
+
+export interface WalletTransaction {
+  transactionId: string
+  walletId: string
+  type: string
+  amount: number
+  balanceBefore: number
+  balanceAfter: number
+  scripCode?: string
+  symbol?: string
+  description?: string
+  timestamp: string
+}
+
+export interface WalletEvent {
+  eventType: 'MARGIN_INSUFFICIENT' | 'FUND_ADDED' | 'SIGNAL_EXPIRED'
+  walletId: string
+  strategyKey?: string
+  scripCode?: string
+  instrumentSymbol?: string
+  side?: string
+  qty?: number
+  requiredMargin?: number
+  expiresAt?: number
+  amount?: number
+  retriedSignals?: number
 }
 
 export interface StrategyWalletTrade {
@@ -790,7 +822,40 @@ export interface StrategyWalletTrade {
   entryTime: string
   exitTime: string
   strategy: string
+  variant?: string | null
+  executionMode?: 'AUTO' | 'MANUAL'
   exchange: string
+  // Price levels
+  stopLoss?: number | null
+  target1?: number | null
+  target2?: number | null
+  target3?: number | null
+  target4?: number | null
+  // Dual-leg levels (equity/FUT)
+  equitySl?: number | null
+  equityT1?: number | null
+  equityT2?: number | null
+  equityT3?: number | null
+  equityT4?: number | null
+  // Dual-leg levels (option)
+  optionSl?: number | null
+  optionT1?: number | null
+  optionT2?: number | null
+  optionT3?: number | null
+  optionT4?: number | null
+  // Instrument metadata
+  instrumentType?: string | null
+  instrumentSymbol?: string | null
+  // Analytics
+  rMultiple?: number | null
+  confidence?: number | null
+  durationMinutes?: number | null
+  // Signal-level metrics (for correlation analytics)
+  atr?: number | null
+  volumeSurge?: number | null
+  oiChangePercent?: number | null
+  blockDealPercent?: number | null
+  riskReward?: number | null
 }
 
 export const strategyWalletsApi = {
@@ -798,7 +863,8 @@ export const strategyWalletsApi = {
     fetchJson<StrategyWalletSummary[]>('/strategy-wallets/summary'),
 
   getCapital: (strategy: string) =>
-    fetchJson<{ strategy: string; currentCapital: number; initialCapital: number; totalPnl: number }>(
+    fetchJson<{ strategy: string; currentCapital: number; initialCapital: number; totalPnl: number;
+      availableMargin: number; usedMargin: number; openPositionCount: number; positionsByExchange: Record<string, number> }>(
       `/strategy-wallets/capital/${encodeURIComponent(strategy)}`
     ),
 
@@ -818,6 +884,14 @@ export const strategyWalletsApi = {
     const qs = p.toString()
     return fetchJson<StrategyWalletTrade[]>(`/strategy-wallets/trades${qs ? '?' + qs : ''}`)
   },
+
+  addFunds: (strategy: string, amount: number) =>
+    postJson<{ success: boolean; newBalance: number; retriedSignals: number }>(
+      `/strategy-wallets/capital/${encodeURIComponent(strategy)}/add-funds`, { amount }),
+
+  getTransactions: (strategy: string, limit = 50) =>
+    fetchJson<WalletTransaction[]>(
+      `/strategy-wallets/capital/${encodeURIComponent(strategy)}/transactions?limit=${limit}`),
 }
 
 // ===== STRATEGY TRADES API (Virtual option/futures trade execution) =====
@@ -830,6 +904,18 @@ export const strategyTradesApi = {
 
   close: (scripCode: string) =>
     postJson<StrategyTradeResponse>(`/strategy-trades/${scripCode}/close`, {}),
+}
+
+// ===== PIVOT AUTO-TRADE CONTROL API =====
+export const pivotAutoTradeApi = {
+  getStatus: () =>
+    fetchJson<{ autoTradeEnabled: boolean; paused: boolean }>('/strategy-state/pivot/auto-trade/status'),
+
+  toggle: (enabled?: boolean) =>
+    postJson<{ autoTradeEnabled: boolean; paused: boolean }>(
+      '/strategy-state/pivot/auto-trade/toggle',
+      enabled !== undefined ? { enabled } : {}
+    ),
 }
 
 // Export helpers for use in other service files

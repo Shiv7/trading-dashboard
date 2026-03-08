@@ -7,7 +7,9 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import com.kotsin.dashboard.model.dto.SignalDTO;
+import com.kotsin.dashboard.model.dto.StrategyTradeRequest;
 import com.kotsin.dashboard.service.ScripLookupService;
+import com.kotsin.dashboard.service.StrategyTradeExecutor;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -60,6 +62,17 @@ public class MereConsumer {
     @Value("${signal.mere.max.per.day:5}")
     private int maxSignalsPerDay;
 
+    @Value("${mere.auto.execute.enabled:false}")
+    private boolean autoExecuteEnabled;
+
+    @Value("${mere.auto.execute.max.positions:8}")
+    private int autoExecuteMaxPositions;
+
+    @Value("${mere.auto.execute.premium.sizing.percent:2.5}")
+    private double premiumSizingPercent;
+
+    private final StrategyTradeExecutor strategyTradeExecutor;
+
     private Cache<String, Map<String, Object>> activeTriggers;
     private final Map<String, Map<String, Object>> latestMERE = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> todaySignalHistory = new ConcurrentHashMap<>();
@@ -76,11 +89,13 @@ public class MereConsumer {
             WebSocketSessionManager sessionManager,
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
             SignalConsumer signalConsumer,
-            ScripLookupService scripLookup) {
+            ScripLookupService scripLookup,
+            StrategyTradeExecutor strategyTradeExecutor) {
         this.sessionManager = sessionManager;
         this.redisTemplate = redisTemplate;
         this.signalConsumer = signalConsumer;
         this.scripLookup = scripLookup;
+        this.strategyTradeExecutor = strategyTradeExecutor;
     }
 
     @PostConstruct
@@ -112,11 +127,15 @@ public class MereConsumer {
                 return;
             }
 
-            // Dedup check
+            // Dedup check — use scripCode + direction (not triggerTime) to catch cross-variant duplicates.
+            // MERE v2, ScalpMERE, SwingMERE can all fire for the same scrip at the same M30 boundary
+            // with slightly different triggerTime values. 5-min TTL prevents showing both.
             String triggerTimeStr = root.path("triggerTime").asText("");
-            String dedupKey = scripCode + "|" + triggerTimeStr;
+            String dedupDir = root.path("direction").asText("UNKNOWN");
+            String dedupKey = scripCode + "|" + dedupDir;
             if (dedupCache.getIfPresent(dedupKey) != null) {
-                log.debug("MERE dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
+                log.debug("MERE dedup: skipping cross-variant duplicate for {} {} (first variant already processed)",
+                        scripCode, dedupDir);
                 return;
             }
             dedupCache.put(dedupKey, Boolean.TRUE);
@@ -220,6 +239,17 @@ public class MereConsumer {
                 signalConsumer.addExternalSignal(signalDTO);
                 log.info("MERE signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
 
+                // MERE v2 Auto-execution: if signal has autoExecute=true and config is enabled
+                boolean autoExecute = mereData.containsKey("autoExecute") &&
+                    Boolean.TRUE.equals(mereData.get("autoExecute"));
+                if (autoExecuteEnabled && autoExecute) {
+                    try {
+                        autoExecuteTrade(mereData, scripCode, direction, triggerPrice);
+                    } catch (Exception ex) {
+                        log.error("MERE auto-execute failed for {}: {}", scripCode, ex.getMessage(), ex);
+                    }
+                }
+
                 // Send notification
                 String emoji = "BULLISH".equals(direction) ? "^" : "v";
                 String notifLabel = "MERE".equals(variant) ? "MERE (mean reversion)"
@@ -230,19 +260,127 @@ public class MereConsumer {
 
                 // Update latest
                 latestMERE.put(scripCode, mereData);
-            }
 
-            // Broadcast to WebSocket
-            sessionManager.broadcastSignal(Map.of(
-                    "type", "MERE_UPDATE",
-                    "scripCode", scripCode,
-                    "triggered", triggered,
-                    "data", mereData
-            ));
+                // Broadcast triggered signal to /topic/mere (WebSocket push to frontend)
+                sessionManager.broadcastMERE(scripCode, mereData);
+            }
 
         } catch (Exception e) {
             log.error("Error processing MERE: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Auto-execute a MERE v2 trade via StrategyTradeExecutor.
+     * Builds a StrategyTradeRequest from the signal payload and calls openTrade().
+     * Gated by: config enabled, autoExecute flag, position count < max.
+     */
+    private void autoExecuteTrade(Map<String, Object> mereData, String scripCode,
+                                   String direction, double triggerPrice) {
+        // Check position count limit using existing getActiveStrategyTrades()
+        long currentPositions = strategyTradeExecutor.getActiveStrategyTrades().stream()
+            .filter(t -> "MERE".equals(t.get("strategy")))
+            .count();
+        if (currentPositions >= autoExecuteMaxPositions) {
+            log.info("MERE auto-execute skipped for {}: positions={}/{}", scripCode,
+                currentPositions, autoExecuteMaxPositions);
+            return;
+        }
+
+        // Extract option data from signal
+        boolean optionAvailable = Boolean.TRUE.equals(mereData.get("optionAvailable"));
+        String optScripCode = optionAvailable ? String.valueOf(mereData.get("optionScripCode")) : null;
+        String optSymbol = optionAvailable ? String.valueOf(mereData.getOrDefault("optionSymbol", "")) : null;
+        String optType = optionAvailable ? String.valueOf(mereData.getOrDefault("optionType", "")) : null;
+        double optStrike = optionAvailable ? toDouble(mereData.get("optionStrike")) : 0;
+        double optLtp = toDouble(mereData.get("optionLtp"));
+        int optLotSize = toInt(mereData.get("optionLotSize"));
+
+        // Fallback to futures if no option
+        boolean useFutures = !optionAvailable || optScripCode == null || optScripCode.isEmpty()
+            || "null".equals(optScripCode);
+        String futScripCode = useFutures ? String.valueOf(mereData.getOrDefault("futuresScripCode", "")) : null;
+        String futSymbol = useFutures ? String.valueOf(mereData.getOrDefault("futuresSymbol", "")) : null;
+        double futLtp = useFutures ? toDouble(mereData.get("futuresLtp")) : 0;
+        int futLotSize = useFutures ? toInt(mereData.get("futuresLotSize")) : 0;
+
+        String tradeScripCode = useFutures ? futScripCode : optScripCode;
+        String tradeSymbol = useFutures ? futSymbol : optSymbol;
+        String instrumentType = useFutures ? "FUTURES" : "OPTION";
+        double tradeLtp = useFutures ? futLtp : optLtp;
+        int lotSize = useFutures ? futLotSize : optLotSize;
+
+        if (tradeScripCode == null || tradeScripCode.isEmpty() || "null".equals(tradeScripCode)) {
+            log.warn("MERE auto-execute skipped for {}: no tradeable instrument", scripCode);
+            return;
+        }
+        if (tradeLtp <= 0) {
+            log.warn("MERE auto-execute skipped for {}: LTP not available", scripCode);
+            return;
+        }
+        if (lotSize <= 0) lotSize = 1;
+
+        // Compute quantity: premium sizing = 2.5% of wallet
+        int lots = 1;  // Default 1 lot; StrategyTradeExecutor will handle sizing if needed
+        int quantity = lots * lotSize;
+
+        // Extract equity-level SL/targets for dual-level monitoring
+        double equitySl = toDouble(mereData.get("equitySl"));
+        double equityT1 = toDouble(mereData.get("equityT1"));
+        double equityT2 = toDouble(mereData.get("equityT2"));
+        double equityT3 = toDouble(mereData.get("equityT3"));
+        double equityT4 = toDouble(mereData.get("equityT4"));
+        double delta = toDouble(mereData.get("optionDelta"));
+        double confidence = toDouble(mereData.get("mereScore")) / 100.0;
+
+        StrategyTradeRequest req = StrategyTradeRequest.builder()
+            .scripCode(tradeScripCode)
+            .instrumentSymbol(tradeSymbol != null ? tradeSymbol : "")
+            .instrumentType(instrumentType)
+            .underlyingScripCode(scripCode)
+            .underlyingSymbol(String.valueOf(mereData.getOrDefault("symbol", "")))
+            .side("BUY")
+            .quantity(quantity)
+            .lots(lots)
+            .lotSize(lotSize)
+            .multiplier(1)
+            .entryPrice(tradeLtp)
+            .sl(tradeLtp * 0.7)  // 30% premium SL (will be overridden by equity-level monitoring)
+            .t1(tradeLtp * 1.5)  // Option premium targets (approximate)
+            .t2(tradeLtp * 2.0)
+            .t3(tradeLtp * 2.5)
+            .t4(tradeLtp * 3.0)
+            .equitySpot(triggerPrice)
+            .equitySl(equitySl)
+            .equityT1(equityT1)
+            .equityT2(equityT2)
+            .equityT3(equityT3)
+            .equityT4(equityT4)
+            .delta(delta != 0 ? delta : (direction.equals("BULLISH") ? 0.4 : -0.4))
+            .optionType(optType)
+            .strike(optStrike)
+            .strategy("MERE")
+            .exchange(String.valueOf(mereData.getOrDefault("exchange", "N")))
+            .direction(direction)
+            .confidence(Math.min(1.0, confidence))
+            .build();
+
+        Map<String, Object> result = strategyTradeExecutor.openTrade(req);
+        log.info("MERE auto-execute for {}: {} {} instrument={} ltp={} result={}",
+            scripCode, direction, instrumentType, tradeScripCode, tradeLtp,
+            result != null ? result.get("status") : "null");
+    }
+
+    private double toDouble(Object val) {
+        if (val == null) return 0;
+        if (val instanceof Number) return ((Number) val).doubleValue();
+        try { return Double.parseDouble(val.toString()); } catch (Exception e) { return 0; }
+    }
+
+    private int toInt(Object val) {
+        if (val == null) return 0;
+        if (val instanceof Number) return ((Number) val).intValue();
+        try { return Integer.parseInt(val.toString()); } catch (Exception e) { return 0; }
     }
 
     private Map<String, Object> parseMERE(JsonNode root) {
@@ -289,17 +427,18 @@ public class MereConsumer {
         data.put("merePenalty", root.path("merePenalty").asInt(0));
         data.put("mereReasons", root.path("mereReasons").asText(""));
 
-        // Normalize variant-specific field names to standard MERE fields
-        if (!"MERE".equals(strategy)) {
-            normalizeVariantFields(root, data, strategy);
-        }
-
-        // Bollinger Bands data
+        // Bollinger Bands data (set defaults first, then variant normalization overwrites)
         data.put("bbUpper", root.path("bbUpper").asDouble(0));
         data.put("bbMiddle", root.path("bbMiddle").asDouble(0));
         data.put("bbLower", root.path("bbLower").asDouble(0));
         data.put("bbWidth", root.path("bbWidth").asDouble(0));
         data.put("percentB", root.path("percentB").asDouble(0));
+
+        // Normalize variant-specific field names to standard MERE fields
+        // MUST run AFTER BB defaults so variant-specific fields (daily_percentB etc.) overwrite
+        if (!"MERE".equals(strategy)) {
+            normalizeVariantFields(root, data, strategy);
+        }
 
         // SuperTrend data
         data.put("superTrend", root.path("superTrend").asDouble(0));
@@ -328,6 +467,11 @@ public class MereConsumer {
         data.put("surgeT", root.path("surgeT").asDouble(0));
         data.put("surgeTMinus1", root.path("surgeTMinus1").asDouble(0));
 
+        // Block trade detection (MAD-based)
+        data.put("blockTradeDetected", root.path("blockTradeDetected").asBoolean(false));
+        if (root.has("blockTradeVol")) data.put("blockTradeVol", root.path("blockTradeVol").asLong(0));
+        if (root.has("blockTradePct")) data.put("blockTradePct", root.path("blockTradePct").asDouble(0));
+
         // OI enrichment
         if (root.has("oiChangeAtT")) data.put("oiChangeAtT", root.path("oiChangeAtT").asLong(0));
         if (root.has("oiInterpretation")) data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
@@ -335,6 +479,7 @@ public class MereConsumer {
 
         // Option enrichment
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
+        if (root.has("optionFailureReason")) data.put("optionFailureReason", root.path("optionFailureReason").asText());
         if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
         if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
         if (root.has("optionStrike")) data.put("optionStrike", root.path("optionStrike").asDouble());
@@ -354,6 +499,29 @@ public class MereConsumer {
         if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
         if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
         if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
+
+        // MERE v2 fields
+        if (root.has("autoExecute")) data.put("autoExecute", root.path("autoExecute").asBoolean(false));
+        if (root.has("tradeStatus")) data.put("tradeStatus", root.path("tradeStatus").asText());
+        if (root.has("mereVersion")) data.put("mereVersion", root.path("mereVersion").asText());
+        if (root.has("equitySl")) data.put("equitySl", root.path("equitySl").asDouble());
+        if (root.has("equityT1")) data.put("equityT1", root.path("equityT1").asDouble());
+        if (root.has("equityT2")) data.put("equityT2", root.path("equityT2").asDouble());
+        if (root.has("equityT3")) data.put("equityT3", root.path("equityT3").asDouble());
+        if (root.has("equityT4")) data.put("equityT4", root.path("equityT4").asDouble());
+        if (root.has("optionDelta")) data.put("optionDelta", root.path("optionDelta").asDouble());
+        if (root.has("rankScore")) data.put("rankScore", root.path("rankScore").asDouble());
+        if (root.has("entryReason")) data.put("entryReason", root.path("entryReason").asText());
+        if (root.has("confirmReasons")) data.put("confirmReasons", root.path("confirmReasons").asText());
+        if (root.has("regime")) data.put("regime", root.path("regime").asText());
+
+        // V2 layer breakdown (5-layer)
+        if (root.has("mereL1Extension")) data.put("mereL1Extension", root.path("mereL1Extension").asInt());
+        if (root.has("mereL2Exhaustion")) data.put("mereL2Exhaustion", root.path("mereL2Exhaustion").asInt());
+        if (root.has("mereL3Options")) data.put("mereL3Options", root.path("mereL3Options").asInt());
+        if (root.has("mereL4MultiTF")) data.put("mereL4MultiTF", root.path("mereL4MultiTF").asInt());
+        if (root.has("mereL5EntryQuality")) data.put("mereL5EntryQuality", root.path("mereL5EntryQuality").asInt());
+        if (root.has("mereAntiPatterns")) data.put("mereAntiPatterns", root.path("mereAntiPatterns").asInt());
 
         return data;
     }

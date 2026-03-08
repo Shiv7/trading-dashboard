@@ -7,13 +7,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -25,7 +24,7 @@ import java.util.*;
  * 2. monitorPositions() — @Scheduled every 2s: dual-level monitoring (option + equity/futures)
  * 3. closeTrade()       — Manual close
  * 4. getActiveStrategyTrades() — Returns all open strategy positions
- * 5. eodExitAllPositions() — @Scheduled 15:25 IST: auto-exit all remaining positions
+ * 5. eodExitNsePositions() — @Scheduled 15:25 IST NSE, 16:55 CDS, 23:25/23:50 MCX (seasonal)
  *
  * Dual monitoring: checks both option LTP and equity/futures LTP against respective
  * SL and target levels. Whichever level is hit first triggers the exit.
@@ -51,6 +50,7 @@ public class StrategyTradeExecutor {
     private static final String POSITION_PREFIX = "virtual:positions:";
     private static final String TARGETS_PREFIX = "strategy:targets:";
     private static final String PRICE_PREFIX = "price:";
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     @Autowired
     private RedisTemplate<String, String> redisTemplate;
@@ -122,7 +122,8 @@ public class StrategyTradeExecutor {
         position.put("scripCode", scripCode);
         position.put("qtyOpen", req.getQuantity());
         position.put("avgEntry", req.getEntryPrice());
-        position.put("side", "LONG");
+        position.put("side", "SELL".equalsIgnoreCase(req.getSide()) ? "SHORT" : "LONG");
+        position.put("direction", req.getDirection());
         position.put("sl", optSl);
         position.put("tp1", optT1);
         position.put("tp2", optT2);
@@ -135,6 +136,7 @@ public class StrategyTradeExecutor {
         position.put("signalId", tradeId);
         position.put("signalSource", req.getStrategy());
         position.put("strategy", req.getStrategy());
+        position.put("executionMode", req.getExecutionMode() != null ? req.getExecutionMode() : "MANUAL");
         position.put("openedAt", now);
         position.put("updatedAt", now);
         position.put("status", "ACTIVE");
@@ -158,6 +160,7 @@ public class StrategyTradeExecutor {
         position.put("t4Hit", false);
         position.put("slHit", false);
         position.put("instrumentType", req.getInstrumentType());
+        position.put("optionType", req.getOptionType());  // CE / PE / null
         position.put("delta", req.getDelta());
         position.put("instrumentSymbol", req.getInstrumentSymbol());
         position.put("underlyingScripCode", req.getUnderlyingScripCode());
@@ -201,12 +204,14 @@ public class StrategyTradeExecutor {
         targets.put("targets", targetLevels);
 
         targets.put("strategy", req.getStrategy());
+        targets.put("executionMode", req.getExecutionMode() != null ? req.getExecutionMode() : "MANUAL");
         targets.put("direction", req.getDirection());
         targets.put("exchange", req.getExchange());
         targets.put("lotSize", req.getLotSize());
         targets.put("multiplier", req.getMultiplier());
         targets.put("lots", req.getLots());
         targets.put("instrumentType", req.getInstrumentType());
+        targets.put("optionType", req.getOptionType());  // CE / PE / null
         targets.put("openedAt", now);
         // Dual monitoring metadata
         targets.put("underlyingScripCode", req.getUnderlyingScripCode());
@@ -313,6 +318,9 @@ public class StrategyTradeExecutor {
                 estimatedEntry = actualLtp;
             }
         }
+
+        // 5. Lock margin in strategy wallet
+        lockStrategyWalletMargin(req.getStrategy(), estimatedEntry * req.getQuantity());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", true);
@@ -455,7 +463,11 @@ public class StrategyTradeExecutor {
         }
         clusters.add(new double[]{finalCenter, clusterScoreSum});
 
-        // --- Step 3: Separate into above-entry (targets) and below-entry (SL) ---
+        // --- Step 3: Separate into above-entry and below-entry clusters ---
+        // For options: always LONG on premium (buy CE for bullish, buy PE for bearish).
+        // isShort only applies to SELL-side FUTURES, never to option buys.
+        boolean isOptionBuy = "OPTION".equalsIgnoreCase(req.getInstrumentType());
+        boolean isShort = !isOptionBuy && ("BEARISH".equalsIgnoreCase(req.getDirection()) || "SELL".equalsIgnoreCase(req.getSide()));
         List<double[]> aboveEntry = new ArrayList<>();
         List<double[]> belowEntry = new ArrayList<>();
 
@@ -476,33 +488,41 @@ public class StrategyTradeExecutor {
         // Sort below by distance from entry (nearest first = highest price below entry)
         belowEntry.sort((a, b) -> Double.compare(b[0], a[0]));
 
-        // Need at least 2 target clusters above entry for smart targets to be useful
-        if (aboveEntry.size() < 2) return null;
+        // Direction-aware: LONG targets above, SHORT targets below
+        List<double[]> targetClusters = isShort ? belowEntry : aboveEntry;
+        List<double[]> slClusters = isShort ? aboveEntry : belowEntry;
+
+        // Need at least 2 target clusters for smart targets to be useful
+        if (targetClusters.size() < 2) return null;
 
         // --- Step 4: Assign T1-T4 and SL ---
-        double t1 = aboveEntry.size() > 0 ? aboveEntry.get(0)[0] : 0;
-        double t2 = aboveEntry.size() > 1 ? aboveEntry.get(1)[0] : 0;
-        double t3 = aboveEntry.size() > 2 ? aboveEntry.get(2)[0] : 0;
-        double t4 = aboveEntry.size() > 3 ? aboveEntry.get(3)[0] : 0;
+        double t1 = targetClusters.size() > 0 ? targetClusters.get(0)[0] : 0;
+        double t2 = targetClusters.size() > 1 ? targetClusters.get(1)[0] : 0;
+        double t3 = targetClusters.size() > 2 ? targetClusters.get(2)[0] : 0;
+        double t4 = targetClusters.size() > 3 ? targetClusters.get(3)[0] : 0;
 
         // T4 fallback: if only 3 clusters, use next round figure beyond T3
         if (t4 <= 0 && t3 > 0) {
-            t4 = Math.ceil(t3 / roundStep) * roundStep + roundStep;
+            t4 = isShort
+                ? Math.floor(t3 / roundStep) * roundStep - roundStep
+                : Math.ceil(t3 / roundStep) * roundStep + roundStep;
         }
         // T3 fallback: if only 2 clusters, use next round figure beyond T2
         if (t3 <= 0 && t2 > 0) {
-            t3 = Math.ceil(t2 / roundStep) * roundStep + roundStep;
+            t3 = isShort
+                ? Math.floor(t2 / roundStep) * roundStep - roundStep
+                : Math.ceil(t2 / roundStep) * roundStep + roundStep;
         }
 
-        // SL: nearest below-entry cluster with score >= 2, or strongest support
+        // SL: nearest cluster on the SL side with score >= 2
         double sl = 0;
-        for (double[] cluster : belowEntry) {
+        for (double[] cluster : slClusters) {
             if (cluster[1] >= 2) {
                 sl = cluster[0];
                 break;
             }
         }
-        // SL fallback: if no strong support, use the signal's original SL
+        // SL fallback: if no strong cluster, use the signal's original SL
         if (sl <= 0) {
             sl = req.getSl();
         }
@@ -782,8 +802,12 @@ public class StrategyTradeExecutor {
         double optionHighFiveMin = targets.get("optionHighFiveMin") != null
             ? ((Number) targets.get("optionHighFiveMin")).doubleValue() : optionLtp;
 
-        // --- 1% Drawdown check: auto-exit if option price < 1% of 5-min high ---
-        if (optionHighFiveMin > 0 && optionLtp <= optionHighFiveMin * 0.01) {
+        // --- 1% Drawdown check: auto-exit if option premium < 1% of 5-min high ---
+        // Only applicable to LONG option positions (premium decay). Skip for SHORT futures.
+        String instrType = (String) targets.getOrDefault("instrumentType", "OPTION");
+        boolean ddApplicable = !("FUTURES".equals(instrType) && "BEARISH".equals(
+            (String) targets.getOrDefault("direction", "BULLISH")));
+        if (ddApplicable && optionHighFiveMin > 0 && optionLtp <= optionHighFiveMin * 0.01) {
             log.info("{} 1% DD EXIT for {} optionLtp={} (1% of fiveMinHigh={})",
                 LOG_PREFIX, scripCode, String.format("%.2f", optionLtp), String.format("%.2f", optionHighFiveMin));
             executeExit(targets, scripCode, optionLtp, remainingQty, "1% DD", targetKey);
@@ -797,7 +821,13 @@ public class StrategyTradeExecutor {
         String direction = (String) targets.getOrDefault("direction", "BULLISH");
         boolean isBearish = "BEARISH".equals(direction);
 
-        boolean optionSlHit = optionLtp <= optionSlLevel;
+        String instrumentType = (String) targets.getOrDefault("instrumentType", "OPTION");
+        boolean isShortFutures = "FUTURES".equals(instrumentType) && isBearish;
+        // LONG/OPTION: SL hit when price DROPS below SL level
+        // SHORT FUTURES: SL hit when price RISES above SL level
+        boolean optionSlHit = isShortFutures
+            ? optionLtp >= optionSlLevel
+            : optionLtp <= optionSlLevel;
         // BEARISH (PE): equity SL is ABOVE entry, hit when price rises past it
         // BULLISH (CE): equity SL is BELOW entry, hit when price drops past it
         boolean equitySlHit = equityLtp > 0 && equitySlLevel > 0
@@ -846,8 +876,11 @@ public class StrategyTradeExecutor {
             String level = (String) target.get("level"); // "T1", "T2", "T3", "T4"
 
             // Dual check: option target OR equity target — whichever hits first
-            // Option targets always use >= (premium rises = good regardless of direction)
-            boolean optionHit = optionLtp >= optionTargetPrice;
+            // LONG/OPTION: target hit when price RISES above target
+            // SHORT FUTURES: target hit when price DROPS below target
+            boolean optionHit = isShortFutures
+                ? optionLtp <= optionTargetPrice
+                : optionLtp >= optionTargetPrice;
             // BEARISH (PE): equity targets are BELOW entry, hit when price drops past them
             // BULLISH (CE): equity targets are ABOVE entry, hit when price rises past them
             boolean equityHit = equityLtp > 0 && i < equityTargets.length
@@ -885,7 +918,9 @@ public class StrategyTradeExecutor {
                 remainingQty -= closeQty;
                 targets.put("remainingQty", remainingQty);
 
-                double tranchePnl = (optionLtp - entryPrice) * closeQty;
+                double tranchePnl = isShortFutures
+                    ? (entryPrice - optionLtp) * closeQty
+                    : (optionLtp - entryPrice) * closeQty;
                 int lots = closeQty / Math.max(lotSize, 1);
 
                 // Record exit history entry
@@ -895,6 +930,14 @@ public class StrategyTradeExecutor {
 
                 publishTradeOutcome(targets, scripCode, optionLtp, closeQty,
                     hitSource, tranchePnl, remainingQty == 0);
+
+                // Credit tranche PnL + release proportional margin in strategy wallet
+                String trancheStrategy = (String) targets.get("strategy");
+                double trancheMarginRelease = entryPrice * closeQty;
+                boolean trancheWalletOk = updateStrategyWallet(trancheStrategy, tranchePnl, trancheMarginRelease, scripCode, hitSource);
+                if (!trancheWalletOk) {
+                    targets.put("walletUpdateFailed", true);
+                }
 
                 log.info("{} {} partial exit: closeQty={} ({}L) remainingQty={} pnl={}",
                     LOG_PREFIX, hitSource, closeQty, lots, remainingQty, String.format("%.2f", tranchePnl));
@@ -910,9 +953,19 @@ public class StrategyTradeExecutor {
 
         // Persist updated targets back to Redis
         if (remainingQty <= 0) {
-            redisTemplate.delete(targetKey);
+            boolean walletFailed = Boolean.TRUE.equals(targets.get("walletUpdateFailed"));
+            if (!walletFailed) {
+                redisTemplate.delete(targetKey);
+            } else {
+                // Retain target key so reconciliation service can detect and fix the leaked margin
+                targets.put("remainingQty", 0);
+                String retainJson = objectMapper.writeValueAsString(targets);
+                redisTemplate.opsForValue().set(targetKey, retainJson);
+                log.warn("{} MARGIN_LEAK_GUARD target key retained (partial wallet update failed) scrip={}",
+                    LOG_PREFIX, scripCode);
+            }
             updatePositionStatus(scripCode, "CLOSED", 0);
-    
+
             log.info("{} Position fully closed: {}", LOG_PREFIX, scripCode);
         } else {
             String updatedJson = objectMapper.writeValueAsString(targets);
@@ -1094,7 +1147,10 @@ public class StrategyTradeExecutor {
             if (equityLtp > 0) {
                 pos.put("equityLtp", equityLtp);
             }
-            pos.put("unrealizedPnl", (optionLtp - entryPrice) * remainingQty);
+            boolean isShort = "SHORT".equals(pos.get("side"));
+            pos.put("unrealizedPnl", isShort
+                ? (entryPrice - optionLtp) * remainingQty
+                : (optionLtp - entryPrice) * remainingQty);
             pos.put("updatedAt", System.currentTimeMillis());
 
             String updatedJson = objectMapper.writeValueAsString(pos);
@@ -1186,7 +1242,12 @@ public class StrategyTradeExecutor {
     private void executeExit(Map<String, Object> targets, String scripCode,
                               double exitPrice, int qty, String exitReason, String targetKey) {
         double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
-        double pnl = (exitPrice - entryPrice) * qty;
+        String exitDirection = (String) targets.getOrDefault("direction", "BULLISH");
+        String exitInstrType = (String) targets.getOrDefault("instrumentType", "OPTION");
+        boolean isExitShortFutures = "FUTURES".equals(exitInstrType) && "BEARISH".equals(exitDirection);
+        double pnl = isExitShortFutures
+            ? (entryPrice - exitPrice) * qty
+            : (exitPrice - entryPrice) * qty;
 
         // Update position as fully closed
         try {
@@ -1219,7 +1280,20 @@ public class StrategyTradeExecutor {
         }
 
         publishTradeOutcome(targets, scripCode, exitPrice, qty, exitReason, pnl, true);
-        redisTemplate.delete(targetKey);
+
+        // Credit PnL + release margin for REMAINING qty only (partial exits already released their share)
+        String strategy = (String) targets.get("strategy");
+        int remainingQty = targets.get("remainingQty") != null
+            ? ((Number) targets.get("remainingQty")).intValue() : qty;
+        double marginToRelease = entryPrice * remainingQty;
+        boolean walletUpdated = updateStrategyWallet(strategy, pnl, marginToRelease, scripCode, exitReason);
+
+        if (walletUpdated) {
+            redisTemplate.delete(targetKey);
+        } else {
+            log.warn("{} MARGIN_LEAK_GUARD target key retained (wallet update failed) strategy={} scrip={} marginToRelease={}",
+                LOG_PREFIX, strategy, scripCode, fmt(marginToRelease));
+        }
 
         // Unregister from tick monitoring (position fully closed)
 
@@ -1268,7 +1342,9 @@ public class StrategyTradeExecutor {
             outcome.put("pnl", pnl);
             outcome.put("isWin", pnl > 0);
             outcome.put("exitReason", exitReason);
-            outcome.put("side", "BUY");
+            boolean isOutcomeShort = "FUTURES".equals(targets.get("instrumentType"))
+                && "BEARISH".equals(direction);
+            outcome.put("side", isOutcomeShort ? "SELL" : "BUY");
             outcome.put("direction", direction);
             outcome.put("entryTime", entryTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
             outcome.put("exitTime", exitTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
@@ -1281,7 +1357,43 @@ public class StrategyTradeExecutor {
             outcome.put("signalType", strategy);
             outcome.put("strategy", strategy);
             outcome.put("signalSource", strategy);
+            outcome.put("executionMode", targets.getOrDefault("executionMode", "MANUAL"));
             outcome.put("walletType", "PAPER");
+
+            // Enrichment for trade detail drawer
+            outcome.put("exchange", targets.getOrDefault("exchange", "N"));
+            outcome.put("instrumentType", targets.get("instrumentType"));
+            outcome.put("instrumentSymbol", instrumentSymbol);
+            outcome.put("confidence", targets.get("confidence"));
+            outcome.put("stopLoss", targets.get("sl"));
+
+            // Extract target price levels from targetLevels list
+            if (targetLevels != null) {
+                for (Map<String, Object> t : targetLevels) {
+                    String level = (String) t.get("level");
+                    Object price = t.get("price");
+                    if (level != null && price != null) {
+                        switch (level) {
+                            case "T1" -> outcome.put("target1", price);
+                            case "T2" -> outcome.put("target2", price);
+                            case "T3" -> outcome.put("target3", price);
+                            case "T4" -> outcome.put("target4", price);
+                        }
+                    }
+                }
+            }
+
+            // Dual-leg levels
+            outcome.put("equitySl", targets.get("equitySl"));
+            outcome.put("equityT1", targets.get("equityT1"));
+            outcome.put("equityT2", targets.get("equityT2"));
+            outcome.put("equityT3", targets.get("equityT3"));
+            outcome.put("equityT4", targets.get("equityT4"));
+            outcome.put("optionSl", targets.get("optionSl"));
+            outcome.put("optionT1", targets.get("optionT1"));
+            outcome.put("optionT2", targets.get("optionT2"));
+            outcome.put("optionT3", targets.get("optionT3"));
+            outcome.put("optionT4", targets.get("optionT4"));
 
             String json = objectMapper.writeValueAsString(outcome);
             kafkaTemplate.send(tradeOutcomesTopic, scripCode, json);
@@ -1292,6 +1404,193 @@ public class StrategyTradeExecutor {
 
         } catch (Exception e) {
             log.error("{} Failed to publish trade outcome: {}", LOG_PREFIX, e.getMessage());
+        }
+    }
+
+    // ==================== STRATEGY WALLET MANAGEMENT (Lua-atomic) ====================
+
+    /**
+     * Lua script for atomic margin lock.
+     * Increments usedMargin, dayTradeCount, totalTradeCount; decrements availableMargin.
+     * Runs atomically — no other Redis command can interleave.
+     */
+    private static final String LUA_LOCK_MARGIN =
+        "local json = redis.call('GET', KEYS[1])\n" +
+        "if not json then return '-1' end\n" +
+        "local w = cjson.decode(json)\n" +
+        "local margin = tonumber(ARGV[1])\n" +
+        "local now = ARGV[2]\n" +
+        "w['usedMargin'] = (tonumber(w['usedMargin']) or 0) + margin\n" +
+        "w['availableMargin'] = math.max(0, (tonumber(w['currentBalance']) or 0) - w['usedMargin'])\n" +
+        "w['dayTradeCount'] = (tonumber(w['dayTradeCount']) or 0) + 1\n" +
+        "w['totalTradeCount'] = (tonumber(w['totalTradeCount']) or 0) + 1\n" +
+        "w['updatedAt'] = now\n" +
+        "w['version'] = (tonumber(w['version']) or 0) + 1\n" +
+        "redis.call('SET', KEYS[1], cjson.encode(w))\n" +
+        "return tostring(w['usedMargin']) .. '|' .. tostring(w['availableMargin']) .. '|' .. tostring(w['dayTradeCount'])\n";
+
+    /**
+     * Lua script for atomic PnL credit + margin release.
+     * Updates: currentBalance, usedMargin, availableMargin, realizedPnl, dayRealizedPnl,
+     *          totalPnl, dayPnl, totalWinCount, totalLossCount, dayWinCount, dayLossCount,
+     *          winRate, peakBalance, maxDrawdownHit, updatedAt, version
+     * ARGV: [1]=pnl, [2]=marginToRelease, [3]=updatedAt
+     * Returns: "balance|realized|dayPnl|peak|drawdown|totalW|totalL|dayW|dayL"
+     */
+    private static final String LUA_CREDIT_PNL =
+        "local json = redis.call('GET', KEYS[1])\n" +
+        "if not json then return '-1' end\n" +
+        "local w = cjson.decode(json)\n" +
+        "local pnl = tonumber(ARGV[1])\n" +
+        "local marginRelease = tonumber(ARGV[2])\n" +
+        "local now = ARGV[3]\n" +
+        // Update balances
+        "w['currentBalance'] = (tonumber(w['currentBalance']) or 0) + pnl\n" +
+        "w['usedMargin'] = math.max(0, (tonumber(w['usedMargin']) or 0) - marginRelease)\n" +
+        "w['realizedPnl'] = (tonumber(w['realizedPnl']) or 0) + pnl\n" +
+        "w['dayRealizedPnl'] = (tonumber(w['dayRealizedPnl']) or 0) + pnl\n" +
+        // Win/loss counters
+        "if pnl > 0 then\n" +
+        "  w['totalWinCount'] = (tonumber(w['totalWinCount']) or 0) + 1\n" +
+        "  w['dayWinCount'] = (tonumber(w['dayWinCount']) or 0) + 1\n" +
+        "elseif pnl < 0 then\n" +
+        "  w['totalLossCount'] = (tonumber(w['totalLossCount']) or 0) + 1\n" +
+        "  w['dayLossCount'] = (tonumber(w['dayLossCount']) or 0) + 1\n" +
+        "end\n" +
+        // Peak balance + max drawdown
+        "local peak = tonumber(w['peakBalance']) or 0\n" +
+        "if w['currentBalance'] > peak then peak = w['currentBalance'] end\n" +
+        "w['peakBalance'] = peak\n" +
+        "local dd = peak - w['currentBalance']\n" +
+        "local maxDD = tonumber(w['maxDrawdownHit']) or 0\n" +
+        "if dd > maxDD then maxDD = dd end\n" +
+        "w['maxDrawdownHit'] = maxDD\n" +
+        // Derived fields
+        "w['availableMargin'] = math.max(0, w['currentBalance'] - w['usedMargin'])\n" +
+        "w['totalPnl'] = w['realizedPnl'] + (tonumber(w['unrealizedPnl']) or 0)\n" +
+        "w['dayPnl'] = w['dayRealizedPnl'] + (tonumber(w['dayUnrealizedPnl']) or 0)\n" +
+        "local totalTrades = (tonumber(w['totalWinCount']) or 0) + (tonumber(w['totalLossCount']) or 0)\n" +
+        "w['winRate'] = totalTrades > 0 and ((tonumber(w['totalWinCount']) or 0) / totalTrades * 100) or 0\n" +
+        "w['updatedAt'] = now\n" +
+        "w['version'] = (tonumber(w['version']) or 0) + 1\n" +
+        "redis.call('SET', KEYS[1], cjson.encode(w))\n" +
+        "return tostring(w['currentBalance']) .. '|' .. tostring(w['realizedPnl']) .. '|' ..\n" +
+        "  tostring(w['dayPnl']) .. '|' .. tostring(peak) .. '|' .. tostring(maxDD) .. '|' ..\n" +
+        "  tostring(w['totalWinCount'] or 0) .. '|' .. tostring(w['totalLossCount'] or 0) .. '|' ..\n" +
+        "  tostring(w['dayWinCount'] or 0) .. '|' .. tostring(w['dayLossCount'] or 0)\n";
+
+    /**
+     * Lock margin in the strategy wallet when a trade is opened.
+     * Uses Redis Lua script for atomic field-level update — immune to cross-JVM race.
+     */
+    private void lockStrategyWalletMargin(String strategy, double marginAmount) {
+        if (strategy == null || strategy.isEmpty()) return;
+        String walletKey = "wallet:entity:strategy-wallet-" + strategy;
+        try {
+            DefaultRedisScript<String> script = new DefaultRedisScript<>(LUA_LOCK_MARGIN, String.class);
+            String result = redisTemplate.execute(script,
+                Collections.singletonList(walletKey),
+                String.valueOf(marginAmount),
+                LocalDateTime.now(IST).toString());
+
+            if ("-1".equals(result)) {
+                log.debug("{} No wallet found for strategy {} — skipping margin lock", LOG_PREFIX, strategy);
+                return;
+            }
+
+            log.info("{} WALLET_MARGIN_LOCK strategy={} margin={} result={}",
+                LOG_PREFIX, strategy, fmt(marginAmount), result);
+        } catch (Exception e) {
+            log.error("{} Failed to lock wallet margin for {}: {}", LOG_PREFIX, strategy, e.getMessage());
+        }
+    }
+
+    /**
+     * Credit PnL and release margin in the strategy wallet when a trade is closed.
+     * Uses Redis Lua script for atomic field-level update — immune to cross-JVM race.
+     *
+     * All 7 original issues are fixed:
+     * 1. dayRealizedPnl updated atomically
+     * 2. dayWinCount/dayLossCount incremented atomically
+     * 3. peakBalance + maxDrawdownHit tracked atomically
+     * 4. Atomic via Redis Lua (no cross-JVM race possible)
+     * 5. Trading day reset handled by 8089's ensureTradingDayReset
+     * 6. Transaction audit trail saved after atomic update
+     * 7. Margin release uses correct qty (caller passes correct amount)
+     */
+    private boolean updateStrategyWallet(String strategy, double pnl, double marginToRelease,
+                                       String scripCode, String exitReason) {
+        if (strategy == null || strategy.isEmpty()) return true; // no wallet to update — safe to delete target
+        String walletKey = "wallet:entity:strategy-wallet-" + strategy;
+        try {
+            DefaultRedisScript<String> script = new DefaultRedisScript<>(LUA_CREDIT_PNL, String.class);
+            String result = redisTemplate.execute(script,
+                Collections.singletonList(walletKey),
+                String.valueOf(pnl),
+                String.valueOf(marginToRelease),
+                LocalDateTime.now(IST).toString());
+
+            if ("-1".equals(result)) {
+                log.debug("{} No wallet found for strategy {} — skipping PnL credit", LOG_PREFIX, strategy);
+                return true; // wallet doesn't exist — safe to delete target
+            }
+
+            // Parse result for logging: "balance|realized|dayPnl|peak|drawdown|totalW|totalL|dayW|dayL"
+            String[] parts = result != null ? result.split("\\|") : new String[0];
+            String balance = parts.length > 0 ? parts[0] : "?";
+            String realized = parts.length > 1 ? parts[1] : "?";
+            String dayPnl = parts.length > 2 ? parts[2] : "?";
+            String peak = parts.length > 3 ? parts[3] : "?";
+            String drawdown = parts.length > 4 ? parts[4] : "?";
+
+            log.info("{} WALLET_PNL_CREDIT strategy={} scrip={} pnl={} marginReleased={} " +
+                    "balance={} realized={} dayPnl={} peak={} drawdown={} exit={}",
+                LOG_PREFIX, strategy, scripCode, fmt(pnl), fmt(marginToRelease),
+                balance, realized, dayPnl, peak, drawdown, exitReason);
+
+            // Broadcast wallet update via WebSocket for instant frontend refresh
+            try {
+                Map<String, Object> walletUpdate = new LinkedHashMap<>();
+                walletUpdate.put("type", "WALLET_UPDATE");
+                walletUpdate.put("strategy", strategy);
+                walletUpdate.put("currentBalance", parts.length > 0 ? Double.parseDouble(parts[0]) : 0);
+                walletUpdate.put("dayPnl", parts.length > 2 ? Double.parseDouble(parts[2]) : 0);
+                sessionManager.broadcastWalletUpdate(walletUpdate);
+            } catch (Exception wsEx) {
+                log.debug("{} Failed to broadcast wallet update: {}", LOG_PREFIX, wsEx.getMessage());
+            }
+
+            // Transaction audit trail (separate, non-critical)
+            saveWalletTransaction(strategy, scripCode, pnl, marginToRelease, exitReason);
+            return true;
+        } catch (Exception e) {
+            log.error("{} Failed to update wallet for {}: {}", LOG_PREFIX, strategy, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Save a transaction record to Redis list for audit trail.
+     * Key: wallet:transactions:{strategy} — capped at last 500 entries.
+     */
+    private void saveWalletTransaction(String strategy, String scripCode,
+                                        double pnl, double marginReleased, String exitReason) {
+        try {
+            String txnKey = "wallet:transactions:" + strategy;
+            Map<String, Object> txn = new LinkedHashMap<>();
+            txn.put("timestamp", LocalDateTime.now(IST).toString());
+            txn.put("type", "PNL_CREDIT");
+            txn.put("strategy", strategy);
+            txn.put("scripCode", scripCode);
+            txn.put("pnl", pnl);
+            txn.put("marginReleased", marginReleased);
+            txn.put("exitReason", exitReason);
+
+            String txnJson = objectMapper.writeValueAsString(txn);
+            redisTemplate.opsForList().leftPush(txnKey, txnJson);
+            redisTemplate.opsForList().trim(txnKey, 0, 499);
+        } catch (Exception e) {
+            log.debug("{} Failed to save wallet transaction for {}: {}", LOG_PREFIX, strategy, e.getMessage());
         }
     }
 
@@ -1350,11 +1649,47 @@ public class StrategyTradeExecutor {
     }
 
     /**
-     * EOD auto-exit for MCX positions at 23:25 IST (MCX closes 23:30).
+     * MCX EOD auto-exit — seasonal close aligned with US DST:
+     *   US DST active  → MCX closes 23:30 IST → exit at 23:25
+     *   US standard    → MCX closes 23:55 IST → exit at 23:50
+     * Fires at 23:25 (DST) and 23:50 (standard); each checks if it's the right season.
      */
     @Scheduled(cron = "0 25 23 * * MON-FRI", zone = "Asia/Kolkata")
-    public void eodExitMcxPositions() {
-        eodExitForExchanges(Set.of("M"), "23:25 IST (MCX)");
+    public void eodExitMcxPositionsDst() {
+        if (isMcxDstClose()) {
+            eodExitForExchanges(Set.of("M"), "23:25 IST (MCX DST)");
+        } else {
+            log.info("{} MCX 23:25 trigger skipped — US standard time, MCX closes 23:55", LOG_PREFIX);
+        }
+    }
+
+    @Scheduled(cron = "0 50 23 * * MON-FRI", zone = "Asia/Kolkata")
+    public void eodExitMcxPositionsStandard() {
+        if (!isMcxDstClose()) {
+            eodExitForExchanges(Set.of("M"), "23:50 IST (MCX standard)");
+        } else {
+            log.info("{} MCX 23:50 trigger skipped — US DST active, MCX already closed at 23:30", LOG_PREFIX);
+        }
+    }
+
+    private static final ZoneId US_EASTERN = ZoneId.of("America/New_York");
+
+    /**
+     * Returns true if MCX closes at 23:30 (US DST), false if 23:55 (US standard).
+     * Mirrors the seasonal logic from streaming candle TimeframeBoundary.
+     */
+    private boolean isMcxDstClose() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        ZonedDateTime usNoon = today.atTime(12, 0).atZone(US_EASTERN);
+        if (usNoon.getZone().getRules().isDaylightSavings(usNoon.toInstant())) return true;
+
+        ZonedDateTime usTomorrow = today.plusDays(1).atTime(12, 0).atZone(US_EASTERN);
+        if (usTomorrow.getZone().getRules().isDaylightSavings(usTomorrow.toInstant())) return true;
+
+        ZonedDateTime usLastWeek = today.minusDays(6).atTime(12, 0).atZone(US_EASTERN);
+        if (usLastWeek.getZone().getRules().isDaylightSavings(usLastWeek.toInstant())) return true;
+
+        return false;
     }
 
     /**
@@ -1404,8 +1739,70 @@ public class StrategyTradeExecutor {
                 }
             }
             log.info("{} EOD exit complete: {} exited, {} skipped (different exchange)", LOG_PREFIX, exitCount, skippedCount);
+
+            // Cleanup orphan targets: keys where remainingQty <= 0 or position is already closed
+            cleanupOrphanTargets(exchanges);
         } catch (Exception e) {
             log.error("{} EOD exit cycle error: {}", LOG_PREFIX, e.getMessage());
+        }
+    }
+
+    /**
+     * Remove strategy:targets:* keys that are orphaned — remainingQty <= 0 or
+     * the corresponding position has qtyOpen == 0.
+     */
+    @SuppressWarnings("unchecked")
+    private void cleanupOrphanTargets(Set<String> exchanges) {
+        try {
+            Set<String> targetKeys = redisTemplate.keys(TARGETS_PREFIX + "*");
+            if (targetKeys == null || targetKeys.isEmpty()) return;
+
+            int cleaned = 0;
+            for (String targetKey : targetKeys) {
+                try {
+                    String targetsJson = redisTemplate.opsForValue().get(targetKey);
+                    if (targetsJson == null) continue;
+
+                    Map<String, Object> targets = objectMapper.readValue(targetsJson, Map.class);
+                    String scripCode = (String) targets.get("scripCode");
+                    String exchange = (String) targets.getOrDefault("exchange", "");
+                    int remainingQty = targets.get("remainingQty") != null
+                            ? ((Number) targets.get("remainingQty")).intValue() : 0;
+
+                    // Only clean targets for the exchanges that just closed
+                    if (!exchanges.contains(exchange)) continue;
+
+                    // Check if orphaned: qty=0 OR position is closed/missing
+                    boolean orphaned = false;
+                    if (remainingQty <= 0) {
+                        orphaned = true;
+                    } else {
+                        String posJson = redisTemplate.opsForValue().get(POSITION_PREFIX + scripCode);
+                        if (posJson == null) {
+                            orphaned = true;
+                        } else {
+                            Map<String, Object> pos = objectMapper.readValue(posJson, Map.class);
+                            int qtyOpen = pos.get("qtyOpen") != null
+                                    ? ((Number) pos.get("qtyOpen")).intValue() : 0;
+                            if (qtyOpen <= 0) orphaned = true;
+                        }
+                    }
+
+                    if (orphaned) {
+                        redisTemplate.delete(targetKey);
+                        cleaned++;
+                        log.info("{} Cleaned orphan target: {} scrip={} exch={} qty={}",
+                                LOG_PREFIX, targetKey, scripCode, exchange, remainingQty);
+                    }
+                } catch (Exception e) {
+                    log.warn("{} Orphan cleanup error for {}: {}", LOG_PREFIX, targetKey, e.getMessage());
+                }
+            }
+            if (cleaned > 0) {
+                log.info("{} Orphan target cleanup: {} removed", LOG_PREFIX, cleaned);
+            }
+        } catch (Exception e) {
+            log.error("{} Orphan target cleanup error: {}", LOG_PREFIX, e.getMessage());
         }
     }
 

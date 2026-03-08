@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
 public class UserPnLService {
 
     private static final Logger log = LoggerFactory.getLogger(UserPnLService.class);
-    private static final double INITIAL_CAPITAL = 100000.0;
+    private static final double INITIAL_CAPITAL = 1_000_000.0; // 10 Lakh
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     private final UserTradeRepository userTradeRepository;

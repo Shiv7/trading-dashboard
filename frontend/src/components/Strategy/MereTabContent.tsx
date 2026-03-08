@@ -1,14 +1,16 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Check, AlertTriangle, Loader2
+  Check, Zap, AlertTriangle, Loader2, Clock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyTradesApi, strategyWalletsApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
+import { computeSlotSizing, SlotWalletState, isNseNoTradeWindow } from '../../utils/tradingUtils';
+import FundTopUpModal from '../Wallet/FundTopUpModal';
 
 type SortField = 'score' | 'rr' | 'time' | 'percentB' | 'timestamp';
-type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
+type SignalCategory = 'BULLISH_REVERSION' | 'BEARISH_REVERSION' | 'CONTINUE_BULLISH' | 'CONTINUE_BEARISH';
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 type VariantFilter = 'ALL' | 'MERE' | 'MERE_SCALP' | 'MERE_SWING' | 'MERE_POSITIONAL';
 
@@ -67,10 +69,16 @@ interface MereTrigger {
   surgeTMinus1: number;
   // OI
   oiChangeAtT?: number;
+  oiChangeRatio?: number;
+  oiChangePct?: number;
   oiInterpretation?: string;
   oiLabel?: string;
+  blockTradeDetected?: boolean;
+  blockTradeVol?: number;
+  blockTradePct?: number;
   // Option enrichment
   optionAvailable?: boolean;
+  optionFailureReason?: string;
   optionScripCode?: string;
   optionSymbol?: string;
   optionStrike?: number;
@@ -93,6 +101,8 @@ interface MereTrigger {
   futuresExchangeType?: string;
   cachedAt: number;
   mereVariant?: string;
+  autoExecute?: boolean;
+  tradeStatus?: string;
 }
 
 interface TradePlan {
@@ -289,34 +299,23 @@ function getVariantBadge(variant?: string): { label: string; color: string } | n
   }
 }
 
-/** Compute lot sizing based on confidence and wallet capital */
-function computeLotSizing(
-  confidence: number,
-  walletCapital: number,
-  optionLtp: number,
-  lotSize: number,
-  multiplier: number = 1
-): { lots: number; quantity: number; disabled: boolean; insufficientFunds: boolean; creditAmount: number; allocPct: number } {
-  if (confidence < 60) {
-    return { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 };
-  }
-  const allocPct = confidence > 75 ? 0.75 : 0.50;
-  const allocatedCapital = walletCapital * allocPct;
-  const effectiveMultiplier = (multiplier && multiplier > 1) ? multiplier : lotSize;
-  const costPerLot = optionLtp * effectiveMultiplier;
-  if (costPerLot <= 0) {
-    return { lots: 1, quantity: lotSize, disabled: false, insufficientFunds: false, creditAmount: 0, allocPct };
-  }
-  let lots = Math.floor(allocatedCapital / costPerLot);
-  let insufficientFunds = false;
-  let creditAmount = 0;
-  if (lots < 1) {
-    lots = 1;
-    insufficientFunds = true;
-    creditAmount = Math.round((costPerLot - walletCapital) * 100) / 100;
-  }
-  return { lots, quantity: lots * lotSize, disabled: false, insufficientFunds, creditAmount, allocPct };
+/** Classify a MERE trigger into a signal category based on direction + %B */
+function classifySignal(sig: MereTrigger): SignalCategory {
+  const isBullish = sig.direction === 'BULLISH';
+  // Reversion: price near the opposite BB band (bullish near lower, bearish near upper)
+  const isReversion = isBullish ? sig.percentB < 0.35 : sig.percentB > 0.65;
+  if (isBullish) return isReversion ? 'BULLISH_REVERSION' : 'CONTINUE_BULLISH';
+  return isReversion ? 'BEARISH_REVERSION' : 'CONTINUE_BEARISH';
 }
+
+const SIGNAL_CATEGORY_OPTIONS: { key: SignalCategory; label: string; color: string }[] = [
+  { key: 'BULLISH_REVERSION', label: 'Bullish Reversion', color: 'bg-green-500/20 text-green-400 border border-green-500/40' },
+  { key: 'BEARISH_REVERSION', label: 'Bearish Reversion', color: 'bg-red-500/20 text-red-400 border border-red-500/40' },
+  { key: 'CONTINUE_BULLISH', label: 'Continue Bullish', color: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' },
+  { key: 'CONTINUE_BEARISH', label: 'Continue Bearish', color: 'bg-orange-500/20 text-orange-400 border border-orange-500/40' },
+];
+
+// computeSlotSizing: imported from ../../utils/tradingUtils
 
 /* ═══════════════════════════════════════════════════════════════
    MERE SCORE BAR — visual layer breakdown
@@ -341,7 +340,7 @@ const MereScoreBar: React.FC<{ sig: MereTrigger }> = ({ sig }) => {
         <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
       {/* Layer chips */}
-      <div className="grid grid-cols-5 gap-1 text-center">
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 text-center">
         <div>
           <div className="text-[9px] text-slate-500">Setup</div>
           <div className="font-mono text-[11px] text-teal-300">{sig.mereLayer1}/40</div>
@@ -417,7 +416,8 @@ const PercentBIndicator: React.FC<{ percentB: number; isSqueezing: boolean; dire
    R:R VISUAL BAR
    ═══════════════════════════════════════════════════════════════ */
 
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr }) => {
+const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
+  const rr = isFinite(rawRr) ? rawRr : 0;
   const totalParts = 1 + Math.max(rr, 0);
   const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
   const rewardPct = 100 - riskPct;
@@ -559,16 +559,16 @@ const VARIANT_OPTIONS: { key: VariantFilter; label: string; color: string }[] = 
 ];
 
 const FilterDropdown: React.FC<{
-  direction: DirectionFilter;
+  selectedCategories: Set<SignalCategory>;
   exchange: ExchangeFilter;
   variant: VariantFilter;
-  onDirectionChange: (d: DirectionFilter) => void;
+  onCategoryToggle: (c: SignalCategory) => void;
   onExchangeChange: (e: ExchangeFilter) => void;
   onVariantChange: (v: VariantFilter) => void;
   onClose: () => void;
   onReset: () => void;
-}> = ({ direction, exchange, variant, onDirectionChange, onExchangeChange, onVariantChange, onClose, onReset }) => (
-  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[260px] animate-slideDown mobile-dropdown-full">
+}> = ({ selectedCategories, exchange, variant, onCategoryToggle, onExchangeChange, onVariantChange, onClose, onReset }) => (
+  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-4 min-w-[280px] animate-slideDown mobile-dropdown-full">
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Variant</div>
       <div className="flex gap-1.5 flex-wrap">
@@ -588,23 +588,32 @@ const FilterDropdown: React.FC<{
       </div>
     </div>
     <div className="mb-4">
-      <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
-      <div className="flex gap-2">
-        {(['ALL', 'BULLISH', 'BEARISH'] as DirectionFilter[]).map(d => (
-          <button
-            key={d}
-            onClick={() => onDirectionChange(d)}
-            className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              direction === d
-                ? d === 'BULLISH' ? 'bg-green-500/20 text-green-400 border border-green-500/40'
-                  : d === 'BEARISH' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                  : 'bg-teal-500/20 text-teal-400 border border-teal-500/40'
-                : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {d === 'ALL' ? 'All' : d === 'BULLISH' ? 'Bullish' : 'Bearish'}
-          </button>
-        ))}
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[11px] text-slate-500 uppercase tracking-wider font-medium">Signal Type</div>
+        <span className="text-[10px] text-slate-600">(multi-select)</span>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {SIGNAL_CATEGORY_OPTIONS.map(({ key, label, color }) => {
+          const isSelected = selectedCategories.has(key);
+          return (
+            <button
+              key={key}
+              onClick={() => onCategoryToggle(key)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors text-left ${
+                isSelected
+                  ? color
+                  : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
+              }`}
+            >
+              <span className={`w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border transition-colors ${
+                isSelected ? 'bg-teal-500 border-teal-500' : 'border-slate-500 bg-slate-700'
+              }`}>
+                {isSelected && <Check className="w-3 h-3 text-white" />}
+              </span>
+              {label}
+            </button>
+          );
+        })}
       </div>
     </div>
     <div className="mb-4">
@@ -712,9 +721,11 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 const MereCard: React.FC<{
   trigger: MereTrigger;
   plan: TradePlan;
-  walletCapital: number;
+  walletState: SlotWalletState;
   onBuy: (sig: MereTrigger, plan: TradePlan, lots: number) => void;
-}> = ({ trigger, plan, walletCapital, onBuy }) => {
+  onRequestFunds: (sig: MereTrigger, plan: TradePlan, creditAmount: number, premium: number, lotSize: number, multiplier: number, confidence: number) => void;
+  isFunded: boolean;
+}> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded }) => {
   const [pressing, setPressing] = useState(false);
   const isLong = trigger.direction === 'BULLISH';
 
@@ -740,6 +751,7 @@ const MereCard: React.FC<{
   let displayInstrumentName = '';
   let lotSize = 1;
   let multiplier = 1;
+  let isEstimatedPremium = false;
 
   if (hasRealOption) {
     instrumentMode = 'OPTION';
@@ -752,7 +764,14 @@ const MereCard: React.FC<{
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
     premium = trigger.futuresLtp!;
-    displayInstrumentName = `${trigger.futuresSymbol ?? trigger.symbol} FUT${trigger.futuresExpiry ? ' ' + trigger.futuresExpiry : ''}`;
+    const futExpiryMonth = (() => {
+      if (!trigger.futuresExpiry) return '';
+      const parts = trigger.futuresExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${trigger.futuresSymbol ?? trigger.symbol}${futExpiryMonth ? ' ' + futExpiryMonth : ''} FUT`;
     lotSize = trigger.futuresLotSize ?? 1;
     multiplier = trigger.futuresMultiplier ?? 1;
   } else if (!noDerivatives) {
@@ -760,11 +779,13 @@ const MereCard: React.FC<{
     premium = estimateOptionPremium(plan);
     displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
     lotSize = 1;
+    isEstimatedPremium = true;
   }
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
-    : computeLotSizing(confidence, walletCapital, premium, lotSize, multiplier);
+    : computeSlotSizing(confidence, walletState, premium, lotSize, multiplier,
+        (trigger.exchange || 'N').substring(0, 1).toUpperCase(), trigger.riskReward ?? 2.0, 60);
 
   // Metrics
   const oiStyle = getOILabelStyle(trigger.oiLabel);
@@ -780,15 +801,18 @@ const MereCard: React.FC<{
         <div className="flex items-start justify-between mb-1">
           <div>
             <h3 className="text-lg font-semibold text-white leading-tight">{displayName}</h3>
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
               {variantBadge && (
-                <>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${variantBadge.color}`}>
-                    {variantBadge.label}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${variantBadge.color}`}>
+                  {variantBadge.label}
+                  <span className="ml-1 text-slate-400 font-normal">
+                    {trigger.mereVariant === 'MERE_SCALP' ? '2-4H' :
+                     trigger.mereVariant === 'MERE_SWING' ? '1-5D' :
+                     trigger.mereVariant === 'MERE_POSITIONAL' ? '1-2W' : '4-8H'}
                   </span>
-                  <span className="text-slate-700">|</span>
-                </>
+                </span>
               )}
+              <span className="text-slate-700">|</span>
               <span className="text-xs text-slate-500">
                 Score <span className="font-mono text-teal-400 font-semibold">{trigger.mereScore}</span>
               </span>
@@ -797,11 +821,28 @@ const MereCard: React.FC<{
                 {formatTriggerTime(trigger)}
               </span>
             </div>
+            {trigger.tradeStatus && trigger.tradeStatus !== 'ACTIVE' && (
+              <div className="mt-1">
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold border border-amber-500/40 bg-amber-500/10 text-amber-400">
+                  {trigger.tradeStatus}
+                </span>
+              </div>
+            )}
           </div>
-          <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
-            {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
-            {isLong ? 'Bullish' : 'Bearish'}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {isNseNoTradeWindow(trigger.exchange, trigger.triggerTime) && (
+              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window (3:15–3:30 PM)">
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
+              </span>
+            )}
+            <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
+              {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+              {(() => {
+                const cat = classifySignal(trigger);
+                return SIGNAL_CATEGORY_OPTIONS.find(o => o.key === cat)?.label ?? (isLong ? 'Bullish' : 'Bearish');
+              })()}
+            </span>
+          </div>
         </div>
 
         {/* MERE SCORE BREAKDOWN */}
@@ -862,10 +903,23 @@ const MereCard: React.FC<{
         {/* METRICS ROW */}
         <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
           <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="%B" value={`${(trigger.percentB * 100).toFixed(0)}%`} bold accent="bg-teal-500/15 text-teal-300" />
+          <MetricsChip label="%B" value={`${(trigger.percentB * 100).toFixed(1)}%`} bold accent="bg-teal-500/15 text-teal-300" />
           {trigger.surgeT > 0 && <MetricsChip label="Vol" value={`${surgeVal}x`} />}
           {trigger.oiLabel && <MetricsChip label="OI" value={getOILabelStyle(trigger.oiLabel).text} accent={oiAccent} />}
-          <MetricsChip label="Trend" value={trigger.trend === 'UP' ? 'Bull' : 'Bear'} accent={trigger.trend === 'UP' ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'} />
+          <MetricsChip
+            label="Signal"
+            value={trigger.direction === 'BULLISH' ? 'Bull Reversion' : 'Bear Reversion'}
+            accent={trigger.direction === 'BULLISH' ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'}
+          />
+          <MetricsChip
+            label="Valid"
+            value={
+              trigger.mereVariant === 'MERE_SCALP' ? '2-4H' :
+              trigger.mereVariant === 'MERE_SWING' ? '1-5D' :
+              trigger.mereVariant === 'MERE_POSITIONAL' ? '1-2W' : '4-8H'
+            }
+            accent="bg-slate-500/15 text-slate-300"
+          />
         </div>
 
         {/* OI LABEL */}
@@ -891,13 +945,73 @@ const MereCard: React.FC<{
           </div>
         )}
 
-        {/* INSUFFICIENT FUNDS */}
-        {sizing.insufficientFunds && !sizing.disabled && (
-          <div className="mt-3 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30">
-            <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+        {/* BLOCK TRADE LABEL */}
+        {trigger.blockTradeDetected && (
+          <div className="mt-1.5 px-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-300">
+              Block Trade Detected
+            </span>
+            <span className="ml-1.5 text-[10px] text-purple-400/70">
+              {Math.round(trigger.blockTradePct ?? 0)}% vol stripped, {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
+            </span>
           </div>
         )}
+
+        {/* INSUFFICIENT FUNDS (clickable → Add Funds) */}
+        {sizing.insufficientFunds && !sizing.disabled && (
+          <button
+            onClick={() => onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence)}
+            className="mt-3 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 transition-colors cursor-pointer text-left"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
+            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+            <span className="ml-auto text-[10px] text-orange-300 font-semibold whitespace-nowrap">Add Funds →</span>
+          </button>
+        )}
+
+        {/* FUNDED TRADE BADGE */}
+        {isFunded && (
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
+            <span className="text-emerald-400 font-bold text-sm">₹</span>
+            <span className="text-[10px] text-emerald-400">Trade executed with added funds</span>
+          </div>
+        )}
+
+        {/* FUTURES FALLBACK REASON */}
+        {instrumentMode === 'FUTURES' && trigger.optionFailureReason && (
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/25">
+            <Zap className="w-3 h-3 text-blue-400/80 flex-shrink-0" />
+            <span className="text-[10px] text-blue-400/80">
+              FUT: {trigger.optionFailureReason}
+            </span>
+          </div>
+        )}
+
+        {/* ESTIMATED DATA WARNING */}
+        {isEstimatedPremium && instrumentMode !== 'NONE' && (
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/25">
+            <AlertTriangle className="w-3 h-3 text-yellow-400/80 flex-shrink-0" />
+            <span className="text-[10px] text-yellow-400/80">
+              DM: Option LTP, lot size, strike — premium is estimated from ATR
+            </span>
+          </div>
+        )}
+
+        {/* DEBUG STRIP */}
+        <div className="mt-2 flex gap-1 text-[9px] font-mono opacity-60 overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
+          <span className={`px-1 rounded whitespace-nowrap ${instrumentMode === 'NONE' ? 'bg-red-500/30 text-red-300' : instrumentMode === 'FUTURES' ? 'bg-blue-500/30 text-blue-300' : 'bg-green-500/30 text-green-300'}`}>
+            {instrumentMode}
+          </span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">score={confidence}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lots={sizing.lots}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={Number(premium.toFixed(2))}</span>
+          {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
+          {trigger.blockTradeDetected && <span className="px-1 rounded bg-purple-500/30 text-purple-300 whitespace-nowrap">BLK {Math.round(trigger.blockTradePct ?? 0)}%</span>}
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">alloc={sizing.allocPct}%</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
+        </div>
 
         {/* BUY BUTTON */}
         {instrumentMode === 'NONE' ? (
@@ -925,7 +1039,7 @@ const MereCard: React.FC<{
               ${buyBg} ${buyHover} ${buyBgActive}
               ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
           >
-            BUY {displayInstrumentName} @ &#8377;{Number(premium.toFixed(2))}/-  x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+            {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{Number(premium.toFixed(2))}/-  x {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
           </button>
         )}
       </div>
@@ -942,7 +1056,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   const [triggers, setTriggers] = useState<MereTrigger[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortField, setSortField] = useState<SortField>('timestamp');
-  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
+  const [selectedCategories, setSelectedCategories] = useState<Set<SignalCategory>>(new Set());
   const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL');
   const [variantFilter, setVariantFilter] = useState<VariantFilter>('ALL');
   const [showFilter, setShowFilter] = useState(false);
@@ -952,12 +1066,20 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
     optionType: 'CE', lots: 1, filledPrice: 0, riskPercent: 0,
     status: 'sending',
   });
-  const [walletCapital, setWalletCapital] = useState<number>(100000);
+  const [walletState, setWalletState] = useState<SlotWalletState>({
+    availableMargin: 100000, usedMargin: 0, currentBalance: 100000,
+    openPositionCount: 0, positionsByExchange: { N: 0, M: 0, C: 0 },
+  });
+  const [fundModal, setFundModal] = useState<{
+    strategyKey: string; creditAmount: number; sig: MereTrigger; plan: TradePlan;
+    premium: number; lotSize: number; multiplier: number; confidence: number;
+  } | null>(null);
+  const [fundedScripCodes, setFundedScripCodes] = useState<Set<string>>(new Set());
 
   const fetchMere = useCallback(async () => {
     try {
       const data = await fetchJson<MereTrigger[]>('/strategy-state/mere/history/list');
-      if (data) {
+      if (Array.isArray(data)) {
         setTriggers(data);
       }
     } catch (err) {
@@ -968,12 +1090,26 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   }, []);
 
   useEffect(() => {
-    fetchMere();
+    fetchMere(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchMere, 5000);
+      interval = setInterval(fetchMere, 60000); // 60s fallback safety net
     }
-    return () => { if (interval) clearInterval(interval); };
+    // WebSocket push: prepend new triggered signals in real-time
+    const onWsSignal = (e: Event) => {
+      const sig = (e as CustomEvent).detail;
+      if (sig && sig.scripCode) {
+        setTriggers(prev => {
+          if (prev.some(s => s.scripCode === sig.scripCode && s.triggerTimeEpoch === sig.triggerTimeEpoch)) return prev;
+          return [sig, ...prev];
+        });
+      }
+    };
+    window.addEventListener('mere-signal', onWsSignal);
+    return () => {
+      if (interval) clearInterval(interval);
+      window.removeEventListener('mere-signal', onWsSignal);
+    };
   }, [autoRefresh, fetchMere]);
 
   // Close dropdowns on outside click
@@ -989,21 +1125,41 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
     return () => document.removeEventListener('click', handler);
   }, []);
 
-  // Fetch wallet capital for lot sizing
+  // Fetch wallet state for slot-based sizing
   useEffect(() => {
     const fetchCapital = async () => {
       try {
         const data = await strategyWalletsApi.getCapital('MERE');
-        if (data?.currentCapital != null) setWalletCapital(data.currentCapital);
+        if (data?.currentCapital != null) setWalletState({
+          availableMargin: data.availableMargin ?? data.currentCapital,
+          usedMargin: data.usedMargin ?? 0,
+          currentBalance: data.currentCapital,
+          openPositionCount: data.openPositionCount ?? 0,
+          positionsByExchange: data.positionsByExchange ?? { N: 0, M: 0, C: 0 },
+        });
       } catch { /* ignore */ }
     };
     fetchCapital();
     const interval = setInterval(fetchCapital, 30000);
-    return () => clearInterval(interval);
+    const onWalletUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.strategy === 'MERE') fetchCapital();
+    };
+    window.addEventListener('wallet-update', onWalletUpdate);
+    return () => { clearInterval(interval); window.removeEventListener('wallet-update', onWalletUpdate); };
   }, []);
 
   /* FILTER */
-  const hasActiveFilter = directionFilter !== 'ALL' || exchangeFilter !== 'ALL' || variantFilter !== 'ALL';
+  const hasActiveFilter = selectedCategories.size > 0 || exchangeFilter !== 'ALL' || variantFilter !== 'ALL';
+
+  const handleCategoryToggle = useCallback((cat: SignalCategory) => {
+    setSelectedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }, []);
 
   // Deduplicate by scripCode+mereVariant, keeping the latest signal
   const deduped = Object.values(
@@ -1019,8 +1175,8 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   if (variantFilter !== 'ALL') {
     filtered = filtered.filter(s => (s.mereVariant || 'MERE') === variantFilter);
   }
-  if (directionFilter !== 'ALL') {
-    filtered = filtered.filter(s => s.direction === directionFilter);
+  if (selectedCategories.size > 0) {
+    filtered = filtered.filter(s => selectedCategories.has(classifySignal(s)));
   }
   if (exchangeFilter !== 'ALL') {
     filtered = filtered.filter(s => s.exchange === exchangeFilter);
@@ -1079,14 +1235,21 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
       instrumentType = 'OPTION';
     } else if (hasFutures) {
       premium = sig.futuresLtp!;
-      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol} FUT${sig.futuresExpiry ? ' ' + sig.futuresExpiry : ''}`;
+      const futMonth = (() => {
+        if (!sig.futuresExpiry) return '';
+        const parts = sig.futuresExpiry.split('-');
+        if (parts.length < 2) return '';
+        const mi = parseInt(parts[1], 10) - 1;
+        return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][mi] ?? '';
+      })();
+      instrumentSymbol = `${sig.futuresSymbol ?? sig.symbol}${futMonth ? ' ' + futMonth : ''} FUT`;
       lotSize = sig.futuresLotSize ?? 1;
       multiplier = sig.futuresMultiplier ?? 1;
       tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
       instrumentType = 'FUTURES';
     } else {
       premium = estimateOptionPremium(plan);
-      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType}`;
+      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType ?? ''}`;
       instrumentType = 'OPTION';
     }
 
@@ -1133,7 +1296,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
         instrumentType,
         underlyingScripCode: sig.scripCode,
         underlyingSymbol: sig.symbol || sig.scripCode,
-        side: 'BUY',
+        side: instrumentType === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL'),
         quantity: lots * lotSize,
         lots,
         lotSize,
@@ -1157,6 +1320,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
         exchange: sig.exchange,
         direction: isLong ? 'BULLISH' : 'BEARISH',
         confidence: sig.mereScore,
+        executionMode: 'MANUAL',
       };
 
       const result = await strategyTradesApi.create(req);
@@ -1164,8 +1328,8 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
       setExecution(prev => ({
         ...prev,
         status: 'filled',
-        filledPrice: result.entryPrice ?? premium,
-        orderId: result.tradeId,
+        filledPrice: result?.entryPrice ?? premium,
+        orderId: result?.tradeId,
         riskPercent: plan.sl && sig.triggerPrice
           ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
           : 0.8,
@@ -1180,7 +1344,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
   }, []);
 
   const resetFilters = useCallback(() => {
-    setDirectionFilter('ALL');
+    setSelectedCategories(new Set());
     setExchangeFilter('ALL');
     setVariantFilter('ALL');
     setShowFilter(false);
@@ -1194,7 +1358,7 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
     <div className="relative">
       {/* STICKY HEADER */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
-        <div className="flex items-center justify-between h-14 px-4">
+        <div className="flex items-center justify-between h-14 px-2 sm:px-4">
           <h1 className="text-lg font-semibold text-teal-400 tracking-tight">MERE</h1>
 
           <div className="flex items-center gap-2">
@@ -1215,10 +1379,10 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
               </button>
               {showFilter && (
                 <FilterDropdown
-                  direction={directionFilter}
+                  selectedCategories={selectedCategories}
                   exchange={exchangeFilter}
                   variant={variantFilter}
-                  onDirectionChange={setDirectionFilter}
+                  onCategoryToggle={handleCategoryToggle}
                   onExchangeChange={setExchangeFilter}
                   onVariantChange={setVariantFilter}
                   onClose={() => setShowFilter(false)}
@@ -1242,11 +1406,25 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
           </div>
         </div>
 
-        {/* Sort chip */}
-        <div className="px-4 pb-2">
+        {/* Sort chip + active filter chips */}
+        <div className="px-2 sm:px-4 pb-2 flex flex-wrap items-center gap-1.5">
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800/80 text-[12px] text-slate-400 border border-slate-700/50">
             Sorted by {sortLabel}
           </span>
+          {Array.from(selectedCategories).map(cat => {
+            const opt = SIGNAL_CATEGORY_OPTIONS.find(o => o.key === cat);
+            if (!opt) return null;
+            return (
+              <button
+                key={cat}
+                onClick={() => handleCategoryToggle(cat)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium ${opt.color} cursor-pointer hover:opacity-80 transition-opacity`}
+              >
+                {opt.label}
+                <span className="ml-0.5 text-[10px] opacity-60">&times;</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -1264,14 +1442,18 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
         )}
 
         {sorted.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
               <MereCard
                 key={`${sig.scripCode}-${getEpoch(sig)}`}
                 trigger={sig}
                 plan={plan}
-                walletCapital={walletCapital}
+                walletState={walletState}
                 onBuy={handleBuy}
+                onRequestFunds={(s, p, credit, prem, lotSz, mult, conf) => {
+                  setFundModal({ strategyKey: 'MERE', creditAmount: credit, sig: s, plan: p, premium: prem, lotSize: lotSz, multiplier: mult, confidence: conf });
+                }}
+                isFunded={fundedScripCodes.has(sig.scripCode)}
               />
             ))}
           </div>
@@ -1287,6 +1469,35 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
           navigate('/wallets');
         }}
       />
+
+      {/* ── FUND TOP-UP MODAL ── */}
+      {fundModal && (
+        <FundTopUpModal
+          strategyKey={fundModal.strategyKey}
+          walletEvent={null}
+          onClose={() => setFundModal(null)}
+          onFunded={async () => {
+            const ctx = fundModal;
+            setFundModal(null);
+            try {
+              const data = await strategyWalletsApi.getCapital(ctx.strategyKey);
+              const newWallet: SlotWalletState = {
+                availableMargin: data?.availableMargin ?? data?.currentCapital ?? walletState.availableMargin,
+                usedMargin: data?.usedMargin ?? 0,
+                currentBalance: data?.currentCapital ?? walletState.currentBalance,
+                openPositionCount: data?.openPositionCount ?? 0,
+                positionsByExchange: data?.positionsByExchange ?? { N: 0, M: 0, C: 0 },
+              };
+              setWalletState(newWallet);
+              const newSizing = computeSlotSizing(ctx.confidence, newWallet, ctx.premium, ctx.lotSize, ctx.multiplier, 'N', 2.0, 60);
+              if (!newSizing.disabled && newSizing.lots > 0) {
+                setFundedScripCodes(prev => new Set(prev).add(ctx.sig.scripCode));
+                handleBuy(ctx.sig, ctx.plan, newSizing.lots);
+              }
+            } catch { /* ignore */ }
+          }}
+        />
+      )}
     </div>
   );
 };

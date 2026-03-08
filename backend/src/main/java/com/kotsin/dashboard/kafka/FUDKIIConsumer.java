@@ -233,19 +233,14 @@ public class FUDKIIConsumer {
                 log.info("FUDKII signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
                 // Update latest (only triggered signals update the latest map)
                 latestFUDKII.put(scripCode, fudkiiData);
+
+                // Broadcast triggered signal to /topic/fudkii (WebSocket push to frontend)
+                sessionManager.broadcastFUDKII(scripCode, fudkiiData);
             } else {
                 // Remove from active triggers if no longer triggered
                 activeTriggers.invalidate(scripCode);
                 // NOTE: Do NOT overwrite latestFUDKII — preserve the last triggered state
             }
-
-            // Broadcast to WebSocket
-            sessionManager.broadcastSignal(Map.of(
-                    "type", "FUDKII_UPDATE",
-                    "scripCode", scripCode,
-                    "triggered", triggered,
-                    "data", fudkiiData
-            ));
 
         } catch (Exception e) {
             log.error("Error processing FUDKII: {}", e.getMessage(), e);
@@ -331,8 +326,17 @@ public class FUDKIIConsumer {
         if (root.has("volumeTMinus1")) data.put("volumeTMinus1", root.path("volumeTMinus1").asLong(0));
         if (root.has("avgVolume")) data.put("avgVolume", root.path("avgVolume").asDouble(0));
 
+        // OI Buildup % (cumulative OI vs yesterday's close)
+        if (root.has("oiBuildupPct")) data.put("oiBuildupPct", root.path("oiBuildupPct").asDouble(0));
+
+        // Block trade detection (MAD-based)
+        data.put("blockTradeDetected", root.path("blockTradeDetected").asBoolean(false));
+        if (root.has("blockTradeVol")) data.put("blockTradeVol", root.path("blockTradeVol").asLong(0));
+        if (root.has("blockTradePct")) data.put("blockTradePct", root.path("blockTradePct").asDouble(0));
+
         // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
+        if (root.has("optionFailureReason")) data.put("optionFailureReason", root.path("optionFailureReason").asText());
         if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
         if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
         if (root.has("optionStrike")) data.put("optionStrike", root.path("optionStrike").asDouble());

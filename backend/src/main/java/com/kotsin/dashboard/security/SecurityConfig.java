@@ -46,6 +46,11 @@ public class SecurityConfig {
                 .requestMatchers("/api/candles/**").permitAll()
                 .requestMatchers("/api/patterns/**").permitAll()
                 .requestMatchers("/technical-indicators/**").permitAll()
+                .requestMatchers("/api/strategy-state/**").permitAll()
+                .requestMatchers("/api/strategy-wallets/**").permitAll()
+                .requestMatchers("/api/strategy-trades/**").permitAll()
+                .requestMatchers("/api/orders/**").permitAll()
+                .requestMatchers("/api/positions/**").permitAll()
                 // Admin-only
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // All other API endpoints require authentication

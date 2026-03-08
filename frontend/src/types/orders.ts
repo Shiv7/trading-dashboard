@@ -93,7 +93,7 @@ export interface StrategyTradeRequest {
     instrumentType: 'OPTION' | 'FUTURES'
     underlyingScripCode: string
     underlyingSymbol: string
-    side: 'BUY'
+    side: 'BUY' | 'SELL'
     quantity: number
     lots: number
     lotSize: number
@@ -117,6 +117,7 @@ export interface StrategyTradeRequest {
     exchange: string
     direction: 'BULLISH' | 'BEARISH'
     confidence: number
+    executionMode?: 'AUTO' | 'MANUAL'
 }
 
 export interface StrategyTradeResponse {

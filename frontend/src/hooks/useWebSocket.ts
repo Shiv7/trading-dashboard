@@ -55,6 +55,8 @@ export function useWebSocket() {
     updateActiveSetups,
     updateForecast,
     updatePatternSignal,
+    addPendingFundRequest,
+    removePendingFundRequest,
     touchLastData
   } = useDashboardStore()
 
@@ -123,6 +125,22 @@ export function useWebSocket() {
         client.subscribe('/topic/wallet', (message: IMessage) => {
           try {
             const data = JSON.parse(message.body)
+            // Handle wallet-events (MARGIN_INSUFFICIENT, FUND_ADDED, SIGNAL_EXPIRED)
+            if (data.type === 'WALLET_UPDATE') {
+              window.dispatchEvent(new CustomEvent('wallet-update', { detail: data }))
+              touchLastData()
+              return
+            }
+            if (data.eventType === 'MARGIN_INSUFFICIENT') {
+              addPendingFundRequest(data)
+              touchLastData()
+              return
+            }
+            if (data.eventType === 'SIGNAL_EXPIRED' || data.eventType === 'FUND_ADDED') {
+              removePendingFundRequest(data.walletId)
+              touchLastData()
+              return
+            }
             // Validate data before updating store
             if (isValidWallet(data)) {
               updateWallet(data)
@@ -227,15 +245,73 @@ export function useWebSocket() {
         // Subscribe to FUDKII signals (SuperTrend + BB triggers)
         client.subscribe('/topic/fudkii', (message: IMessage) => {
           try {
-            const msg = JSON.parse(message.body)
-            // Backend sends { type, scripCode, triggered, data: {...} }
-            // Extract the nested data object which contains the actual signal
-            const fudkiiData = msg.data || msg
+            const fudkiiData = JSON.parse(message.body)
             if (fudkiiData && fudkiiData.scripCode) {
               updateFUDKII(fudkiiData)
+              window.dispatchEvent(new CustomEvent('fudkii-signal', { detail: fudkiiData }))
             }
           } catch (e) {
             handleParseError('fudkii', e)
+          }
+        })
+
+        // Subscribe to FUKAA signals (volume-confirmed triggers)
+        client.subscribe('/topic/fukaa', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            if (data && data.scripCode) {
+              window.dispatchEvent(new CustomEvent('fukaa-signal', { detail: data }))
+            }
+          } catch (e) {
+            handleParseError('fukaa', e)
+          }
+        })
+
+        // Subscribe to FUDKOI signals (OI-confirmed triggers)
+        client.subscribe('/topic/fudkoi', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            if (data && data.scripCode) {
+              window.dispatchEvent(new CustomEvent('fudkoi-signal', { detail: data }))
+            }
+          } catch (e) {
+            handleParseError('fudkoi', e)
+          }
+        })
+
+        // Subscribe to MERE signals (mean reversion triggers)
+        client.subscribe('/topic/mere', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            if (data && data.scripCode) {
+              window.dispatchEvent(new CustomEvent('mere-signal', { detail: data }))
+            }
+          } catch (e) {
+            handleParseError('mere', e)
+          }
+        })
+
+        // Subscribe to MicroAlpha signals (conviction triggers)
+        client.subscribe('/topic/microalpha', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            if (data && data.scripCode) {
+              window.dispatchEvent(new CustomEvent('microalpha-signal', { detail: data }))
+            }
+          } catch (e) {
+            handleParseError('microalpha', e)
+          }
+        })
+
+        // Subscribe to Pivot Confluence signals
+        client.subscribe('/topic/pivot-confluence', (message: IMessage) => {
+          try {
+            const data = JSON.parse(message.body)
+            if (data && data.scripCode) {
+              window.dispatchEvent(new CustomEvent('pivot-signal', { detail: data }))
+            }
+          } catch (e) {
+            handleParseError('pivot', e)
           }
         })
 
@@ -381,7 +457,7 @@ export function useWebSocket() {
 
     clientRef.current = client
     client.activate()
-  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, updatePatternSignal, refreshDataOnReconnect, bulkUpdateQuantScores, touchLastData])
+  }, [updateWallet, updateScore, addSignal, updateTrade, updateRegime, addNotification, updateMasterArch, updateACL, updateFUDKII, updateQuantScore, updateNarrative, updateIntelligence, updateActiveSetups, updateForecast, updatePatternSignal, refreshDataOnReconnect, bulkUpdateQuantScores, addPendingFundRequest, removePendingFundRequest, touchLastData])
 
   const disconnect = useCallback(() => {
     if (clientRef.current) {

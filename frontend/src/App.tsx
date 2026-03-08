@@ -25,6 +25,7 @@ import WatchlistPage from './pages/WatchlistPage'
 import PnLDashboardPage from './pages/PnLDashboardPage'
 import OrderManagementPage from './pages/OrderManagementPage'
 import StrategyWalletsPage from './pages/StrategyWalletsPage'
+import MLShadowPage from './pages/MLShadowPage'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -257,6 +258,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <OrderManagementPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ml-shadow"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <MLShadowPage />
               </Layout>
             </ProtectedRoute>
           }

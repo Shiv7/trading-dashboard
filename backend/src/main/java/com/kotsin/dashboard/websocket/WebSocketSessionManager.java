@@ -162,6 +162,46 @@ public class WebSocketSessionManager {
     }
 
     /**
+     * Broadcast FUKAA signal
+     */
+    public void broadcastFUKAA(String scripCode, Object payload) {
+        log.debug("Broadcasting FUKAA signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/fukaa", payload);
+    }
+
+    /**
+     * Broadcast FUDKOI signal
+     */
+    public void broadcastFUDKOI(String scripCode, Object payload) {
+        log.debug("Broadcasting FUDKOI signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/fudkoi", payload);
+    }
+
+    /**
+     * Broadcast MERE signal
+     */
+    public void broadcastMERE(String scripCode, Object payload) {
+        log.debug("Broadcasting MERE signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/mere", payload);
+    }
+
+    /**
+     * Broadcast MicroAlpha signal
+     */
+    public void broadcastMicroAlpha(String scripCode, Object payload) {
+        log.debug("Broadcasting MicroAlpha signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/microalpha", payload);
+    }
+
+    /**
+     * Broadcast Pivot Confluence signal
+     */
+    public void broadcastPivotConfluence(String scripCode, Object payload) {
+        log.debug("Broadcasting Pivot Confluence signal for {}", scripCode);
+        messagingTemplate.convertAndSend("/topic/pivot-confluence", payload);
+    }
+
+    /**
      * Broadcast ACL (Anti-Cycle Limiter) update
      */
     public void broadcastACL(String scripCode, Object payload) {

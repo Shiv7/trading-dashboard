@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import type { Position } from '../../types'
 import PositionActions from '../Trading/PositionActions'
+import { getStrategyBadgeClass } from '../../utils/strategyColors'
 
 interface PositionCardProps {
   position: Position
@@ -15,6 +16,11 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
   const isStrategyTrade = !!(position.equitySl || position.optionSl)
   const isFutures = position.instrumentType === 'FUTURES'
   const isMCX = position.instrumentType === 'FUTURES' || (position.strategy && position.scripCode)
+  const instrumentLabel = position.instrumentType === 'FUTURES' ? 'FUT'
+    : position.instrumentType === 'OPTIONS' ? 'OPT'
+    : 'EQ'
+  const exitedQty = position.exitHistory?.reduce((sum, ev) => sum + (ev.qty || 0), 0) || 0
+  const originalQty = position.quantity + exitedQty
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-IN', {
@@ -59,7 +65,7 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
   }
 
   return (
-    <div className={`card transition-colors ${isOpen ? 'hover:border-blue-500/50' : 'opacity-75 border-slate-700/30'}`}>
+    <div className={`card transition-colors h-full ${isOpen ? 'hover:border-blue-500/50' : 'opacity-75 border-slate-700/30'}`}>
       <Link
         to={`/stock/${position.scripCode}`}
         className="block"
@@ -74,32 +80,44 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
 
         <div className="flex items-start justify-between mb-2 sm:mb-3 gap-2">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-              <span className={`font-semibold text-sm sm:text-base truncate ${isOpen ? 'text-white' : 'text-slate-400'}`}>
-                {position.companyName || position.scripCode}
-              </span>
+            <div className={`font-semibold text-sm sm:text-base truncate ${isOpen ? 'text-white' : 'text-slate-400'}`}>
+              {position.companyName || position.scripCode}
+            </div>
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap mt-1">
               <span className={`badge text-[10px] sm:text-xs ${isLong ? 'badge-success' : 'badge-danger'}`}>
                 {position.side}
               </span>
-              {position.strategy && (
-                <span className={`inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide ${
-                  position.strategy === 'FUDKII' ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30'
-                  : position.strategy === 'FUKAA' ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                  : position.strategy === 'PIVOT' || position.strategy === 'PIVOT_CONFLUENCE' ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                  : position.strategy === 'MICROALPHA' ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
-                  : 'bg-slate-500/15 text-slate-400 border border-slate-500/30'
-                }`}>
+              {position.strategy && position.strategy !== 'MANUAL' && (
+                <span className={`inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide ${getStrategyBadgeClass(position.strategy)}`}>
                   {position.strategy}
                 </span>
               )}
               {position.instrumentType && (
-                <span className="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-medium bg-slate-600/30 text-slate-400 border border-slate-600/30">
-                  {position.instrumentType}
+                <span className={`inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide ${
+                  position.instrumentType === 'OPTION' ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30'
+                  : position.instrumentType === 'FUTURES' ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+                  : 'bg-slate-600/30 text-slate-400 border border-slate-600/30'
+                }`}>
+                  {position.instrumentType === 'OPTION' ? 'OPT' : position.instrumentType === 'FUTURES' ? 'FUT' : position.instrumentType}
+                </span>
+              )}
+              {position.executionMode === 'MANUAL' && (
+                <span className="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide bg-slate-500/15 text-slate-400 border border-slate-500/30">
+                  MANUAL
                 </span>
               )}
             </div>
             <div className="text-[10px] sm:text-xs text-slate-400 mt-0.5 sm:mt-1">
-              {position.quantity > 0 ? position.quantity : ''} qty @ {formatCurrency(position.avgEntryPrice)}
+              <span className="text-white font-medium">{originalQty || position.quantity}</span>
+              <span className="text-slate-500">QTY</span>
+              {' '}
+              <span className={`font-medium ${
+                instrumentLabel === 'FUT' ? 'text-purple-400'
+                : instrumentLabel === 'OPT' ? 'text-cyan-400'
+                : 'text-slate-300'
+              }`}>{instrumentLabel}</span>
+              <span className="text-slate-500">@</span>
+              <span className="text-white">{position.avgEntryPrice.toFixed(2)}/-</span>
               {position.delta != null && position.delta < 1 && (
                 <span className="text-slate-500 ml-1 sm:ml-2">delta={position.delta}</span>
               )}
@@ -254,9 +272,10 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
                 <span key={i} className="text-[10px] font-mono">
                   <span className="text-green-400 font-bold">{ev.level}</span>
                   <span className="text-slate-500">: </span>
-                  <span className="text-slate-300">{ev.lots}L</span>
+                  <span className="text-white font-medium">{ev.qty || ev.lots}QTY</span>
+                  <span className="text-slate-500"> exited</span>
                   <span className="text-slate-600"> @</span>
-                  <span className="text-slate-300">{ev.price.toFixed(2)}</span>
+                  <span className="text-slate-300">{ev.price.toFixed(2)}/-</span>
                   <span className="text-slate-600"> ({fmtTimeShort(ev.timestamp)})</span>
                 </span>
               ))}

@@ -5,7 +5,7 @@ import type { PatternSignal, PatternSummary, PatternStats } from '../types'
 import type { StrategyTradeRequest } from '../types/orders'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
-import { getOTMStrike, mapToOptionLevels, computeLotSizing } from '../utils/tradingUtils'
+import { getOTMStrike, mapToOptionLevels, computeLotSizing, MCX_MULTIPLIER_MAP, getExpiryMonth } from '../utils/tradingUtils'
 
 // Timeframe ordering: highest weight first
 const TF_ORDER = ['1D', '4h', '2h', '1h', '30m', '15m', '5m', '3m', '1m']
@@ -462,14 +462,15 @@ export default function PatternsPage() {
 
     if (!best) return
 
-    // HARD GATE: volume must be confirmed
-    if (!best.volumeConfirmed) {
+    // VOLUME GATE: require volumeRatio >= 1.5x (similar to FUKAA's 4x, relaxed for patterns)
+    const volRatio = best.volumeRatio ?? 0
+    if (volRatio < 1.5) {
       setBuyStatus(prev => ({ ...prev, [scripCode]: 'error' }))
       setTimeout(() => setBuyStatus(prev => ({ ...prev, [scripCode]: 'idle' })), 3000)
       return
     }
 
-    // REGIME WARNING: if AVOID, skip (could add override later)
+    // REGIME GATE: only block when explicitly AVOID
     if (best.tradingMode === 'AVOID') {
       setBuyStatus(prev => ({ ...prev, [scripCode]: 'error' }))
       setTimeout(() => setBuyStatus(prev => ({ ...prev, [scripCode]: 'idle' })), 3000)
@@ -477,61 +478,127 @@ export default function PatternsPage() {
     }
 
     try {
-      // setBuyingScripCode removed (unused read)
       setBuyStatus(prev => ({ ...prev, [scripCode]: 'sending' }))
 
       const isLong = best.direction === 'BULLISH'
-      const optionType: 'CE' | 'PE' = isLong ? 'CE' : 'PE'
-      const { strike } = getOTMStrike(best.entryPrice, best.direction)
       const conf = Math.round(best.confidence * 100)
 
-      // Estimate premium and compute lot sizing
-      const estimatedPremium = Math.max((best.atr30m || best.entryPrice * 0.004) * 3, best.entryPrice * 0.008)
-      const lotSize = 50 // Default NSE lot; will be overridden by backend if option enrichment is available
-      const sizing = computeLotSizing(conf, walletCapital, estimatedPremium, lotSize)
+      // Determine instrument mode (same pattern as FudkiiTabContent)
+      const hasRealOption = best.optionAvailable === true && best.optionLtp != null && best.optionLtp > 0
+      const hasFutures = best.futuresAvailable === true && best.futuresLtp != null && best.futuresLtp > 0
+
+      let instrumentType: 'OPTION' | 'FUTURES'
+      let entryPrice: number
+      let tradingScripCode: string
+      let displayName: string
+      let lotSize: number
+      let multiplier: number
+      let sl: number, t1: number, t2: number, t3: number, t4: number
+      let delta: number
+      let optType: 'CE' | 'PE' | undefined
+      let strike: number
+
+      if (hasRealOption) {
+        // ── OPTION path: use real enriched option data ──
+        instrumentType = 'OPTION'
+        tradingScripCode = best.optionScripCode || best.scripCode
+        entryPrice = best.optionLtp!
+        lotSize = best.optionLotSize || 50
+        multiplier = best.optionMultiplier || 1
+        optType = best.optionType || (isLong ? 'CE' : 'PE')
+        strike = best.optionStrike || getOTMStrike(best.entryPrice, best.direction).strike
+        const expiryMonth = getExpiryMonth(best.optionExpiry)
+        displayName = `${best.optionSymbol || best.symbol || best.companyName}${expiryMonth ? ' ' + expiryMonth : ''} ${strike}${optType}`
+        // Delta-map equity levels to option levels
+        const optLevels = mapToOptionLevels(
+          entryPrice, best.entryPrice, best.stopLoss!,
+          [best.target1!, best.target2 ?? null, best.target3 ?? null, best.target4 ?? null],
+          strike, optType
+        )
+        sl = optLevels.sl
+        t1 = optLevels.targets[0] || 0
+        t2 = optLevels.targets[1] || 0
+        t3 = optLevels.targets[2] || 0
+        t4 = optLevels.targets[3] || 0
+        delta = optLevels.delta
+      } else if (hasFutures) {
+        // ── FUTURES path: use direct equity levels (delta = 1.0) ──
+        // Futures: 1 contract = quantity 1. Multiplier = PNL per ₹1 move.
+        instrumentType = 'FUTURES'
+        tradingScripCode = best.futuresScripCode || best.scripCode
+        entryPrice = best.futuresLtp!
+        lotSize = 1
+        const sym = (best.futuresSymbol || best.symbol || '').toUpperCase()
+        multiplier = best.futuresMultiplier || MCX_MULTIPLIER_MAP[sym] || best.futuresLotSize || 1
+        optType = undefined
+        strike = 0
+        const expiryMonth = getExpiryMonth(best.futuresExpiry)
+        displayName = `${best.futuresSymbol || best.symbol || best.companyName}${expiryMonth ? ' ' + expiryMonth : ''} FUT`
+        // Futures track underlying 1:1 — use equity levels directly
+        sl = best.stopLoss!
+        t1 = best.target1!
+        t2 = best.target2 || 0
+        t3 = best.target3 || 0
+        t4 = best.target4 || 0
+        delta = 1.0
+      } else {
+        // ── Legacy fallback: no enrichment — estimate option premium (existing behavior) ──
+        instrumentType = 'OPTION'
+        tradingScripCode = best.scripCode
+        optType = isLong ? 'CE' : 'PE'
+        strike = getOTMStrike(best.entryPrice, best.direction).strike
+        entryPrice = Math.max((best.atr30m || best.entryPrice * 0.004) * 3, best.entryPrice * 0.008)
+        lotSize = 50
+        multiplier = 1
+        displayName = `${best.symbol || best.companyName} ${strike}${optType}`
+        const optLevels = mapToOptionLevels(
+          entryPrice, best.entryPrice, best.stopLoss!,
+          [best.target1!, best.target2 ?? null, best.target3 ?? null, best.target4 ?? null],
+          strike, optType
+        )
+        sl = optLevels.sl
+        t1 = optLevels.targets[0] || 0
+        t2 = optLevels.targets[1] || 0
+        t3 = optLevels.targets[2] || 0
+        t4 = optLevels.targets[3] || 0
+        delta = optLevels.delta
+      }
+
+      // Lot sizing (works for both options and futures via multiplier)
+      const sizing = computeLotSizing(conf, walletCapital, entryPrice, lotSize, multiplier)
       if (sizing.disabled) {
         setBuyStatus(prev => ({ ...prev, [scripCode]: 'error' }))
         setTimeout(() => setBuyStatus(prev => ({ ...prev, [scripCode]: 'idle' })), 3000)
         return
       }
 
-      // Map to option levels
-      const optLevels = mapToOptionLevels(
-        estimatedPremium, best.entryPrice, best.stopLoss!,
-        [best.target1!, best.target2 ?? null, best.target3 ?? null, best.target4 ?? null],
-        strike, optionType
-      )
-
       const req: StrategyTradeRequest = {
-        scripCode: best.scripCode,
-        instrumentSymbol: best.symbol || best.companyName,
-        instrumentType: 'OPTION',
+        scripCode: tradingScripCode,
+        instrumentSymbol: displayName,
+        instrumentType,
         underlyingScripCode: best.scripCode,
         underlyingSymbol: best.symbol || best.companyName,
-        side: 'BUY',
+        side: instrumentType === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL'),
         quantity: sizing.quantity,
         lots: sizing.lots,
         lotSize,
-        multiplier: 1,
-        entryPrice: estimatedPremium,
-        sl: optLevels.sl,
-        t1: optLevels.targets[0] || 0,
-        t2: optLevels.targets[1] || 0,
-        t3: optLevels.targets[2] || 0,
-        t4: optLevels.targets[3] || 0,
+        multiplier,
+        entryPrice,
+        sl, t1, t2, t3, t4,
         equitySpot: best.entryPrice,
         equitySl: best.stopLoss!,
         equityT1: best.target1!,
         equityT2: best.target2 || 0,
         equityT3: best.target3 || 0,
         equityT4: best.target4 || 0,
-        delta: optLevels.delta,
-        optionType,
+        delta,
+        optionType: optType,
         strike,
         strategy: 'PATTERN',
         exchange: best.exchange || 'N',
         direction: isLong ? 'BULLISH' : 'BEARISH',
         confidence: conf,
+        executionMode: 'MANUAL',
       }
 
       const result = await strategyTradesApi.create(req)
@@ -1297,45 +1364,38 @@ export default function PatternsPage() {
                       if (!bestBuy) return null
 
                       const status = buyStatus[group.scripCode] || 'idle'
-                      const volOk = bestBuy.volumeConfirmed
+                      // Volume gate: require volumeRatio >= 1.5x (FUKAA uses 4x, patterns relaxed to 1.5x)
+                      const volRatio = bestBuy.volumeRatio ?? 0
+                      const volOk = volRatio >= 1.5
                       const regimeAvoid = bestBuy.tradingMode === 'AVOID'
-                      const spreadWarn = (bestBuy.spreadImpactPct || 0) > 30
-                      const slLabel = bestBuy.slSource === 'ATR' ? 'ATR' : bestBuy.slSource === 'PIVOT' ? 'PVT' : ''
+                      const gateBlocked = !volOk || regimeAvoid
 
                       return (
                         <div className="mt-2 pt-2 border-t border-slate-700/30 flex items-center gap-2">
-                          {/* Volume + Regime badges */}
-                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${volOk ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-                            {volOk ? 'VOL OK' : 'NO VOL'}
+                          {/* Volume ratio badge */}
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold font-mono ${
+                            volRatio >= 1.5 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+                          }`}>
+                            {volRatio > 0 ? `${volRatio.toFixed(1)}x` : 'NO VOL'}
                           </span>
                           {bestBuy.marketRegime && (
                             <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${regimeAvoid ? 'bg-red-500/15 text-red-400' : 'bg-slate-700/50 text-slate-400'}`}>
                               {bestBuy.marketRegime?.replace('_', ' ').substring(0, 12)}
                             </span>
                           )}
-                          {slLabel && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-400 font-mono">
-                              SL:{slLabel}
-                            </span>
-                          )}
-                          {spreadWarn && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">
-                              Wide spread
-                            </span>
-                          )}
 
                           <button
                             onClick={e => { e.stopPropagation(); handleBuyPattern(group.scripCode, group.patterns) }}
-                            disabled={!volOk || status === 'sending'}
+                            disabled={gateBlocked || status === 'sending'}
                             className={`ml-auto px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
                               status === 'filled' ? 'bg-emerald-500/20 text-emerald-400 cursor-default' :
                               status === 'error' ? 'bg-red-500/20 text-red-400 cursor-default' :
                               status === 'sending' ? 'bg-amber-500/20 text-amber-400 animate-pulse' :
-                              !volOk ? 'bg-slate-700/30 text-slate-600 cursor-not-allowed' :
+                              gateBlocked ? 'bg-slate-700/30 text-slate-600 cursor-not-allowed' :
                               'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 active:scale-95'
                             }`}
                           >
-                            {status === 'filled' ? 'FILLED' : status === 'error' ? (volOk ? 'FAILED' : 'NO VOL') : status === 'sending' ? 'SENDING...' : 'BUY'}
+                            {status === 'filled' ? 'FILLED' : status === 'error' ? (!volOk ? 'LOW VOL' : 'AVOID') : status === 'sending' ? 'SENDING...' : 'BUY'}
                           </button>
                         </div>
                       )
@@ -1365,9 +1425,9 @@ export default function PatternsPage() {
           </div>
 
           {/* Detail Panel — sticky scroll container */}
-          <div className="xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+          <div className="max-h-[calc(100vh-6rem)] overflow-y-auto pr-1 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)]">
             {selectedGroupData ? (
-              <GroupDetailPanel group={selectedGroupData} />
+              <GroupDetailPanel group={selectedGroupData} onBuy={handleBuyPattern} buyStatus={buyStatus} walletCapital={walletCapital} />
             ) : (
               <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-8 text-center">
                 <div className="text-5xl mb-4">{'\u{1F4CA}'}</div>
@@ -1473,10 +1533,38 @@ function getMtfInference(confluence: ConfluenceResult, tfGroups: [string, Patter
   return bullets
 }
 
-function GroupDetailPanel({ group }: { group: StockGroup }) {
+function GroupDetailPanel({ group, onBuy, buyStatus, walletCapital }: {
+  group: StockGroup
+  onBuy: (scripCode: string, patterns: PatternSignal[]) => void
+  buyStatus: Record<string, string>
+  walletCapital: number
+}) {
   const { confluence, tfGroups } = group
   const mtfBullets = getMtfInference(confluence, tfGroups)
   const chronoInference = getChronoInference(group.patterns)
+
+  // Compute BUY CTA data — same logic as handleBuyPattern
+  const best = group.patterns
+    .filter(p => !isPatternExpired(p) && p.stopLoss && p.target1 && p.confidence >= 0.6)
+    .sort((a, b) => b.confidence - a.confidence)[0]
+
+  const isLong = best ? best.direction === 'BULLISH' : confluence.dominantDir === 'BULLISH'
+  const ctaReady = !!best
+  const status = buyStatus[group.scripCode] || 'idle'
+
+  // Compute display info for CTA
+  const ctaInfo = (() => {
+    if (!best) return null
+    const optionType: 'CE' | 'PE' = isLong ? 'CE' : 'PE'
+    const { strike } = getOTMStrike(best.entryPrice, best.direction)
+    const conf = Math.round(best.confidence * 100)
+    const estimatedPremium = Math.max((best.atr30m || best.entryPrice * 0.004) * 3, best.entryPrice * 0.008)
+    const lotSize = 50
+    const sizing = computeLotSizing(conf, walletCapital, estimatedPremium, lotSize)
+    return { optionType, strike, estimatedPremium, sizing, conf }
+  })()
+
+  const ctaBg = isLong ? 'bg-[#18C964] hover:bg-[#16b85c] active:bg-[#15a854]' : 'bg-[#FF4D6D] hover:bg-[#e84565] active:bg-[#e6445f]'
 
   return (
     <div className="space-y-3">
@@ -1528,9 +1616,35 @@ function GroupDetailPanel({ group }: { group: StockGroup }) {
           </div>
         )}
 
+        {/* BUY CTA */}
+        {ctaReady && ctaInfo && !ctaInfo.sizing.disabled ? (
+          <button
+            onClick={() => onBuy(group.scripCode, group.patterns)}
+            disabled={status === 'sending' || status === 'filled'}
+            className={`w-full h-11 rounded-xl text-white font-semibold text-sm transition-all duration-100 select-none ${
+              status === 'filled' ? 'bg-emerald-600' :
+              status === 'error' ? 'bg-red-700' :
+              status === 'sending' ? 'bg-slate-600 animate-pulse' :
+              ctaBg
+            }`}
+          >
+            {status === 'sending' ? 'Placing...' :
+             status === 'filled' ? 'Filled' :
+             status === 'error' ? 'Failed — Low Volume' :
+             `BUY ${group.ticker} ${ctaInfo.strike}${ctaInfo.optionType} @ ~\u20B9${ctaInfo.estimatedPremium.toFixed(0)}/- * ${ctaInfo.sizing.lots} lot${ctaInfo.sizing.lots > 1 ? 's' : ''}`}
+          </button>
+        ) : (
+          <button
+            disabled
+            className="w-full h-11 rounded-xl text-slate-500 font-semibold text-sm bg-slate-700/30 border border-slate-600/30 cursor-not-allowed"
+          >
+            {!ctaReady ? 'No Active Signal (conf < 60%)' : 'Insufficient Capital'}
+          </button>
+        )}
+
         <Link to={`/stock/${group.scripCode}`}
-          className="block w-full py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-center rounded-lg font-medium hover:from-blue-600 hover:to-indigo-700 transition-all text-sm">
-          View Stock Analysis
+          className="block w-full mt-2 py-1.5 text-slate-400 text-center rounded-lg font-medium hover:text-blue-400 transition-all text-xs">
+          View Stock Analysis &rarr;
         </Link>
       </div>
 

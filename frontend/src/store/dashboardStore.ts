@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Wallet, FamilyScore, Signal, Trade, Regime, Notification, MasterArchSignal, ACLData, FUDKIIData, QuantScore, PatternSignal } from '../types'
+import type { WalletEvent } from '../services/api'
 
 // Market Intelligence types
 export interface MarketNarrative {
@@ -84,8 +85,10 @@ interface DashboardState {
 
   // Notifications
   notifications: Notification[]
+  notificationsMuted: boolean
   addNotification: (notification: Notification) => void
   clearNotifications: () => void
+  toggleNotificationsMuted: () => void
 
   // Master Architecture signals
   masterArchSignals: MasterArchSignal[]
@@ -119,6 +122,11 @@ interface DashboardState {
   updatePatternSignal: (pattern: PatternSignal) => void
   bulkUpdatePatternSignals: (patterns: PatternSignal[]) => void
   removePatternSignal: (patternId: string) => void
+
+  // Pending fund requests (from MARGIN_INSUFFICIENT wallet events)
+  pendingFundRequests: WalletEvent[]
+  addPendingFundRequest: (event: WalletEvent) => void
+  removePendingFundRequest: (walletId: string) => void
 
   // Data freshness
   lastDataReceived: number
@@ -188,10 +196,16 @@ export const useDashboardStore = create<DashboardState>((set) => ({
 
   // Notifications (keep last 50)
   notifications: [],
+  notificationsMuted: localStorage.getItem('notificationsMuted') !== 'false',
   addNotification: (notification) => set((state) => ({
     notifications: [notification, ...state.notifications].slice(0, 50)
   })),
   clearNotifications: () => set({ notifications: [] }),
+  toggleNotificationsMuted: () => set((state) => {
+    const next = !state.notificationsMuted
+    localStorage.setItem('notificationsMuted', String(next))
+    return { notificationsMuted: next }
+  }),
 
   // FIX BUG #18: Master Architecture signals - now keyed by signalId AND scripCode
   // Keep multiple signals per scripCode (e.g., BUY at 10:00, SELL at 10:05)
@@ -330,6 +344,17 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   }),
   removePatternSignal: (patternId) => set((state) => ({
     patternSignals: state.patternSignals.filter(p => p.patternId !== patternId)
+  })),
+
+  // Pending fund requests
+  pendingFundRequests: [],
+  addPendingFundRequest: (event) => set((state) => {
+    // Avoid duplicates by walletId
+    if (state.pendingFundRequests.some(e => e.walletId === event.walletId)) return state
+    return { pendingFundRequests: [...state.pendingFundRequests, event] }
+  }),
+  removePendingFundRequest: (walletId) => set((state) => ({
+    pendingFundRequests: state.pendingFundRequests.filter(e => e.walletId !== walletId)
   })),
 
   // Data freshness

@@ -114,13 +114,7 @@ public class PerformanceAnalyticsService {
                 quantity = ((Number) qtyVal).intValue();
             }
 
-            String strategy = doc.getString("signalSource");
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = doc.getString("strategy");
-            }
-            if (strategy == null || strategy.isEmpty()) {
-                strategy = doc.getString("signalType");
-            }
+            String strategy = StrategyNameResolver.extractFromDocument(doc);
 
             return TradeDTO.builder()
                     .tradeId(id)
@@ -447,9 +441,7 @@ public class PerformanceAnalyticsService {
                 .build();
     }
 
-    private static final List<String> ALL_STRATEGIES = List.of(
-        "FUDKII", "FUKAA", "MERE", "MICROALPHA", "PIVOT_CONFLUENCE", "BREAKOUT"
-    );
+    private static final List<String> ALL_STRATEGIES = StrategyNameResolver.ALL_STRATEGY_KEYS;
 
     private Map<String, SourcePerformance> calculateBySource(List<TradeDTO> trades) {
         Map<String, List<TradeDTO>> bySource = trades.stream()

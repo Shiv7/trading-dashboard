@@ -25,7 +25,7 @@ public class StrategyTradeRequest {
     private String underlyingSymbol;     // e.g. "COPPER", "ALUMINIUM"
 
     // Order details
-    private String side;                 // "BUY"
+    private String side;                 // "BUY" or "SELL" (SELL for bearish FUT/equity shorts)
     private int quantity;                // total qty (lots × lotSize)
     private int lots;                    // number of lots
     private int lotSize;                 // per-lot size (order quantity per lot)
@@ -57,4 +57,5 @@ public class StrategyTradeRequest {
     private String exchange;             // N / M / C
     private String direction;            // BULLISH / BEARISH
     private double confidence;           // signal confidence %
+    private String executionMode;        // "AUTO" (signal-driven) or "MANUAL" (user CTA click)
 }

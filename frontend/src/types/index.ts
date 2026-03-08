@@ -39,6 +39,7 @@ export interface Position {
   openedAt: string;
   lastUpdated: string;
   strategy?: string;
+  executionMode?: 'AUTO' | 'MANUAL';
   // Dual equity/option levels for strategy trades
   equitySl?: number;
   equityT1?: number;
@@ -58,8 +59,9 @@ export interface Position {
   t3Hit?: boolean;
   t4Hit?: boolean;
   slHit?: boolean;
-  // Instrument type
+  // Instrument type & exchange
   instrumentType?: string;
+  exchange?: string;  // N=NSE, M=MCX, C=Currency, B=BSE
   delta?: number;
   // Trade execution metadata
   exitReason?: string;    // "1% DD", "SL-EQ", "SL-OP", "T1-OP", "T2-EQ", "EOD", etc.
@@ -300,6 +302,7 @@ export interface Trade {
   rMultiple: number;
   durationMinutes: number;
   strategy?: string;
+  executionMode?: 'AUTO' | 'MANUAL';
 }
 
 // Regime types
@@ -747,6 +750,24 @@ export interface PatternSignal {
   // Spread estimation (Flaw 6)
   estimatedSpreadPct?: number;
   spreadImpactPct?: number;
+  // Option/futures enrichment (from OptionDataEnricher)
+  optionAvailable?: boolean;
+  optionFailureReason?: string;
+  optionScripCode?: string;
+  optionSymbol?: string;
+  optionStrike?: number;
+  optionType?: 'CE' | 'PE';
+  optionExpiry?: string;
+  optionLtp?: number;
+  optionLotSize?: number;
+  optionMultiplier?: number;
+  futuresAvailable?: boolean;
+  futuresScripCode?: string;
+  futuresSymbol?: string;
+  futuresLtp?: number;
+  futuresLotSize?: number;
+  futuresMultiplier?: number;
+  futuresExpiry?: string;
 }
 
 export interface PatternSummary {

@@ -181,17 +181,12 @@ public class MicroAlphaConsumer {
 
                 // Update latest
                 latestSignals.put(scripCode, signalData);
+
+                // Broadcast triggered signal to /topic/microalpha (WebSocket push to frontend)
+                sessionManager.broadcastMicroAlpha(scripCode, signalData);
             } else {
                 activeTriggers.invalidate(scripCode);
             }
-
-            // Broadcast to WebSocket
-            sessionManager.broadcastSignal(Map.of(
-                    "type", "MICROALPHA_UPDATE",
-                    "scripCode", scripCode,
-                    "triggered", triggered,
-                    "data", signalData
-            ));
 
         } catch (Exception e) {
             log.error("Error processing MicroAlpha: {}", e.getMessage(), e);
@@ -262,6 +257,7 @@ public class MicroAlphaConsumer {
 
         // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
+        if (root.has("optionFailureReason")) data.put("optionFailureReason", root.path("optionFailureReason").asText());
         if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
         if (root.has("optionSymbol")) data.put("optionSymbol", root.path("optionSymbol").asText());
         if (root.has("optionStrike")) data.put("optionStrike", root.path("optionStrike").asDouble());
@@ -271,6 +267,34 @@ public class MicroAlphaConsumer {
         if (root.has("optionLotSize")) data.put("optionLotSize", root.path("optionLotSize").asInt(1));
         if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
         if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
+
+        // Futures fallback enrichment (MCX instruments)
+        if (root.has("futuresAvailable")) data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
+        if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());
+        if (root.has("futuresSymbol")) data.put("futuresSymbol", root.path("futuresSymbol").asText());
+        if (root.has("futuresLtp")) data.put("futuresLtp", root.path("futuresLtp").asDouble());
+        if (root.has("futuresLotSize")) data.put("futuresLotSize", root.path("futuresLotSize").asInt(1));
+        if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
+        if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
+        if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
+        if (root.has("futuresVolume")) data.put("futuresVolume", root.path("futuresVolume").asLong(0));
+
+        // Raw metrics for enhanced card display
+        data.put("oiChangePercent", root.path("oiChangePercent").asDouble(0));
+        data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
+        data.put("volumeXFactor", root.path("volumeXFactor").asDouble(1.0));
+        data.put("pcrValue", root.path("pcrValue").asDouble(0));
+        data.put("maxPainDistPercent", root.path("maxPainDistPercent").asDouble(0));
+        data.put("modeReason", root.path("modeReason").asText(""));
+        data.put("blockCount", root.path("blockCount").asInt(0));
+
+        // Mode weights map
+        if (root.has("modeWeights") && root.path("modeWeights").isObject()) {
+            Map<String, Object> weights = new HashMap<>();
+            root.path("modeWeights").fields().forEachRemaining(entry ->
+                    weights.put(entry.getKey(), entry.getValue().asDouble(0)));
+            data.put("modeWeights", weights);
+        }
 
         return data;
     }

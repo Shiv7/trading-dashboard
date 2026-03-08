@@ -24,7 +24,7 @@ export function formatTimeAgo(input: string | number | Date): string {
  */
 export function formatAbsoluteTime(input: string | number | Date): string {
   const date = input instanceof Date ? input : new Date(input)
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
 }
 
 /**
@@ -33,6 +33,6 @@ export function formatAbsoluteTime(input: string | number | Date): string {
  */
 export function formatDateTime(input: string | number | Date): string {
   const date = input instanceof Date ? input : new Date(input)
-  return date.toLocaleDateString([], { day: 'numeric', month: 'short' }) +
-    ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleDateString([], { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }) +
+    ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
 }

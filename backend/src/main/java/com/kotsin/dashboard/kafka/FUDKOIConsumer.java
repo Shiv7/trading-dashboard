@@ -31,19 +31,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Kafka consumer for FUKAA signals (volume-filtered FUDKII).
+ * Kafka consumer for FUDKOI signals (OI-filtered FUDKII).
  *
- * FUKAA = FUDKII + Volume Surge Filter.
- * Filters FUDKII signals based on volume surge criteria:
- * - Immediate pass: T-1 or T candle volume > 2x avg of last 6 candles
- * - Watching mode: Neither passes, signal re-evaluated at T+1
- * - T+1 pass: T+1 candle volume > 2x avg
- *
- * Consumes from: kotsin_FUKAA
+ * FUDKOI = FUDKII + Open Interest Filter.
+ * Consumes from: kotsin_FUDKOI
  */
 @Component
 @Slf4j
-public class FUKAAConsumer {
+public class FUDKOIConsumer {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
@@ -52,38 +47,31 @@ public class FUKAAConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    private static final String REDIS_KEY = "dashboard:fukaa:active-triggers";
-    private static final String REDIS_KEY_ALL = "dashboard:fukaa:all-latest";
-    private static final String REDIS_KEY_HISTORY = "dashboard:fukaa:signal-history";
+    private static final String REDIS_KEY = "dashboard:fudkoi:active-triggers";
+    private static final String REDIS_KEY_ALL = "dashboard:fudkoi:all-latest";
+    private static final String REDIS_KEY_HISTORY = "dashboard:fudkoi:signal-history";
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
-    @Value("${signal.fukaa.ttl.minutes:30}")
+    @Value("${signal.fudkoi.ttl.minutes:30}")
     private int signalTtlMinutes;
 
-    @Value("${signal.fukaa.max.per.day:5}")
+    @Value("${signal.fudkoi.max.per.day:5}")
     private int maxSignalsPerDay;
 
-    // Active triggers with TTL via Caffeine
     private Cache<String, Map<String, Object>> activeTriggers;
 
-    // Cache latest FUKAA signals per instrument (no TTL - informational only)
-    private final Map<String, Map<String, Object>> latestFUKAA = new ConcurrentHashMap<>();
-
-    // Signal history: key = "scripCode-triggerTimeEpoch", stores ALL triggered signals for today
-    // Immutable history — entries are never overwritten or removed (except daily reset)
+    private final Map<String, Map<String, Object>> latestFUDKOI = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> todaySignalHistory = new ConcurrentHashMap<>();
 
-    // Dedup cache: key = scripCode|timestamp, prevents replay duplicates
     private final Cache<String, Boolean> dedupCache = Caffeine.newBuilder()
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .maximumSize(10000)
             .build();
 
-    // Daily signal counter: key = scripCode|date
     private final Map<String, Integer> dailySignalCount = new ConcurrentHashMap<>();
     private volatile LocalDate currentTradeDate = LocalDate.now(IST);
 
-    public FUKAAConsumer(
+    public FUDKOIConsumer(
             WebSocketSessionManager sessionManager,
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
             SignalConsumer signalConsumer,
@@ -101,7 +89,7 @@ public class FUKAAConsumer {
                 .maximumSize(500)
                 .removalListener((key, value, cause) -> {
                     if (cause.wasEvicted()) {
-                        log.info("FUKAA signal expired: {} (TTL={}min)", key, signalTtlMinutes);
+                        log.info("FUDKOI signal expired: {} (TTL={}min)", key, signalTtlMinutes);
                     }
                 })
                 .build();
@@ -110,86 +98,78 @@ public class FUKAAConsumer {
     }
 
     @KafkaListener(
-            topics = {"kotsin_FUKAA"},
+            topics = {"kotsin_FUDKOI"},
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
     )
-    public void onFUKAA(String payload) {
+    public void onFUDKOI(String payload) {
         try {
             JsonNode root = objectMapper.readTree(payload);
 
             String scripCode = root.path("scripCode").asText();
             if (scripCode == null || scripCode.isEmpty()) {
-                log.trace("No scripCode in FUKAA message, skipping");
+                log.trace("No scripCode in FUDKOI message, skipping");
                 return;
             }
 
-            // --- DEDUP CHECK ---
             String triggerTimeStr = root.path("triggerTime").asText("");
-            String fukaaEmittedAt = root.path("fukaaEmittedAt").asText("");
-            String dedupKey = scripCode + "|" + triggerTimeStr + "|" + fukaaEmittedAt;
+            String dedupKey = scripCode + "|" + triggerTimeStr;
             if (dedupCache.getIfPresent(dedupKey) != null) {
-                log.debug("FUKAA dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
+                log.debug("FUDKOI dedup: skipping duplicate for {} at {}", scripCode, triggerTimeStr);
                 return;
             }
             dedupCache.put(dedupKey, Boolean.TRUE);
 
-            Map<String, Object> fukaaData = parseFUKAA(root);
-            boolean triggered = Boolean.TRUE.equals(fukaaData.get("triggered"));
+            Map<String, Object> fudkoiData = parseFUDKOI(root);
+            boolean triggered = Boolean.TRUE.equals(fudkoiData.get("triggered"));
 
             if (triggered) {
-                // --- DAILY CAP CHECK ---
                 resetDailyCounterIfNeeded();
                 String dailyKey = scripCode + "|" + currentTradeDate;
                 int todayCount = dailySignalCount.getOrDefault(dailyKey, 0);
                 if (todayCount >= maxSignalsPerDay) {
-                    log.warn("FUKAA daily cap reached: {} has {} signals today (max={})",
+                    log.warn("FUDKOI daily cap reached: {} has {} signals today (max={})",
                             scripCode, todayCount, maxSignalsPerDay);
                     return;
                 }
                 dailySignalCount.merge(dailyKey, 1, Integer::sum);
 
-                String direction = (String) fukaaData.get("direction");
-                String symbol = (String) fukaaData.get("symbol");
-                String companyName = (String) fukaaData.get("companyName");
+                String direction = (String) fudkoiData.get("direction");
+                String symbol = (String) fudkoiData.get("symbol");
+                String companyName = (String) fudkoiData.get("companyName");
                 String displayName = scripLookup.resolve(scripCode,
                         symbol != null && !symbol.isEmpty() ? symbol :
                         (companyName != null && !companyName.isEmpty() ? companyName : null));
 
-                log.info("FUKAA TRIGGER: {} ({}) direction={} outcome={} passedCandle={} rank={} [signals today: {}]",
+                log.info("FUDKOI TRIGGER: {} ({}) direction={} oiRatio={} oiLabel={} [signals today: {}]",
                         displayName, scripCode, direction,
-                        fukaaData.get("fukaaOutcome"),
-                        fukaaData.get("passedCandle"),
-                        fukaaData.get("rank"),
+                        fudkoiData.get("oiChangeRatio"),
+                        fudkoiData.get("oiLabel"),
                         todayCount + 1);
 
-                // Cache active trigger (with TTL)
                 long cachedAtMs = Instant.now().toEpochMilli();
-                fukaaData.put("cachedAt", cachedAtMs);
-                activeTriggers.put(scripCode, fukaaData);
+                fudkoiData.put("cachedAt", cachedAtMs);
+                activeTriggers.put(scripCode, fudkoiData);
 
-                // Append to today's signal history (immutable — never overwritten)
-                long epoch = fukaaData.containsKey("triggerTimeEpoch")
-                        ? ((Number) fukaaData.get("triggerTimeEpoch")).longValue()
+                long epoch = fudkoiData.containsKey("triggerTimeEpoch")
+                        ? ((Number) fudkoiData.get("triggerTimeEpoch")).longValue()
                         : cachedAtMs;
                 String historyKey = scripCode + "-" + epoch;
-                fukaaData.put("signalSource", "FUKAA");
-                todaySignalHistory.put(historyKey, fukaaData);
+                fudkoiData.put("signalSource", "FUDKOI");
+                fudkoiData.put("signalType", "FUDKOI");
+                todaySignalHistory.put(historyKey, fudkoiData);
 
-                // Register as main trading signal on the dashboard
-                double triggerPrice = ((Number) fukaaData.getOrDefault("triggerPrice", 0)).doubleValue();
-                double bbUpper = ((Number) fukaaData.getOrDefault("bbUpper", 0)).doubleValue();
-                double bbLower = ((Number) fukaaData.getOrDefault("bbLower", 0)).doubleValue();
-                double superTrend = ((Number) fukaaData.getOrDefault("superTrend", 0)).doubleValue();
-                double triggerScore = ((Number) fukaaData.getOrDefault("triggerScore", 0)).doubleValue();
-                double rank = ((Number) fukaaData.getOrDefault("rank", 0)).doubleValue();
+                double triggerPrice = ((Number) fudkoiData.getOrDefault("triggerPrice", 0)).doubleValue();
+                double bbUpper = ((Number) fudkoiData.getOrDefault("bbUpper", 0)).doubleValue();
+                double bbLower = ((Number) fudkoiData.getOrDefault("bbLower", 0)).doubleValue();
+                double superTrend = ((Number) fudkoiData.getOrDefault("superTrend", 0)).doubleValue();
+                double triggerScore = ((Number) fudkoiData.getOrDefault("triggerScore", 0)).doubleValue();
+                double oiChangeRatio = ((Number) fudkoiData.getOrDefault("oiChangeRatio", 0)).doubleValue();
 
-                // Use pivot-derived levels from producer (the source of truth)
-                double stopLoss = ((Number) fukaaData.getOrDefault("stopLoss", 0)).doubleValue();
-                double target1 = ((Number) fukaaData.getOrDefault("target1", 0)).doubleValue();
-                double riskReward = ((Number) fukaaData.getOrDefault("riskReward", 0)).doubleValue();
-                boolean pivotSource = Boolean.TRUE.equals(fukaaData.get("pivotSource"));
+                double stopLoss = ((Number) fudkoiData.getOrDefault("stopLoss", 0)).doubleValue();
+                double target1 = ((Number) fudkoiData.getOrDefault("target1", 0)).doubleValue();
+                double riskReward = ((Number) fudkoiData.getOrDefault("riskReward", 0)).doubleValue();
+                boolean pivotSource = Boolean.TRUE.equals(fudkoiData.get("pivotSource"));
 
-                // Fallback to old formula ONLY if producer didn't provide levels (backward compat)
                 if (stopLoss == 0) {
                     stopLoss = "BULLISH".equals(direction) ? Math.min(bbLower, superTrend) : Math.max(bbUpper, superTrend);
                     target1 = "BULLISH".equals(direction)
@@ -198,13 +178,13 @@ public class FUKAAConsumer {
                     riskReward = stopLoss != triggerPrice
                             ? Math.abs((target1 - triggerPrice) / (triggerPrice - stopLoss)) : 0;
                     pivotSource = false;
-                    log.warn("FUKAA {} using BB/ST fallback SL (no pivot data in payload)", scripCode);
+                    log.warn("FUDKOI {} using BB/ST fallback SL (no pivot data in payload)", scripCode);
                 }
 
                 String slSource = pivotSource ? "PIVOT" : "BB/ST";
-                String rationale = String.format("FUKAA: %s via %s | Rank=%.2f Score=%.2f | SL=%.2f (%s) T1=%.2f RR=%.2f | BB[%.2f-%.2f] ST=%.2f",
-                        fukaaData.get("fukaaOutcome"), fukaaData.get("passedCandle"),
-                        rank, triggerScore, stopLoss, slSource, target1, riskReward,
+                String rationale = String.format("FUDKOI: OI=%.1f%% %s | Score=%.2f | SL=%.2f (%s) T1=%.2f RR=%.2f | BB[%.2f-%.2f] ST=%.2f",
+                        oiChangeRatio, fudkoiData.get("oiLabel"),
+                        triggerScore, stopLoss, slSource, target1, riskReward,
                         bbLower, bbUpper, superTrend);
 
                 SignalDTO signalDTO = SignalDTO.builder()
@@ -212,9 +192,9 @@ public class FUKAAConsumer {
                         .scripCode(scripCode)
                         .companyName(displayName)
                         .timestamp(LocalDateTime.now(IST))
-                        .signalSource("FUKAA")
-                        .signalSourceLabel("FUKAA Trigger")
-                        .signalType("FUKAA")
+                        .signalSource("FUDKOI")
+                        .signalSourceLabel("FUDKOI Trigger")
+                        .signalType("FUDKOI")
                         .direction(direction)
                         .confidence(Math.min(1.0, triggerScore / 100.0))
                         .rationale(rationale)
@@ -228,49 +208,41 @@ public class FUKAAConsumer {
                         .build();
 
                 signalConsumer.addExternalSignal(signalDTO);
-                log.info("FUKAA signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
+                log.info("FUDKOI signal added to signals cache: {} {} @ {}", scripCode, direction, triggerPrice);
 
-                // Send notification
                 String emoji = "BULLISH".equals(direction) ? "^" : "v";
-                sessionManager.broadcastNotification("FUKAA_TRIGGER",
-                        String.format("%s %s FUKAA (vol-confirmed) for %s @ %.2f | %s via %s",
-                                emoji, direction, displayName,
-                                ((Number) fukaaData.getOrDefault("triggerPrice", 0)).doubleValue(),
-                                fukaaData.get("fukaaOutcome"),
-                                fukaaData.get("passedCandle")));
+                sessionManager.broadcastNotification("FUDKOI_TRIGGER",
+                        String.format("%s %s FUDKOI (OI-confirmed) for %s @ %.2f | OI=%.1f%% %s",
+                                emoji, direction, displayName, triggerPrice,
+                                oiChangeRatio, fudkoiData.get("oiLabel")));
 
-                // Update latest (only triggered signals update the latest map)
-                latestFUKAA.put(scripCode, fukaaData);
+                latestFUDKOI.put(scripCode, fudkoiData);
 
-                // Broadcast triggered signal to /topic/fukaa (WebSocket push to frontend)
-                sessionManager.broadcastFUKAA(scripCode, fukaaData);
+                // Broadcast triggered signal to /topic/fudkoi (WebSocket push to frontend)
+                sessionManager.broadcastFUDKOI(scripCode, fudkoiData);
             }
-            // NOTE: Do NOT overwrite latestFUKAA with non-triggered data
 
         } catch (Exception e) {
-            log.error("Error processing FUKAA: {}", e.getMessage(), e);
+            log.error("Error processing FUDKOI: {}", e.getMessage(), e);
         }
     }
 
-    private Map<String, Object> parseFUKAA(JsonNode root) {
+    private Map<String, Object> parseFUDKOI(JsonNode root) {
         Map<String, Object> data = new HashMap<>();
 
-        // Basic info (same as FUDKII)
         data.put("scripCode", root.path("scripCode").asText());
         data.put("symbol", root.path("symbol").asText());
         data.put("companyName", scripLookup.resolve(root.path("scripCode").asText(), root.path("companyName").asText("")));
         data.put("exchange", root.path("exchange").asText());
 
-        // Trigger info
         data.put("triggered", root.path("triggered").asBoolean(false));
         data.put("direction", root.path("direction").asText("NONE"));
         data.put("reason", root.path("reason").asText(""));
-        double trigPrice = root.path("triggerPrice").asDouble(0);
-        if (trigPrice <= 0) trigPrice = root.path("entryPrice").asDouble(0);
-        data.put("triggerPrice", trigPrice);
+        double fudkoiTrigPrice = root.path("triggerPrice").asDouble(0);
+        if (fudkoiTrigPrice <= 0) fudkoiTrigPrice = root.path("entryPrice").asDouble(0);
+        data.put("triggerPrice", fudkoiTrigPrice);
         data.put("triggerScore", root.path("triggerScore").asDouble(0));
 
-        // Trigger time
         String triggerTimeStr = root.path("triggerTime").asText();
         if (triggerTimeStr != null && !triggerTimeStr.isEmpty()) {
             try {
@@ -286,18 +258,16 @@ public class FUKAAConsumer {
             data.put("triggerTimeEpoch", System.currentTimeMillis());
         }
 
-        // Bollinger Bands data
+        // BB + SuperTrend
         data.put("bbUpper", root.path("bbUpper").asDouble(0));
         data.put("bbMiddle", root.path("bbMiddle").asDouble(0));
         data.put("bbLower", root.path("bbLower").asDouble(0));
-
-        // SuperTrend data
         data.put("superTrend", root.path("superTrend").asDouble(0));
         data.put("trend", root.path("trend").asText("NONE"));
         data.put("trendChanged", root.path("trendChanged").asBoolean(false));
         data.put("pricePosition", root.path("pricePosition").asText("BETWEEN"));
 
-        // ==================== PIVOT-DERIVED TRADE LEVELS (from producer) ====================
+        // Pivot-derived trade levels
         data.put("stopLoss", root.path("stopLoss").asDouble(0));
         data.put("target1", root.path("target1").asDouble(0));
         data.put("target2", root.path("target2").asDouble(0));
@@ -307,45 +277,12 @@ public class FUKAAConsumer {
         data.put("pivotSource", root.path("pivotSource").asBoolean(false));
         data.put("atr30m", root.path("atr30m").asDouble(0));
 
-        // ==================== FUKAA-SPECIFIC FIELDS ====================
-        data.put("fukaaOutcome", root.path("fukaaOutcome").asText("UNKNOWN"));
-        data.put("passedCandle", root.path("passedCandle").asText("NONE"));
-        data.put("rank", root.path("rank").asDouble(0));
+        // OI fields (primary for FUDKOI)
+        data.put("oiChangeRatio", root.path("oiChangeRatio").asDouble(0));
+        data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
+        data.put("oiLabel", root.path("oiLabel").asText(""));
 
-        // Volume data
-        data.put("volumeTMinus1", root.path("volumeTMinus1").asLong(0));
-        data.put("volumeT", root.path("volumeT").asLong(0));
-        data.put("volumeTPlus1", root.path("volumeTPlus1").asLong(0));
-        data.put("avgVolume", root.path("avgVolume").asDouble(0));
-
-        // Surge ratios
-        data.put("surgeTMinus1", root.path("surgeTMinus1").asDouble(0));
-        data.put("surgeT", root.path("surgeT").asDouble(0));
-        data.put("surgeTPlus1", root.path("surgeTPlus1").asDouble(0));
-
-        // Block trade detection (MAD-based)
-        data.put("blockTradeDetected", root.path("blockTradeDetected").asBoolean(false));
-        if (root.has("blockTradeVol")) data.put("blockTradeVol", root.path("blockTradeVol").asLong(0));
-        if (root.has("blockTradePct")) data.put("blockTradePct", root.path("blockTradePct").asDouble(0));
-
-        // OI enrichment fields
-        if (root.has("oiChangeRatio")) data.put("oiChangeRatio", root.path("oiChangeRatio").asDouble(0));
-        if (root.has("oiBuildupPct")) data.put("oiBuildupPct", root.path("oiBuildupPct").asDouble(0));
-        if (root.has("oiInterpretation")) data.put("oiInterpretation", root.path("oiInterpretation").asText("NEUTRAL"));
-        if (root.has("oiLabel")) data.put("oiLabel", root.path("oiLabel").asText(""));
-
-        // FUKAA emission time
-        String fukaaEmittedAt = root.path("fukaaEmittedAt").asText();
-        if (fukaaEmittedAt != null && !fukaaEmittedAt.isEmpty()) {
-            try {
-                Instant emittedTime = Instant.parse(fukaaEmittedAt);
-                data.put("fukaaEmittedAt", LocalDateTime.ofInstant(emittedTime, IST).toString());
-            } catch (Exception e) {
-                data.put("fukaaEmittedAt", fukaaEmittedAt);
-            }
-        }
-
-        // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
+        // Option enrichment
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));
         if (root.has("optionFailureReason")) data.put("optionFailureReason", root.path("optionFailureReason").asText());
         if (root.has("optionScripCode")) data.put("optionScripCode", root.path("optionScripCode").asText());
@@ -359,7 +296,7 @@ public class FUKAAConsumer {
         if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
         if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
 
-        // Futures fallback fields (MCX instruments without options)
+        // Futures fallback
         data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
         if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());
         if (root.has("futuresSymbol")) data.put("futuresSymbol", root.path("futuresSymbol").asText());
@@ -370,15 +307,16 @@ public class FUKAAConsumer {
         if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
         if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
 
+        // Volume data (may still be present from FUDKII base)
+        if (root.has("surgeT")) data.put("surgeT", root.path("surgeT").asDouble(0));
+        if (root.has("avgVolume")) data.put("avgVolume", root.path("avgVolume").asDouble(0));
+
         return data;
     }
-
-    // --- REDIS PERSISTENCE ---
 
     @PreDestroy
     public void persistToRedis() {
         try {
-            // Persist active triggers (Caffeine TTL cache)
             Map<String, Map<String, Object>> snapshot = new HashMap<>(activeTriggers.asMap());
             if (snapshot.isEmpty()) {
                 redisTemplate.delete(REDIS_KEY);
@@ -391,8 +329,7 @@ public class FUKAAConsumer {
                 redisTemplate.expire(REDIS_KEY, signalTtlMinutes, TimeUnit.MINUTES);
             }
 
-            // Persist all latest signals (per-instrument, no TTL — survives restart)
-            Map<String, Map<String, Object>> allSnapshot = new HashMap<>(latestFUKAA);
+            Map<String, Map<String, Object>> allSnapshot = new HashMap<>(latestFUDKOI);
             if (!allSnapshot.isEmpty()) {
                 redisTemplate.delete(REDIS_KEY_ALL);
                 for (Map.Entry<String, Map<String, Object>> entry : allSnapshot.entrySet()) {
@@ -402,7 +339,6 @@ public class FUKAAConsumer {
                 redisTemplate.expire(REDIS_KEY_ALL, 24 * 60, TimeUnit.MINUTES);
             }
 
-            // Persist today's signal history (immutable records — survives restart)
             String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
             Map<String, Map<String, Object>> historySnapshot = new HashMap<>(todaySignalHistory);
             if (!historySnapshot.isEmpty()) {
@@ -413,17 +349,16 @@ public class FUKAAConsumer {
                 redisTemplate.expire(historyRedisKey, 24 * 60, TimeUnit.MINUTES);
             }
 
-            log.info("FUKAA persisted {} active triggers, {} all-latest, {} history to Redis",
+            log.info("FUDKOI persisted {} active triggers, {} all-latest, {} history to Redis",
                     snapshot.size(), allSnapshot.size(), historySnapshot.size());
         } catch (Exception e) {
-            log.error("Failed to persist FUKAA triggers to Redis: {}", e.getMessage());
+            log.error("Failed to persist FUDKOI triggers to Redis: {}", e.getMessage());
         }
     }
 
     @SuppressWarnings("unchecked")
     private void restoreFromRedis() {
         try {
-            // Restore active triggers (Caffeine cache)
             Map<Object, Object> entries = redisTemplate.opsForHash().entries(REDIS_KEY);
             int restoredActive = 0;
             if (entries != null && !entries.isEmpty()) {
@@ -439,15 +374,14 @@ public class FUKAAConsumer {
                             continue;
                         }
                         activeTriggers.put((String) entry.getKey(), data);
-                        latestFUKAA.put((String) entry.getKey(), data);
+                        latestFUDKOI.put((String) entry.getKey(), data);
                         restoredActive++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUKAA trigger {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore FUDKOI trigger {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            // Restore all latest signals (for the FUKAA tab)
             Map<Object, Object> allEntries = redisTemplate.opsForHash().entries(REDIS_KEY_ALL);
             int restoredAll = 0;
             if (allEntries != null && !allEntries.isEmpty()) {
@@ -455,15 +389,14 @@ public class FUKAAConsumer {
                     try {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
-                        latestFUKAA.putIfAbsent((String) entry.getKey(), data);
+                        latestFUDKOI.putIfAbsent((String) entry.getKey(), data);
                         restoredAll++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUKAA all-latest {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore FUDKOI all-latest {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            // Restore today's signal history
             String historyRedisKey = REDIS_KEY_HISTORY + ":" + currentTradeDate;
             Map<Object, Object> historyEntries = redisTemplate.opsForHash().entries(historyRedisKey);
             int restoredHistory = 0;
@@ -473,22 +406,21 @@ public class FUKAAConsumer {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
                         todaySignalHistory.putIfAbsent((String) entry.getKey(), data);
-                        // Also ensure latestFUKAA has this triggered signal
                         String sc = (String) data.get("scripCode");
                         if (sc != null && Boolean.TRUE.equals(data.get("triggered"))) {
-                            latestFUKAA.putIfAbsent(sc, data);
+                            latestFUDKOI.putIfAbsent(sc, data);
                         }
                         restoredHistory++;
                     } catch (Exception e) {
-                        log.warn("Failed to restore FUKAA history {}: {}", entry.getKey(), e.getMessage());
+                        log.warn("Failed to restore FUDKOI history {}: {}", entry.getKey(), e.getMessage());
                     }
                 }
             }
 
-            log.info("FUKAA restored {} active triggers + {} all-latest + {} history from Redis",
+            log.info("FUDKOI restored {} active triggers + {} all-latest + {} history from Redis",
                     restoredActive, restoredAll, restoredHistory);
         } catch (Exception e) {
-            log.error("Failed to restore FUKAA triggers from Redis: {}", e.getMessage());
+            log.error("Failed to restore FUDKOI triggers from Redis: {}", e.getMessage());
         }
     }
 
@@ -502,16 +434,16 @@ public class FUKAAConsumer {
         if (!today.equals(currentTradeDate)) {
             dailySignalCount.clear();
             todaySignalHistory.clear();
-            latestFUKAA.clear();
+            latestFUDKOI.clear();
             currentTradeDate = today;
-            log.info("FUKAA daily counters, history and latest reset for {}", today);
+            log.info("FUDKOI daily counters, history and latest reset for {}", today);
         }
     }
 
     // --- PUBLIC ACCESSORS ---
 
-    public Map<String, Object> getLatestFUKAA(String scripCode) {
-        return latestFUKAA.get(scripCode);
+    public Map<String, Object> getLatestFUDKOI(String scripCode) {
+        return latestFUDKOI.get(scripCode);
     }
 
     public Map<String, Map<String, Object>> getActiveTriggers() {
@@ -522,28 +454,10 @@ public class FUKAAConsumer {
         return (int) activeTriggers.estimatedSize();
     }
 
-    public String getDirectionForScrip(String scripCode) {
-        Map<String, Object> data = activeTriggers.getIfPresent(scripCode);
-        return data != null ? (String) data.get("direction") : null;
-    }
-
-    public int getDailySignalCount(String scripCode) {
-        String dailyKey = scripCode + "|" + currentTradeDate;
-        return dailySignalCount.getOrDefault(dailyKey, 0);
-    }
-
-    /**
-     * Get all latest FUKAA signals (per-instrument, only triggered=true entries).
-     * Survives restart via Redis persistence.
-     */
     public Map<String, Map<String, Object>> getAllLatestSignals() {
-        return new HashMap<>(latestFUKAA);
+        return new HashMap<>(latestFUDKOI);
     }
 
-    /**
-     * Get today's full signal history — ALL triggered signals, never overwritten.
-     * Survives restart via Redis persistence.
-     */
     public List<Map<String, Object>> getTodaySignalHistory() {
         return new ArrayList<>(todaySignalHistory.values());
     }
