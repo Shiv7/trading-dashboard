@@ -197,6 +197,8 @@ export function useWebSocket() {
             const data = JSON.parse(message.body)
             updateTrade(data)
             touchLastData()
+            // Dispatch event so TradesPage can refresh in real-time
+            window.dispatchEvent(new CustomEvent('trade-outcome', { detail: data }))
           } catch (e) {
             handleParseError('trades', e)
           }

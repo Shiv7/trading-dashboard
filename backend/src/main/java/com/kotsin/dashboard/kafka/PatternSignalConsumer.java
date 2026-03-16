@@ -13,28 +13,25 @@ import org.springframework.stereotype.Component;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Expiry;
 import jakarta.annotation.PostConstruct;
-import org.springframework.scheduling.annotation.Scheduled;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
  * PatternSignalConsumer - Consumes pattern signals from SMTIS v2.0
  *
- * Listens to:
- * - pattern-signals: Pattern recognition signals
+ * Uses Caffeine caches with TF-aware TTL for automatic lifecycle management.
+ * No manual eviction, no memory leaks, O(1) amortized operations.
  *
- * Provides:
- * - Active patterns tracking
- * - Pattern lifecycle management
- * - Pattern success rate tracking
+ * Listens to: pattern-signals (Kafka topic)
  */
 @Component
 @Slf4j
@@ -46,94 +43,117 @@ public class PatternSignalConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    // Memory limits to prevent OOM
-    private static final int MAX_ACTIVE_PATTERNS = 5000;
+    private static final int MAX_ACTIVE_PATTERNS = 8000;
     private static final int MAX_COMPLETED_PATTERNS = 1000;
-    private static final int MAX_PATTERNS_PER_STOCK = 100;
-    private static final int PATTERN_EXPIRY_HOURS = 24;
 
-    // In-memory pattern storage
-    private final Map<String, PatternSignalDTO> activePatterns = new ConcurrentHashMap<>();
-    private final Map<String, PatternSignalDTO> completedPatterns = new ConcurrentHashMap<>();
-    // FIX: Use CopyOnWriteArrayList for thread-safe iteration
-    private final Map<String, List<PatternSignalDTO>> patternsByStock = new ConcurrentHashMap<>();
+    // Timeframe → candle duration in minutes. Pattern expires when its candle closes.
+    private static final Map<String, Long> TF_MINUTES = Map.ofEntries(
+            Map.entry("1m", 2L), Map.entry("3m", 4L), Map.entry("5m", 6L),
+            Map.entry("15m", 16L), Map.entry("30m", 31L), Map.entry("1h", 61L),
+            Map.entry("2h", 121L), Map.entry("4h", 241L),
+            Map.entry("1d", 1441L), Map.entry("1D", 1441L)
+    );
+    // +1 minute buffer above exact TF duration so the pattern is visible for the full candle
 
-    // Pattern statistics
-    private final Map<String, PatternStats> patternStats = new ConcurrentHashMap<>();
+    private static final long DEFAULT_TTL_MINUTES = 60; // unknown TF fallback
 
-    // Dedup cache: scripCode|patternType|timeframe|timestamp → 25 hour TTL
-    // Matches the producer's 25h TTL to prevent re-adding the same pattern on the same candle.
+    /**
+     * Active patterns cache: auto-evicts when candle closes (TF-aware TTL).
+     * maximumSize is a hard ceiling — Caffeine evicts LRU entries when exceeded,
+     * so burst floods shed oldest entries instead of blocking new ones.
+     */
+    private final Cache<String, PatternSignalDTO> activePatterns = Caffeine.newBuilder()
+            .maximumSize(MAX_ACTIVE_PATTERNS)
+            .expireAfter(new Expiry<String, PatternSignalDTO>() {
+                @Override
+                public long expireAfterCreate(String key, PatternSignalDTO pattern, long currentTime) {
+                    return computeTtlNanos(pattern);
+                }
+                @Override
+                public long expireAfterUpdate(String key, PatternSignalDTO pattern, long currentTime, long currentDuration) {
+                    return currentDuration; // keep original TTL on update
+                }
+                @Override
+                public long expireAfterRead(String key, PatternSignalDTO pattern, long currentTime, long currentDuration) {
+                    return currentDuration; // reads don't extend TTL
+                }
+            })
+            .build();
+
+    /** Completed patterns: flat 2-hour TTL, LRU eviction. */
+    private final Cache<String, PatternSignalDTO> completedPatterns = Caffeine.newBuilder()
+            .maximumSize(MAX_COMPLETED_PATTERNS)
+            .expireAfterWrite(2, TimeUnit.HOURS)
+            .build();
+
+    /** Dedup cache: scripCode|patternType|timeframe|timestamp → 25h TTL. */
     private final Cache<String, Boolean> dedupCache = Caffeine.newBuilder()
             .expireAfterWrite(25, TimeUnit.HOURS)
             .maximumSize(50000)
             .build();
 
+    /** Pattern statistics (lightweight, no memory pressure). */
+    private final Map<String, PatternStats> patternStats = new ConcurrentHashMap<>();
+
+    /**
+     * Compute TTL in nanoseconds based on how much time remains until the candle closes.
+     * If the candle already closed (e.g., late Kafka delivery), returns 1 minute so the
+     * pattern is briefly visible before eviction.
+     */
+    private long computeTtlNanos(PatternSignalDTO pattern) {
+        LocalDateTime triggeredAt = pattern.getTriggeredAt();
+        String tf = pattern.getTimeframe();
+
+        long tfMinutes = DEFAULT_TTL_MINUTES;
+        if (tf != null) {
+            Long lookup = TF_MINUTES.get(tf.toLowerCase());
+            if (lookup == null) lookup = TF_MINUTES.get(tf);
+            if (lookup != null) tfMinutes = lookup;
+        }
+
+        if (triggeredAt != null) {
+            LocalDateTime candleClose = triggeredAt.plusMinutes(tfMinutes);
+            long remainingMs = Duration.between(LocalDateTime.now(), candleClose).toMillis();
+            if (remainingMs > 0) {
+                return TimeUnit.MILLISECONDS.toNanos(remainingMs);
+            }
+        }
+
+        // Already expired or no timestamp — keep 1 minute for brief visibility
+        return TimeUnit.MINUTES.toNanos(1);
+    }
+
     @PostConstruct
     public void init() {
-        log.info("PatternSignalConsumer initialized with limits: maxActive={}, maxCompleted={}, maxPerStock={}",
-                MAX_ACTIVE_PATTERNS, MAX_COMPLETED_PATTERNS, MAX_PATTERNS_PER_STOCK);
+        log.info("PatternSignalConsumer initialized: maxActive={}, maxCompleted={}, TTL=TF-aware",
+                MAX_ACTIVE_PATTERNS, MAX_COMPLETED_PATTERNS);
     }
 
     @KafkaListener(topics = {"pattern-signals"}, groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onPatternSignal(String payload) {
         try {
-            log.info("Received pattern signal from Kafka");
             JsonNode root = objectMapper.readTree(payload);
-
             PatternSignalDTO pattern = parsePatternSignal(root);
 
             if (pattern.getPatternId() == null || pattern.getPatternId().isEmpty()) {
-                log.warn("Pattern has no patternId, skipping");
                 return;
             }
 
-            // Dedup by deterministic patternId: same pattern on same candle = same ID.
-            // If the producer uses deterministic IDs, identical patterns will have the same patternId.
-            if (activePatterns.containsKey(pattern.getPatternId())) {
-                log.debug("Pattern dedup: already have patternId={} for {} {} {}",
-                        pattern.getPatternId(), pattern.getScripCode(), pattern.getPatternType(), pattern.getTimeframe());
+            // Dedup by deterministic patternId
+            if (activePatterns.getIfPresent(pattern.getPatternId()) != null) {
                 return;
             }
 
-            // Secondary dedup by content key (covers legacy random UUIDs still in Kafka)
+            // Secondary dedup by content key (covers legacy random UUIDs)
             String dedupKey = pattern.getScripCode() + "|" + pattern.getPatternType()
                     + "|" + pattern.getTimeframe() + "|" + pattern.getTriggeredAt();
             if (dedupCache.getIfPresent(dedupKey) != null) {
-                log.debug("Pattern dedup: skipping duplicate {} {} {} at {}",
-                        pattern.getScripCode(), pattern.getPatternType(), pattern.getTimeframe(), pattern.getTriggeredAt());
                 return;
             }
             dedupCache.put(dedupKey, Boolean.TRUE);
 
-            // Check max limit before adding
-            if (activePatterns.size() >= MAX_ACTIVE_PATTERNS) {
-                log.debug("Active patterns limit reached ({}), skipping new pattern for {}",
-                        MAX_ACTIVE_PATTERNS, pattern.getScripCode());
-                return;
-            }
-
-            // Store pattern
+            // Store — Caffeine handles eviction automatically (TTL + LRU on overflow)
             activePatterns.put(pattern.getPatternId(), pattern);
-
-            // Per-stock list with dedup: don't add if same pattern+tf+candle already exists
-            patternsByStock.compute(pattern.getScripCode(), (k, list) -> {
-                if (list == null) {
-                    list = new CopyOnWriteArrayList<>();
-                }
-                // Check if same pattern type + timeframe + triggered time already in list
-                boolean alreadyExists = list.stream().anyMatch(existing ->
-                    Objects.equals(existing.getPatternType(), pattern.getPatternType())
-                    && Objects.equals(existing.getTimeframe(), pattern.getTimeframe())
-                    && Objects.equals(existing.getTriggeredAt(), pattern.getTriggeredAt()));
-                if (alreadyExists) return list;
-
-                // Remove old patterns if limit exceeded
-                while (list.size() >= MAX_PATTERNS_PER_STOCK) {
-                    list.remove(0);
-                }
-                list.add(pattern);
-                return list;
-            });
 
             // Update statistics
             updatePatternStats(pattern);
@@ -147,9 +167,11 @@ public class PatternSignalConsumer {
                     String.format("%s %s pattern detected for %s @ %.2f",
                             emoji, pattern.getPatternType(), pattern.getCompanyName(), pattern.getEntryPrice()));
 
-            log.info("Pattern signal processed: {} {} {} @ {}",
-                    pattern.getScripCode(), pattern.getPatternType(), pattern.getDirection(), pattern.getEntryPrice());
-
+            if (log.isDebugEnabled()) {
+                log.debug("Pattern: {} {} {} {} conf={} active={}",
+                        pattern.getScripCode(), pattern.getPatternType(), pattern.getDirection(),
+                        pattern.getTimeframe(), pattern.getConfidence(), activePatterns.estimatedSize());
+            }
         } catch (Exception e) {
             log.error("Error processing pattern signal: {}", e.getMessage(), e);
         }
@@ -159,84 +181,17 @@ public class PatternSignalConsumer {
      * Update pattern when outcome is known
      */
     public void updatePatternOutcome(String patternId, boolean isWin, double pnl) {
-        PatternSignalDTO pattern = activePatterns.remove(patternId);
+        PatternSignalDTO pattern = activePatterns.getIfPresent(patternId);
         if (pattern != null) {
+            activePatterns.invalidate(patternId);
             pattern.setStatus(isWin ? "COMPLETED_WIN" : "COMPLETED_LOSS");
             pattern.setActualPnl(pnl);
             pattern.setCompletedAt(LocalDateTime.now());
-
-            // FIX: Enforce completed patterns limit
-            if (completedPatterns.size() >= MAX_COMPLETED_PATTERNS) {
-                // Remove oldest completed pattern
-                completedPatterns.values().stream()
-                        .min(Comparator.comparing(p -> p.getCompletedAt() != null ? p.getCompletedAt() : LocalDateTime.MIN))
-                        .ifPresent(oldest -> completedPatterns.remove(oldest.getPatternId()));
-            }
             completedPatterns.put(patternId, pattern);
 
-            // Update stats
             PatternStats stats = patternStats.computeIfAbsent(pattern.getPatternType(),
                     k -> new PatternStats(pattern.getPatternType()));
             stats.recordOutcome(isWin, pnl);
-        }
-    }
-
-    /**
-     * Scheduled cleanup of expired patterns (every 5 minutes)
-     */
-    @Scheduled(fixedRate = 300000) // 5 minutes
-    public void cleanupExpiredPatterns() {
-        try {
-            LocalDateTime cutoff = LocalDateTime.now().minusHours(PATTERN_EXPIRY_HOURS);
-            int expiredCount = 0;
-
-            // Expire old active patterns
-            List<String> toExpire = new ArrayList<>();
-            for (Map.Entry<String, PatternSignalDTO> entry : activePatterns.entrySet()) {
-                PatternSignalDTO pattern = entry.getValue();
-
-                // Check if pattern has explicit expiry
-                if (pattern.getExpiresAt() != null && pattern.getExpiresAt().isBefore(LocalDateTime.now())) {
-                    toExpire.add(entry.getKey());
-                }
-                // Check if pattern is older than cutoff
-                else if (pattern.getTriggeredAt() != null && pattern.getTriggeredAt().isBefore(cutoff)) {
-                    toExpire.add(entry.getKey());
-                }
-            }
-
-            for (String patternId : toExpire) {
-                PatternSignalDTO pattern = activePatterns.remove(patternId);
-                if (pattern != null) {
-                    pattern.setStatus("EXPIRED");
-                    pattern.setCompletedAt(LocalDateTime.now());
-                    // Don't add to completed if limit reached
-                    if (completedPatterns.size() < MAX_COMPLETED_PATTERNS) {
-                        completedPatterns.put(patternId, pattern);
-                    }
-                    expiredCount++;
-                }
-            }
-
-            // Cleanup old completed patterns (keep only recent ones)
-            if (completedPatterns.size() > MAX_COMPLETED_PATTERNS) {
-                List<String> toRemove = completedPatterns.values().stream()
-                        .sorted(Comparator.comparing(p -> p.getCompletedAt() != null ? p.getCompletedAt() : LocalDateTime.MIN))
-                        .limit(completedPatterns.size() - MAX_COMPLETED_PATTERNS)
-                        .map(PatternSignalDTO::getPatternId)
-                        .collect(Collectors.toList());
-                toRemove.forEach(completedPatterns::remove);
-            }
-
-            // Cleanup patternsByStock - remove empty lists
-            patternsByStock.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-
-            if (expiredCount > 0) {
-                log.info("Pattern cleanup: expired {} patterns, active={}, completed={}",
-                        expiredCount, activePatterns.size(), completedPatterns.size());
-            }
-        } catch (Exception e) {
-            log.error("Error during pattern cleanup: {}", e.getMessage());
         }
     }
 
@@ -244,7 +199,6 @@ public class PatternSignalConsumer {
         long timestamp = root.path("timestamp").asLong(
                 root.path("triggeredAt").asLong(System.currentTimeMillis()));
 
-        // Resolve patternId: prefer patternId, fallback to id, then generate UUID
         String patternId = root.path("patternId").asText(null);
         if (patternId == null || patternId.isEmpty() || "null".equals(patternId)) {
             patternId = root.path("id").asText(null);
@@ -305,29 +259,15 @@ public class PatternSignalConsumer {
     }
 
     private LocalDateTime parseDateTime(JsonNode node) {
-        if (node.isNull() || node.isMissingNode()) {
-            return null;
-        }
+        if (node.isNull() || node.isMissingNode()) return null;
         try {
-            if (node.isTextual()) {
-                return LocalDateTime.parse(node.asText());
-            } else if (node.isNumber()) {
-                return LocalDateTime.ofInstant(
-                        Instant.ofEpochMilli(node.asLong()),
-                        ZoneId.of("Asia/Kolkata")
-                );
-            }
-        } catch (Exception e) {
-            // Ignore parse errors
-        }
+            if (node.isTextual()) return LocalDateTime.parse(node.asText());
+            else if (node.isNumber())
+                return LocalDateTime.ofInstant(Instant.ofEpochMilli(node.asLong()), ZoneId.of("Asia/Kolkata"));
+        } catch (Exception e) { /* ignore parse errors */ }
         return null;
     }
 
-    /**
-     * Returns null when field is missing or JSON null (→ "DM" on frontend).
-     * Returns 0.0 when field is explicitly 0 (→ "ERR" on frontend).
-     * Returns the actual value otherwise.
-     */
     private Double nullableDouble(JsonNode root, String field) {
         if (!root.has(field) || root.path(field).isNull()) return null;
         return root.path(field).asDouble(0);
@@ -357,43 +297,40 @@ public class PatternSignalConsumer {
 
     // ======================== REST API Support ========================
 
-    /**
-     * Clear all active patterns, completed patterns, per-stock lists, and dedup cache.
-     * Returns the count of active patterns that were cleared.
-     */
     public int clearAllPatterns() {
-        int cleared = activePatterns.size();
-        activePatterns.clear();
-        completedPatterns.clear();
-        patternsByStock.clear();
+        long cleared = activePatterns.estimatedSize();
+        activePatterns.invalidateAll();
+        completedPatterns.invalidateAll();
         patternStats.clear();
         dedupCache.invalidateAll();
-        log.info("Cleared all patterns: {} active, stats, and dedup cache reset", cleared);
-        return cleared;
+        log.info("Cleared all patterns: ~{} active, stats, and dedup cache reset", cleared);
+        return (int) cleared;
     }
 
     public List<PatternSignalDTO> getActivePatterns() {
-        return new ArrayList<>(activePatterns.values());
+        activePatterns.cleanUp(); // force eviction of expired entries before returning
+        return new ArrayList<>(activePatterns.asMap().values());
     }
 
     public List<PatternSignalDTO> getActivePatternsForStock(String scripCode) {
-        return activePatterns.values().stream()
+        activePatterns.cleanUp();
+        return activePatterns.asMap().values().stream()
                 .filter(p -> scripCode.equals(p.getScripCode()))
                 .collect(Collectors.toList());
     }
 
     public List<PatternSignalDTO> getCompletedPatterns(int limit) {
-        return completedPatterns.values().stream()
-                .sorted(Comparator.comparing(PatternSignalDTO::getCompletedAt).reversed())
+        return completedPatterns.asMap().values().stream()
+                .sorted(Comparator.comparing(
+                        (PatternSignalDTO p) -> p.getCompletedAt() != null ? p.getCompletedAt() : LocalDateTime.MIN)
+                        .reversed())
                 .limit(limit)
                 .collect(Collectors.toList());
     }
 
     public PatternSignalDTO getPattern(String patternId) {
-        PatternSignalDTO pattern = activePatterns.get(patternId);
-        if (pattern == null) {
-            pattern = completedPatterns.get(patternId);
-        }
+        PatternSignalDTO pattern = activePatterns.getIfPresent(patternId);
+        if (pattern == null) pattern = completedPatterns.getIfPresent(patternId);
         return pattern;
     }
 
@@ -402,20 +339,21 @@ public class PatternSignalConsumer {
     }
 
     public PatternSummary getPatternSummary() {
-        int totalActive = activePatterns.size();
-        int totalCompleted = completedPatterns.size();
+        activePatterns.cleanUp();
+        int totalActive = (int) activePatterns.estimatedSize();
+        int totalCompleted = (int) completedPatterns.estimatedSize();
 
-        long wins = completedPatterns.values().stream()
+        long wins = completedPatterns.asMap().values().stream()
                 .filter(p -> "COMPLETED_WIN".equals(p.getStatus()))
                 .count();
 
-        double totalPnl = completedPatterns.values().stream()
+        double totalPnl = completedPatterns.asMap().values().stream()
                 .mapToDouble(p -> p.getActualPnl() != null ? p.getActualPnl() : 0)
                 .sum();
 
         double winRate = totalCompleted > 0 ? (double) wins / totalCompleted : 0;
 
-        Map<String, Long> byType = activePatterns.values().stream()
+        Map<String, Long> byType = activePatterns.asMap().values().stream()
                 .collect(Collectors.groupingBy(PatternSignalDTO::getPatternType, Collectors.counting()));
 
         return PatternSummary.builder()

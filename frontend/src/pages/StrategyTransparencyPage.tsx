@@ -3,7 +3,7 @@ import {
   RefreshCw, Filter, Activity, Eye, Target, BarChart2,
   Zap, CheckCircle2, Volume2, TrendingUp
 } from 'lucide-react';
-import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent } from '../components/Strategy';
+import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent, McxBbTabContent, McxBbt1TabContent } from '../components/Strategy';
 import {
   InstrumentStateSnapshot,
   StrategyOpportunity,
@@ -12,7 +12,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere' | 'quant';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere' | 'quant' | 'mcxbb' | 'mcxbbt1';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -144,6 +144,8 @@ export const StrategyTransparencyPage: React.FC = () => {
               { id: 'quant' as TabType, label: 'QUANT', shortLabel: 'QUANT', icon: BarChart2, accent: 'text-sky-400' },
               { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
               { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
+              { id: 'mcxbb' as TabType, label: 'MCX-BB', shortLabel: 'MCX-BB', icon: TrendingUp, accent: 'text-emerald-400' },
+              { id: 'mcxbbt1' as TabType, label: 'MCX-BBT+1', shortLabel: 'BBT+1', icon: TrendingUp, accent: 'text-cyan-400' },
               { id: 'overview' as TabType, label: 'Overview', shortLabel: 'Overview', icon: BarChart2 },
             ].map(tab => (
               <button
@@ -207,6 +209,14 @@ export const StrategyTransparencyPage: React.FC = () => {
 
         {activeTab === 'mere' && (
           <MereTabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'mcxbb' && (
+          <McxBbTabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'mcxbbt1' && (
+          <McxBbt1TabContent autoRefresh={autoRefresh} />
         )}
       </div>
     </div>

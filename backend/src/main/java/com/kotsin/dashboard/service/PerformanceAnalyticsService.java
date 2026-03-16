@@ -36,14 +36,17 @@ import java.util.stream.Collectors;
 public class PerformanceAnalyticsService {
 
     private final MongoTemplate mongoTemplate;
+    private final com.kotsin.dashboard.websocket.WebSocketSessionManager sessionManager;
 
     // Trade storage for analytics
     private final Map<String, TradeDTO> allTrades = new ConcurrentHashMap<>();
     private volatile PerformanceMetrics cachedMetrics;
     private volatile long lastCalculation = 0;
 
-    public PerformanceAnalyticsService(MongoTemplate mongoTemplate) {
+    public PerformanceAnalyticsService(MongoTemplate mongoTemplate,
+                                        com.kotsin.dashboard.websocket.WebSocketSessionManager sessionManager) {
         this.mongoTemplate = mongoTemplate;
+        this.sessionManager = sessionManager;
     }
 
     // ======================== STARTUP DATA LOADING ========================
@@ -807,6 +810,32 @@ public class PerformanceAnalyticsService {
             log.debug("[PERF] Refreshing performance metrics...");
             cachedMetrics = calculateMetrics();
             lastCalculation = System.currentTimeMillis();
+        }
+    }
+
+    /**
+     * End-of-day trade data refresh — 23:56 IST every trading day (Mon-Fri).
+     * Reloads all trades from MongoDB and broadcasts a refresh event so
+     * connected dashboards update their trades page with final daily data.
+     */
+    @Scheduled(cron = "0 56 23 * * MON-FRI", zone = "Asia/Kolkata")
+    public void endOfDayTradeRefresh() {
+        log.info("[PERF] EOD trade refresh triggered at 23:56 IST — reloading all trades from MongoDB");
+        try {
+            loadTradesFromMongoDB();
+            cachedMetrics = calculateMetrics();
+            lastCalculation = System.currentTimeMillis();
+            // Broadcast refresh event to all connected dashboard clients
+            sessionManager.broadcastNotification("TRADE_REFRESH",
+                    "End-of-day trade data refreshed at 23:56 IST");
+            // Also broadcast an empty trade update to trigger frontend re-fetch
+            sessionManager.broadcastTradeUpdate(java.util.Map.of(
+                    "type", "EOD_REFRESH",
+                    "timestamp", System.currentTimeMillis()
+            ));
+            log.info("[PERF] EOD trade refresh complete — {} trades loaded", allTrades.size());
+        } catch (Exception e) {
+            log.error("[PERF] EOD trade refresh failed", e);
         }
     }
 

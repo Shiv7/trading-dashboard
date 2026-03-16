@@ -70,6 +70,15 @@ public class PositionDTO {
     private String exitReason;      // T1-OP, T2-EQ, SL-OP, EOD, MANUAL_CLOSE, etc.
     private Double equityLtp;       // Current equity/futures LTP for dual display
 
+    // Transaction charges (Zerodha round-trip: brokerage+STT+txn+GST+SEBI+stamp)
+    private Double totalCharges;
+    private Double chargesBrokerage;
+    private Double chargesStt;
+    private Double chargesExchange;
+    private Double chargesGst;
+    private Double chargesSebi;
+    private Double chargesStamp;
+
     // Exit history: per-target exit events [{level, lots, qty, price, timestamp, source}]
     private java.util.List<java.util.Map<String, Object>> exitHistory;
 }

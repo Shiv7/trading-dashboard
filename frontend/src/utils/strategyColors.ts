@@ -7,7 +7,7 @@
  *   MICROALPHA = purple, MERE = rose, QUANT = cyan, MANUAL = slate
  */
 
-export type StrategyKey = 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'PIVOT_CONFLUENCE' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'MANUAL'
+export type StrategyKey = 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'PIVOT_CONFLUENCE' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'MCX_BB' | 'MCX_BBT1' | 'MANUAL'
 export type StrategyFilter = 'ALL' | StrategyKey
 
 export interface StrategyColorSet {
@@ -29,6 +29,8 @@ export const STRATEGY_COLORS: Record<string, StrategyColorSet> = {
   MICROALPHA:       { border: 'border-purple-500/40', bg: 'bg-purple-500/10', text: 'text-purple-400', accent: 'from-purple-500 to-purple-600', badgeBg: 'bg-purple-500/15', badgeText: 'text-purple-400', badgeBorder: 'border-purple-500/30' },
   MERE:             { border: 'border-rose-500/40',   bg: 'bg-rose-500/10',   text: 'text-rose-400',   accent: 'from-rose-500 to-rose-600',   badgeBg: 'bg-rose-500/15',   badgeText: 'text-rose-400',   badgeBorder: 'border-rose-500/30' },
   QUANT:            { border: 'border-cyan-500/40',   bg: 'bg-cyan-500/10',   text: 'text-cyan-400',   accent: 'from-cyan-500 to-cyan-600',   badgeBg: 'bg-cyan-500/15',   badgeText: 'text-cyan-400',   badgeBorder: 'border-cyan-500/30' },
+  MCX_BB:           { border: 'border-emerald-500/40', bg: 'bg-emerald-500/10', text: 'text-emerald-400', accent: 'from-emerald-500 to-emerald-600', badgeBg: 'bg-emerald-500/15', badgeText: 'text-emerald-400', badgeBorder: 'border-emerald-500/30' },
+  MCX_BBT1:         { border: 'border-cyan-500/40',    bg: 'bg-cyan-500/10',    text: 'text-cyan-400',    accent: 'from-cyan-500 to-teal-600',    badgeBg: 'bg-cyan-500/15',    badgeText: 'text-cyan-400',    badgeBorder: 'border-cyan-500/30' },
   MANUAL:           { border: 'border-slate-500/40',  bg: 'bg-slate-500/10',  text: 'text-slate-400',  accent: 'from-slate-500 to-slate-600',  badgeBg: 'bg-slate-500/15',  badgeText: 'text-slate-400',  badgeBorder: 'border-slate-500/30' },
 }
 
@@ -61,4 +63,6 @@ export const STRATEGY_FILTER_OPTIONS: { value: StrategyFilter; label: string; co
   { value: 'MICROALPHA',  label: 'MICRO',      color: `${STRATEGY_COLORS.MICROALPHA.badgeBg} ${STRATEGY_COLORS.MICROALPHA.badgeText} border ${STRATEGY_COLORS.MICROALPHA.badgeBorder}` },
   { value: 'MERE',        label: 'MERE',       color: `${STRATEGY_COLORS.MERE.badgeBg} ${STRATEGY_COLORS.MERE.badgeText} border ${STRATEGY_COLORS.MERE.badgeBorder}` },
   { value: 'QUANT',       label: 'QUANT',      color: `${STRATEGY_COLORS.QUANT.badgeBg} ${STRATEGY_COLORS.QUANT.badgeText} border ${STRATEGY_COLORS.QUANT.badgeBorder}` },
+  { value: 'MCX_BB',     label: 'MCX-BB',     color: `${STRATEGY_COLORS.MCX_BB.badgeBg} ${STRATEGY_COLORS.MCX_BB.badgeText} border ${STRATEGY_COLORS.MCX_BB.badgeBorder}` },
+  { value: 'MCX_BBT1',  label: 'MCX-BBT+1',  color: `${STRATEGY_COLORS.MCX_BBT1.badgeBg} ${STRATEGY_COLORS.MCX_BBT1.badgeText} border ${STRATEGY_COLORS.MCX_BBT1.badgeBorder}` },
 ]

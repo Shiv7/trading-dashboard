@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 @Slf4j
-public class FUDKOIConsumer {
+public class FUDKOIConsumer implements OptionSwapAware {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
@@ -464,5 +464,37 @@ public class FUDKOIConsumer {
 
     public int getTodaySignalHistoryCount() {
         return todaySignalHistory.size();
+    }
+
+    @Override
+    public void updateTradedOption(String underlyingScripCode, String strategy,
+                                   String newScripCode, String newSymbol,
+                                   double newStrike, double newLtp, String optionType) {
+        if (!"FUDKOI".equals(strategy)) return;
+
+        Map<String, Object> signal = latestFUDKOI.get(underlyingScripCode);
+        if (signal != null) {
+            signal.put("optionAvailable", true);
+            signal.put("optionPendingSwap", false);
+            signal.put("optionScripCode", newScripCode);
+            signal.put("optionSymbol", newSymbol);
+            signal.put("optionStrike", newStrike);
+            signal.put("optionLtp", newLtp);
+            signal.put("optionType", optionType);
+            log.info("FUDKOI option swap applied to cached signal: scrip={} -> {}@{} strike={}",
+                    underlyingScripCode, newSymbol, newLtp, newStrike);
+            sessionManager.broadcastFUDKOI(underlyingScripCode, signal);
+        }
+
+        Map<String, Object> trigger = activeTriggers.getIfPresent(underlyingScripCode);
+        if (trigger != null) {
+            trigger.put("optionAvailable", true);
+            trigger.put("optionPendingSwap", false);
+            trigger.put("optionScripCode", newScripCode);
+            trigger.put("optionSymbol", newSymbol);
+            trigger.put("optionStrike", newStrike);
+            trigger.put("optionLtp", newLtp);
+            trigger.put("optionType", optionType);
+        }
     }
 }

@@ -217,6 +217,7 @@ public class TradeOutcomeConsumer {
                 .pnl(pnl)
                 .pnlPercent(pnlPercent)
                 .rMultiple(rMultiple)
+                .totalCharges(root.path("totalCharges").asDouble(0))
                 .durationMinutes(durationMinutes)
                 .strategy(strategy)
                 .build();
@@ -327,7 +328,8 @@ public class TradeOutcomeConsumer {
                     .append("oiChangePercent", optionalJsonDouble(root, "oiChangePercent"))
                     .append("blockDealPercent", optionalJsonDouble(root, "blockDealPercent"))
                     .append("riskReward", optionalJsonDouble(root, "riskReward"))
-                    .append("executionMode", root.path("executionMode").asText(null));
+                    .append("executionMode", root.path("executionMode").asText(null))
+                    .append("totalCharges", root.path("totalCharges").asDouble(0));
 
             // Store times as Date objects for MongoDB queries
             if (trade.getEntryTime() != null) {

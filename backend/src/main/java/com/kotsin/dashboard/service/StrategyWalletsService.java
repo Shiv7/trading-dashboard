@@ -63,6 +63,21 @@ public class StrategyWalletsService {
 
                     double pnlPercent = initialCapital > 0 ? totalPnl / initialCapital * 100 : 0;
 
+                    double peakBalance = getNumericValue(wallet, "peakBalance", 0);
+                    double maxDrawdown = getNumericValue(wallet, "maxDrawdown", 0);
+                    double maxDailyLoss = getNumericValue(wallet, "maxDailyLoss", 0);
+                    double maxDrawdownPercent = getNumericValue(wallet, "maxDrawdownPercent", 0);
+                    double maxDailyLossPercent = initialCapital > 0 ? maxDailyLoss / initialCapital * 100 : 0;
+                    double profitFactor = getNumericValue(wallet, "profitFactor", 0);
+                    double avgWin = getNumericValue(wallet, "avgWin", 0);
+                    double avgLoss = getNumericValue(wallet, "avgLoss", 0);
+                    String circuitBreakerReason = wallet.get("circuitBreakerReason") != null
+                            ? wallet.get("circuitBreakerReason").toString() : null;
+                    int dayTradeCount = getIntValue(wallet, "dayTradeCount", 0);
+                    int dayWinCount = getIntValue(wallet, "dayWinCount", 0);
+                    int dayLossCount = getIntValue(wallet, "dayLossCount", 0);
+                    int maxOpenPositions = getIntValue(wallet, "maxOpenPositions", 0);
+
                     result.add(StrategyWalletDTO.StrategySummary.builder()
                             .strategy(key)
                             .displayName(DISPLAY_NAMES.getOrDefault(key, key))
@@ -78,6 +93,20 @@ public class StrategyWalletsService {
                             .usedMargin(round2(usedMargin))
                             .dayPnl(round2(dayPnl))
                             .circuitBreakerTripped(circuitBreakerTripped)
+                            .peakBalance(round2(peakBalance))
+                            .maxDrawdown(round2(maxDrawdown))
+                            .maxDailyLoss(round2(maxDailyLoss))
+                            .maxDrawdownPercent(round2(maxDrawdownPercent))
+                            .maxDailyLossPercent(round2(maxDailyLossPercent))
+                            .profitFactor(round2(profitFactor))
+                            .avgWin(round2(avgWin))
+                            .avgLoss(round2(avgLoss))
+                            .circuitBreakerReason(circuitBreakerReason)
+                            .unrealizedPnl(round2(unrealizedPnl))
+                            .dayTradeCount(dayTradeCount)
+                            .dayWinCount(dayWinCount)
+                            .dayLossCount(dayLossCount)
+                            .maxOpenPositions(maxOpenPositions)
                             .build());
                 } else {
                     // Wallet not yet created in Redis — show empty wallet
@@ -172,9 +201,14 @@ public class StrategyWalletsService {
     // ─────────────────────────────────────────────
     //  Weekly trades with filters + active positions
     // ─────────────────────────────────────────────
-    public List<StrategyWalletDTO.StrategyTrade> getWeeklyTrades(
+    /**
+     * Get trades with flexible time range.
+     * @param from  epoch millis start (inclusive), null = all time
+     * @param to    epoch millis end (inclusive), null = now
+     */
+    public List<StrategyWalletDTO.StrategyTrade> getTrades(
             String strategy, String direction, String exchange,
-            String sortBy, int limit) {
+            String sortBy, int limit, Long from, Long to) {
 
         List<StrategyWalletDTO.StrategyTrade> trades = new ArrayList<>();
 
@@ -202,13 +236,19 @@ public class StrategyWalletsService {
             log.error("Error fetching active positions for trades: {}", e.getMessage());
         }
 
-        // 2. Closed trades from MongoDB
+        // 2. Closed trades from MongoDB with time range
         try {
-            LocalDate today = LocalDate.now(IST);
-            LocalDate monday = today.with(DayOfWeek.MONDAY);
-            Instant weekStart = monday.atStartOfDay(IST).toInstant();
+            Document timeFilter = new Document();
+            if (from != null) {
+                timeFilter.append("$gte", new Date(from));
+            }
+            if (to != null) {
+                timeFilter.append("$lte", new Date(to));
+            }
 
-            Document query = new Document("exitTime", new Document("$gte", Date.from(weekStart)));
+            Document query = timeFilter.isEmpty()
+                    ? new Document()
+                    : new Document("exitTime", timeFilter);
 
             String mongoSortField = "exitTime";
             int sortDir = -1;
@@ -219,7 +259,7 @@ public class StrategyWalletsService {
             mongoTemplate.getCollection("trade_outcomes")
                     .find(query)
                     .sort(new Document(mongoSortField, sortDir))
-                    .limit(Math.min(limit, 1000))
+                    .limit(Math.min(limit, 5000))
                     .forEach(doc -> {
                         StrategyWalletDTO.StrategyTrade trade = parseTrade(doc);
                         if (trade == null) return;
@@ -237,7 +277,7 @@ public class StrategyWalletsService {
                         trades.add(trade);
                     });
         } catch (Exception e) {
-            log.error("Error fetching weekly strategy trades: {}", e.getMessage());
+            log.error("Error fetching strategy trades: {}", e.getMessage());
         }
 
         return trades;
@@ -509,6 +549,7 @@ public class StrategyWalletsService {
                     .confidence(getMetricDoubleFromDoc(doc, "confidence"))
                     .durationMinutes(doc.get("durationMinutes") instanceof Number
                             ? ((Number) doc.get("durationMinutes")).longValue() : null)
+                    .totalCharges(getMetricDoubleFromDoc(doc, "totalCharges"))
                     // Signal-level metrics
                     .atr(getMetricDoubleFromDoc(doc, "atr"))
                     .volumeSurge(getMetricDoubleFromDoc(doc, "volumeSurge"))

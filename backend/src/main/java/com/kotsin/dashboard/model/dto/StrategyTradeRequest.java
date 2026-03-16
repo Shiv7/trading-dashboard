@@ -51,6 +51,7 @@ public class StrategyTradeRequest {
     private double delta;                // computed delta used for mapping
     private String optionType;           // CE / PE / null for futures
     private double strike;               // option strike / 0 for futures
+    private String optionExpiry;         // option expiry date string (e.g. "2026-03-12")
 
     // Strategy metadata
     private String strategy;             // FUDKII / FUKAA / PIVOT_CONFLUENCE / MICROALPHA
@@ -58,4 +59,27 @@ public class StrategyTradeRequest {
     private String direction;            // BULLISH / BEARISH
     private double confidence;           // signal confidence %
     private String executionMode;        // "AUTO" (signal-driven) or "MANUAL" (user CTA click)
+
+    // ========== Greek Enrichment (from Streaming Candle via Trade Execution) ==========
+    // When greekEnriched=true, SL/T1-T4 are authoritative from Black-Scholes Greeks.
+    // Dashboard should use them directly — DO NOT override with computeSmartTargets().
+    private boolean greekEnriched;
+    private double greekDelta;
+    private double greekGamma;
+    private double greekTheta;
+    private double greekVega;
+    private double greekIV;
+    private int greekDte;
+    private String greekMoneynessType;
+    private boolean greekThetaImpaired;
+    private String greekSlMethod;
+    private double greekGammaBoost;
+    private double optionRR;
+    private String lotAllocation;        // e.g. "40,30,20,10" or "100,0,0,0" (theta impaired)
+    // Cross-instrument futures SL/targets
+    private double futuresSL;
+    private double futuresT1;
+    private double futuresT2;
+    private double futuresT3;
+    private double futuresT4;
 }

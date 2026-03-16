@@ -8,6 +8,8 @@ import com.kotsin.dashboard.kafka.FUKAAConsumer;
 import com.kotsin.dashboard.kafka.MereConsumer;
 import com.kotsin.dashboard.kafka.MicroAlphaConsumer;
 import com.kotsin.dashboard.kafka.PivotConfluenceConsumer;
+import com.kotsin.dashboard.kafka.McxBbConsumer;
+import com.kotsin.dashboard.kafka.McxBbt1Consumer;
 import com.kotsin.dashboard.kafka.StrategyOpportunityConsumer;
 import com.kotsin.dashboard.kafka.StrategyStateConsumer;
 import com.kotsin.dashboard.kafka.TradingSignalConsumer;
@@ -51,6 +53,8 @@ public class StrategyStateController {
     private final MereConsumer mereConsumer;
     private final PivotConfluenceConsumer pivotConfluenceConsumer;
     private final MicroAlphaConsumer microAlphaConsumer;
+    private final McxBbConsumer mcxBbConsumer;
+    private final McxBbt1Consumer mcxBbt1Consumer;
     private final TradingSignalService tradingSignalService;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
@@ -857,5 +861,33 @@ public class StrategyStateController {
                 set.add(Math.round(val * 100.0) / 100.0);
             }
         }
+    }
+
+    // ==================== MCX-BB STRATEGY ENDPOINTS ====================
+
+    @GetMapping("/mcxbb/triggers")
+    public ResponseEntity<List<Map<String, Object>>> getMcxBbTriggers() {
+        List<Map<String, Object>> triggers = new ArrayList<>(mcxBbConsumer.getActiveTriggers().values());
+        log.debug("[API] GET /strategy-state/mcxbb/triggers | {} triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/mcxbb/latest")
+    public ResponseEntity<Map<String, Map<String, Object>>> getMcxBbLatest() {
+        return ResponseEntity.ok(mcxBbConsumer.getLatestMcxBb());
+    }
+
+    // ==================== MCX-BBT+1 STRATEGY ENDPOINTS ====================
+
+    @GetMapping("/mcxbbt1/triggers")
+    public ResponseEntity<List<Map<String, Object>>> getMcxBbt1Triggers() {
+        List<Map<String, Object>> triggers = new ArrayList<>(mcxBbt1Consumer.getActiveTriggers().values());
+        log.debug("[API] GET /strategy-state/mcxbbt1/triggers | {} triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/mcxbbt1/latest")
+    public ResponseEntity<Map<String, Map<String, Object>>> getMcxBbt1Latest() {
+        return ResponseEntity.ok(mcxBbt1Consumer.getLatestMcxBbt1());
     }
 }

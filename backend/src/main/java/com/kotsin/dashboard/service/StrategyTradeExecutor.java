@@ -64,6 +64,9 @@ public class StrategyTradeExecutor {
     @Autowired
     private OptionTickPriceService tickPriceService;
 
+    @Autowired
+    private TransactionCostService transactionCostService;
+
     @Value("${kafka.topics.trade-outcomes:trade-outcomes}")
     private String tradeOutcomesTopic;
 
@@ -93,28 +96,46 @@ public class StrategyTradeExecutor {
             req.setLots(correctedQty / req.getLotSize());
         }
 
-        // 0. Compute smart confluence-scored targets (replaces static delta-adjusted levels)
+        // 0. Use Greek-enriched targets from Streaming Candle when available.
+        // Greek targets are authoritative (Black-Scholes delta/gamma/IV-based) — DO NOT override.
+        // Only fall back to computeSmartTargets() for legacy signals without Greek enrichment.
         double optT1 = req.getT1(), optT2 = req.getT2(), optT3 = req.getT3(), optT4 = req.getT4();
         double optSl = req.getSl();
         boolean smartTargetsApplied = false;
-        try {
-            double[] smart = computeSmartTargets(req);
-            if (smart != null) {
-                if (smart[0] > 0) optT1 = smart[0];
-                if (smart[1] > 0) optT2 = smart[1];
-                if (smart[2] > 0) optT3 = smart[2];
-                if (smart[3] > 0) optT4 = smart[3];
-                if (smart[4] > 0) optSl = smart[4];
-                smartTargetsApplied = true;
-                log.info("{} SMART TARGETS applied for {}: T1={} T2={} T3={} T4={} SL={} " +
-                    "(was: T1={} T2={} T3={} T4={} SL={})",
-                    LOG_PREFIX, req.getInstrumentSymbol(),
-                    fmt(optT1), fmt(optT2), fmt(optT3), fmt(optT4), fmt(optSl),
-                    fmt(req.getT1()), fmt(req.getT2()), fmt(req.getT3()), fmt(req.getT4()), fmt(req.getSl()));
+
+        if (req.isGreekEnriched()) {
+            // Streaming Candle computed these via Black-Scholes — trust them as-is
+            log.info("{} GREEK TARGETS (authoritative) for {}: T1={} T2={} T3={} T4={} SL={} " +
+                "delta={} IV={}% DTE={} method={} RR={} thetaImpaired={}",
+                LOG_PREFIX, req.getInstrumentSymbol(),
+                fmt(optT1), fmt(optT2), fmt(optT3), fmt(optT4), fmt(optSl),
+                String.format("%.3f", req.getGreekDelta()),
+                String.format("%.1f", req.getGreekIV()),
+                req.getGreekDte(), req.getGreekSlMethod(),
+                String.format("%.2f", req.getOptionRR()),
+                req.isGreekThetaImpaired());
+            smartTargetsApplied = true;  // Mark as "smart" for position display
+        } else {
+            // Legacy path: compute smart targets for signals without Greek enrichment
+            try {
+                double[] smart = computeSmartTargets(req);
+                if (smart != null) {
+                    if (smart[0] > 0) optT1 = smart[0];
+                    if (smart[1] > 0) optT2 = smart[1];
+                    if (smart[2] > 0) optT3 = smart[2];
+                    if (smart[3] > 0) optT4 = smart[3];
+                    if (smart[4] > 0) optSl = smart[4];
+                    smartTargetsApplied = true;
+                    log.info("{} SMART TARGETS (legacy) applied for {}: T1={} T2={} T3={} T4={} SL={} " +
+                        "(was: T1={} T2={} T3={} T4={} SL={})",
+                        LOG_PREFIX, req.getInstrumentSymbol(),
+                        fmt(optT1), fmt(optT2), fmt(optT3), fmt(optT4), fmt(optSl),
+                        fmt(req.getT1()), fmt(req.getT2()), fmt(req.getT3()), fmt(req.getT4()), fmt(req.getSl()));
+                }
+            } catch (Exception e) {
+                log.warn("{} Smart target computation failed, using signal targets: {}",
+                    LOG_PREFIX, e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("{} Smart target computation failed, using signal targets: {}",
-                LOG_PREFIX, e.getMessage());
         }
 
         // 1. Write position to Redis (standard format WalletService reads)
@@ -161,6 +182,7 @@ public class StrategyTradeExecutor {
         position.put("slHit", false);
         position.put("instrumentType", req.getInstrumentType());
         position.put("optionType", req.getOptionType());  // CE / PE / null
+        position.put("optionExpiry", req.getOptionExpiry());  // expiry date string
         position.put("delta", req.getDelta());
         position.put("instrumentSymbol", req.getInstrumentSymbol());
         position.put("underlyingScripCode", req.getUnderlyingScripCode());
@@ -189,11 +211,32 @@ public class StrategyTradeExecutor {
         targets.put("currentSl", optSl);
 
         // Pre-compute lot-aligned close quantities using largest-remainder method
+        // Use Streaming Candle's theta-aware allocation when available (e.g. "100,0,0,0" for theta-impaired)
         int totalLots = req.getQuantity() / Math.max(req.getLotSize(), 1);
-        int[] lotAlloc = allocateLots(totalLots, new int[]{40, 30, 20, 10});
+        int[] lotPercentages = new int[]{40, 30, 20, 10}; // default
+        if (req.getLotAllocation() != null && !req.getLotAllocation().isEmpty()) {
+            try {
+                String[] parts = req.getLotAllocation().split(",");
+                if (parts.length == 4) {
+                    lotPercentages = new int[]{
+                        Integer.parseInt(parts[0].trim()),
+                        Integer.parseInt(parts[1].trim()),
+                        Integer.parseInt(parts[2].trim()),
+                        Integer.parseInt(parts[3].trim())
+                    };
+                    log.info("{} Using signal lotAllocation: {} (greekEnriched={})",
+                        LOG_PREFIX, req.getLotAllocation(), req.isGreekEnriched());
+                }
+            } catch (NumberFormatException e) {
+                log.warn("{} Invalid lotAllocation '{}', using default 40/30/20/10",
+                    LOG_PREFIX, req.getLotAllocation());
+            }
+        }
+        int[] lotAlloc = allocateLots(totalLots, lotPercentages);
         int lotSize = Math.max(req.getLotSize(), 1);
-        log.info("{} Lot allocation for {} lots: T1={} T2={} T3={} T4={}",
-            LOG_PREFIX, totalLots, lotAlloc[0], lotAlloc[1], lotAlloc[2], lotAlloc[3]);
+        log.info("{} Lot allocation for {} lots: T1={} T2={} T3={} T4={} (pcts={})",
+            LOG_PREFIX, totalLots, lotAlloc[0], lotAlloc[1], lotAlloc[2], lotAlloc[3],
+            java.util.Arrays.toString(lotPercentages));
 
         List<Map<String, Object>> targetLevels = new ArrayList<>();
         addTarget(targetLevels, "T1", optT1, lotAlloc[0] * lotSize);
@@ -212,6 +255,8 @@ public class StrategyTradeExecutor {
         targets.put("lots", req.getLots());
         targets.put("instrumentType", req.getInstrumentType());
         targets.put("optionType", req.getOptionType());  // CE / PE / null
+        targets.put("optionExpiry", req.getOptionExpiry());  // expiry date for theta decay trailing
+        targets.put("strike", req.getStrike());  // option strike for OTM detection
         targets.put("openedAt", now);
         // Dual monitoring metadata
         targets.put("underlyingScripCode", req.getUnderlyingScripCode());
@@ -225,6 +270,26 @@ public class StrategyTradeExecutor {
         targets.put("equityT2", req.getEquityT2());
         targets.put("equityT3", req.getEquityT3());
         targets.put("equityT4", req.getEquityT4());
+        // Greek enrichment metadata (for theta-aware trailing SL and monitoring)
+        if (req.isGreekEnriched()) {
+            targets.put("greekEnriched", true);
+            targets.put("greekDelta", req.getGreekDelta());
+            targets.put("greekGamma", req.getGreekGamma());
+            targets.put("greekTheta", req.getGreekTheta());
+            targets.put("greekIV", req.getGreekIV());
+            targets.put("greekDte", req.getGreekDte());
+            targets.put("greekMoneynessType", req.getGreekMoneynessType());
+            targets.put("greekThetaImpaired", req.isGreekThetaImpaired());
+            targets.put("optionRR", req.getOptionRR());
+            // Cross-instrument futures SL/targets
+            if (req.getFuturesSL() > 0) {
+                targets.put("futuresSL", req.getFuturesSL());
+                targets.put("futuresT1", req.getFuturesT1());
+                targets.put("futuresT2", req.getFuturesT2());
+                targets.put("futuresT3", req.getFuturesT3());
+                targets.put("futuresT4", req.getFuturesT4());
+            }
+        }
 
         try {
             String targetsJson = objectMapper.writeValueAsString(targets);
@@ -236,9 +301,10 @@ public class StrategyTradeExecutor {
 
         // 3. Ensure the option contract is subscribed on the broker WebSocket
         // This guarantees TickAggregator receives ticks and caches price to Redis in real-time
-        // MCX uses ExchType "D" for both options AND futures; only NSE futures use "U"
+        // MCX uses ExchType "D" for commodity derivatives; CDS uses "C" for currency
         String exch = req.getExchange() != null ? req.getExchange() : "N";
-        String exchType = "M".equals(exch) || "C".equals(exch) ? "D"
+        String exchType = "M".equals(exch) ? "D"
+            : "C".equals(exch) ? "C"
             : ("FUTURES".equals(req.getInstrumentType()) ? "U" : "D");
         tickPriceService.ensureSubscribed(exch, exchType, scripCode, req.getInstrumentSymbol());
         tickPriceService.ensureOiSubscribed(exch, exchType, scripCode, req.getInstrumentSymbol());
@@ -918,9 +984,28 @@ public class StrategyTradeExecutor {
                 remainingQty -= closeQty;
                 targets.put("remainingQty", remainingQty);
 
-                double tranchePnl = isShortFutures
+                double grossTranchePnl = isShortFutures
                     ? (entryPrice - optionLtp) * closeQty
                     : (optionLtp - entryPrice) * closeQty;
+
+                // Calculate Zerodha charges for this tranche
+                double trancheCharges = 0.0;
+                java.util.Map<String, Double> trancheBreakdown = java.util.Collections.emptyMap();
+                try {
+                    String trExch = (String) targets.getOrDefault("exchange", "N");
+                    String trInstr = (String) targets.getOrDefault("instrumentType", "OPTION");
+                    TransactionCostService.TradeType tradeType = TransactionCostService.resolveTradeType(trExch, trInstr);
+                    String normExch = TransactionCostService.normalizeExchange(trExch);
+                    trancheBreakdown = transactionCostService.calculateRoundTripBreakdown(
+                            tradeType, entryPrice, optionLtp, closeQty, normExch);
+                    trancheCharges = trancheBreakdown.getOrDefault("total", 0.0);
+                    // Accumulate breakdown into position
+                    accumulateChargeBreakdown(scripCode, trancheBreakdown);
+                } catch (Exception chargeEx) {
+                    log.warn("{} CHARGES_CALC_ERROR partial scrip={} err={}", LOG_PREFIX, scripCode, chargeEx.getMessage());
+                }
+                double tranchePnl = grossTranchePnl - trancheCharges;
+
                 int lots = closeQty / Math.max(lotSize, 1);
 
                 // Record exit history entry
@@ -929,9 +1014,9 @@ public class StrategyTradeExecutor {
                 updateTargetHit(scripCode, level, remainingQty, tranchePnl, hitSource);
 
                 publishTradeOutcome(targets, scripCode, optionLtp, closeQty,
-                    hitSource, tranchePnl, remainingQty == 0);
+                    hitSource, tranchePnl, trancheCharges, remainingQty == 0);
 
-                // Credit tranche PnL + release proportional margin in strategy wallet
+                // Credit tranche NET PnL + release proportional margin in strategy wallet
                 String trancheStrategy = (String) targets.get("strategy");
                 double trancheMarginRelease = entryPrice * closeQty;
                 boolean trancheWalletOk = updateStrategyWallet(trancheStrategy, tranchePnl, trancheMarginRelease, scripCode, hitSource);
@@ -947,7 +1032,17 @@ public class StrategyTradeExecutor {
         }
 
         // Update trailing stop after any target hit (with 1% buffer confirmation)
-        if (anyTargetHit) {
+        // For OPTION trades: also update on every tick after T2 hit (DTE/time factors change)
+        boolean hasT2Hit = false;
+        if ("OPTION".equals(instrumentType)) {
+            for (Map<String, Object> t : targetLevels) {
+                if ("T2".equals(t.get("level")) && Boolean.TRUE.equals(t.get("hit"))) {
+                    hasT2Hit = true;
+                    break;
+                }
+            }
+        }
+        if (anyTargetHit || hasT2Hit) {
             updateTrailingSl(targets, targetLevels, optionLtp, entryPrice);
         }
 
@@ -999,20 +1094,50 @@ public class StrategyTradeExecutor {
     /**
      * Update trailing SL based on targets hit with 1% buffer confirmation.
      *
-     * After T1 hit: SL = T1 price, but ONLY once option LTP >= T1 * 1.01
-     * After T2 hit: SL = T2 price, but ONLY once option LTP >= T2 * 1.01
-     * After T3 hit: SL = T3 price, but ONLY once option LTP >= T3 * 1.01
-     *
-     * This prevents whipsaw: price barely touches target, partial exit happens,
-     * then immediate dip would stop out at the new SL. The 1% confirmation
-     * ensures the breakout is real before trailing up.
+     * After T1 hit: SL = T1 price (with 1% confirmation above T1)
+     * After T2 hit: For OPTION trades, uses theta decay-aware trailing SL that
+     *               protects more of the T1→T2 gain based on DTE, premium level,
+     *               and time of day. For non-OPTION trades, standard 1% confirmation.
+     * After T3 hit: SL = T3 price (with 1% confirmation above T3)
      */
     @SuppressWarnings("unchecked")
     private void updateTrailingSl(Map<String, Object> targets,
                                    List<Map<String, Object>> targetLevels,
                                    double currentLtp, double entryPrice) {
-        // Walk from highest hit target downward to find the best SL level
-        // that has been confirmed (price went 1% above it)
+        String instrumentType = (String) targets.getOrDefault("instrumentType", "OPTION");
+        boolean isOption = "OPTION".equals(instrumentType);
+
+        // Check if T2 has been hit (for decay-aware trailing)
+        boolean t2Hit = false;
+        double t1Price = 0, t2Price = 0;
+        for (Map<String, Object> t : targetLevels) {
+            String level = (String) t.get("level");
+            if ("T1".equals(level)) {
+                t1Price = ((Number) t.get("price")).doubleValue();
+            } else if ("T2".equals(level)) {
+                t2Price = ((Number) t.get("price")).doubleValue();
+                t2Hit = Boolean.TRUE.equals(t.get("hit"));
+            }
+        }
+
+        // For OPTION trades after T2 hit: use decay-aware trailing SL
+        if (isOption && t2Hit && t1Price > 0 && t2Price > 0) {
+            double decaySl = computeDecayAwareTrailingSl(targets, t1Price, t2Price, currentLtp);
+            if (decaySl > 0) {
+                double currentSl = ((Number) targets.get("currentSl")).doubleValue();
+                if (decaySl > currentSl) {
+                    targets.put("currentSl", decaySl);
+                    targets.put("trailingType", "THETA_DECAY");
+                    log.info("{} THETA DECAY trailing SL updated to {} from {} — T1={} T2={} price={}",
+                        LOG_PREFIX, fmt(decaySl), fmt(currentSl),
+                        fmt(t1Price), fmt(t2Price), fmt(currentLtp));
+                    updatePositionSl(targets, decaySl);
+                }
+                return; // Decay-aware trailing takes precedence; skip standard logic
+            }
+        }
+
+        // Standard trailing: walk from highest hit target downward
         double newSl = -1;
         String confirmedLevel = null;
 
@@ -1046,6 +1171,126 @@ public class StrategyTradeExecutor {
     }
 
     /**
+     * Compute theta decay-aware trailing SL for OPTION trades after T2 hit.
+     *
+     * FORMULA: Trail SL = T1 + (T2 - T1) × protectionPct
+     *
+     * LAYER 1 — BASE PROTECTION (by DTE):
+     *   DTE = 0 (expiry day) → 90%   (theta catastrophic)
+     *   DTE ≤ 2             → 75%   (gamma week, sharp acceleration)
+     *   DTE 3-5             → 60%   (moderate decay)
+     *   DTE 6-10            → 50%   (balanced)
+     *   DTE > 10            → 25%   (theta negligible, give room)
+     *   No expiry data      → 50%   (safe default)
+     *
+     * LAYER 2 — TIME-OF-DAY ADJUSTMENT (5-tier IST schedule):
+     *   09:15–11:00  →  +0%  (opening volatility, gamma dominates theta)
+     *   11:00–13:00  →  +5%  (midday lull, premium bleeds silently in consolidation)
+     *   13:00–14:00  → +10%  (institutional positioning, premium starts fading)
+     *   14:00–15:00  → +15%  (accelerated decay, MM spread widening)
+     *   15:00–15:25  → +20%  (final stretch, extreme decay, liquidity thins)
+     *
+     * LAYER 3 — PREMIUM FRAGILITY:
+     *   Current premium < ₹20 → +15%  (low premium = high theta sensitivity,
+     *                                    small absolute moves = large % loss)
+     *
+     * LAYER 4 — MONEYNESS:
+     *   OTM option → +10%  (100% extrinsic value decays faster than ITM)
+     *
+     * All layers are ADDITIVE, CAPPED at 95%.
+     * SL only moves UPWARD (ratchet — never lowers).
+     * Re-evaluated every 2s on each monitoring tick (DTE/time change continuously).
+     *
+     * @return decay-aware SL price, or -1 if cannot compute
+     */
+    private double computeDecayAwareTrailingSl(Map<String, Object> targets,
+                                                double t1Price, double t2Price,
+                                                double currentLtp) {
+        // === LAYER 1: Base protection by DTE ===
+        double protectionPct = 0.50; // default if no expiry info
+        String optionExpiry = (String) targets.get("optionExpiry");
+        int dte = -1;
+
+        if (optionExpiry != null && !optionExpiry.isEmpty()) {
+            try {
+                LocalDate expiryDate = LocalDate.parse(optionExpiry,
+                    DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                LocalDate today = LocalDate.now(IST);
+                dte = (int) java.time.temporal.ChronoUnit.DAYS.between(today, expiryDate);
+                if (dte < 0) dte = 0; // past expiry treated as expiry day
+
+                if (dte == 0) {
+                    protectionPct = 0.90;
+                } else if (dte <= 2) {
+                    protectionPct = 0.75;
+                } else if (dte <= 5) {
+                    protectionPct = 0.60;
+                } else if (dte <= 10) {
+                    protectionPct = 0.50;
+                } else {
+                    protectionPct = 0.25;
+                }
+            } catch (Exception e) {
+                log.debug("{} Could not parse optionExpiry '{}': {}", LOG_PREFIX, optionExpiry, e.getMessage());
+            }
+        }
+
+        // === LAYER 2: Time-of-day adjustment (5-tier IST schedule) ===
+        LocalTime nowTime = LocalTime.now(IST);
+        double timeAdj = 0.0;
+        if (nowTime.isAfter(LocalTime.of(15, 0))) {
+            timeAdj = 0.20; // 15:00-15:25: extreme decay, liquidity thins
+        } else if (nowTime.isAfter(LocalTime.of(14, 0))) {
+            timeAdj = 0.15; // 14:00-15:00: accelerated decay, MM spread widening
+        } else if (nowTime.isAfter(LocalTime.of(13, 0))) {
+            timeAdj = 0.10; // 13:00-14:00: institutional positioning, premium fading
+        } else if (nowTime.isAfter(LocalTime.of(11, 0))) {
+            timeAdj = 0.05; // 11:00-13:00: midday lull, silent theta bleed
+        }
+        // 09:15-11:00: +0% (gamma dominates, volatility supports premium)
+        protectionPct += timeAdj;
+
+        // === LAYER 3: Premium fragility ===
+        if (currentLtp < 20.0) {
+            protectionPct += 0.15; // low premium = high theta sensitivity
+        }
+
+        // === LAYER 4: Moneyness (OTM decays faster) ===
+        String optionType = (String) targets.get("optionType");
+        Double equitySpot = targets.get("equitySpot") != null
+            ? ((Number) targets.get("equitySpot")).doubleValue() : null;
+        Double strike = targets.get("strike") != null
+            ? ((Number) targets.get("strike")).doubleValue() : null;
+        if (optionType != null && equitySpot != null && strike != null && equitySpot > 0 && strike > 0) {
+            boolean isOtm = "CE".equals(optionType) ? strike > equitySpot : strike < equitySpot;
+            if (isOtm) {
+                protectionPct += 0.10;
+            }
+        }
+
+        // === CAP at 95% ===
+        protectionPct = Math.min(protectionPct, 0.95);
+
+        // === COMPUTE trailing SL ===
+        double t1t2Distance = t2Price - t1Price;
+        double trailSl = t1Price + (t1t2Distance * protectionPct);
+        trailSl = Math.round(trailSl * 100.0) / 100.0;
+
+        log.info("{} THETA_DECAY SL: DTE={} base={}% timeAdj=+{}% premium={} otm={} → protection={}% " +
+            "trailSl={} (T1={} T2={} dist={})",
+            LOG_PREFIX, dte,
+            dte == 0 ? "90" : dte <= 2 ? "75" : dte <= 5 ? "60" : dte <= 10 ? "50" : dte > 10 ? "25" : "50",
+            String.format("%.0f", timeAdj * 100),
+            fmt(currentLtp),
+            (optionType != null && strike != null && equitySpot != null) ?
+                ("CE".equals(optionType) ? strike > equitySpot : strike < equitySpot) : "unknown",
+            String.format("%.0f", protectionPct * 100),
+            fmt(trailSl), fmt(t1Price), fmt(t2Price), fmt(t1t2Distance));
+
+        return trailSl;
+    }
+
+    /**
      * Update position's SL field in Redis for frontend display.
      */
     @SuppressWarnings("unchecked")
@@ -1058,11 +1303,35 @@ public class StrategyTradeExecutor {
 
             Map<String, Object> pos = objectMapper.readValue(posJson, Map.class);
             pos.put("sl", newSl);
-            pos.put("trailingType", "TARGET_TRAIL");
+            String trailType = targets.get("trailingType") != null
+                ? (String) targets.get("trailingType") : "TARGET_TRAIL";
+            pos.put("trailingType", trailType);
             pos.put("trailingStop", newSl);
             redisTemplate.opsForValue().set(posKey, objectMapper.writeValueAsString(pos));
         } catch (Exception e) {
             log.debug("{} Could not update position SL: {}", LOG_PREFIX, e.getMessage());
+        }
+    }
+
+    /** Accumulate charge breakdown fields into position JSON in Redis (for partial exits). */
+    @SuppressWarnings("unchecked")
+    private void accumulateChargeBreakdown(String scripCode, java.util.Map<String, Double> breakdown) {
+        try {
+            String posKey = POSITION_PREFIX + scripCode;
+            String posJson = redisTemplate.opsForValue().get(posKey);
+            if (posJson == null) return;
+            Map<String, Object> pos = objectMapper.readValue(posJson, Map.class);
+            for (String[] kv : new String[][]{
+                {"chargesBrokerage", "brokerage"}, {"chargesStt", "stt"},
+                {"chargesExchange", "exchangeCharges"}, {"chargesGst", "gst"},
+                {"chargesSebi", "sebiCharges"}, {"chargesStamp", "stampDuty"}
+            }) {
+                double existing = pos.get(kv[0]) != null ? ((Number) pos.get(kv[0])).doubleValue() : 0;
+                pos.put(kv[0], existing + breakdown.getOrDefault(kv[1], 0.0));
+            }
+            redisTemplate.opsForValue().set(posKey, objectMapper.writeValueAsString(pos));
+        } catch (Exception e) {
+            log.warn("{} CHARGE_BREAKDOWN_ACCUMULATE_ERR scrip={} err={}", LOG_PREFIX, scripCode, e.getMessage());
         }
     }
 
@@ -1245,9 +1514,37 @@ public class StrategyTradeExecutor {
         String exitDirection = (String) targets.getOrDefault("direction", "BULLISH");
         String exitInstrType = (String) targets.getOrDefault("instrumentType", "OPTION");
         boolean isExitShortFutures = "FUTURES".equals(exitInstrType) && "BEARISH".equals(exitDirection);
-        double pnl = isExitShortFutures
+        double grossPnl = isExitShortFutures
             ? (entryPrice - exitPrice) * qty
             : (exitPrice - entryPrice) * qty;
+
+        // ── Calculate Zerodha charges (round-trip: entry BUY + exit SELL) ──
+        double totalCharges = 0.0;
+        java.util.Map<String, Double> chargeBreakdown = java.util.Collections.emptyMap();
+        try {
+            String posExchange = (String) targets.getOrDefault("exchange", "N");
+            TransactionCostService.TradeType tradeType = TransactionCostService.resolveTradeType(
+                    posExchange, exitInstrType);
+            String normExchange = TransactionCostService.normalizeExchange(posExchange);
+            chargeBreakdown = transactionCostService.calculateRoundTripBreakdown(
+                    tradeType, entryPrice, exitPrice, qty, normExchange);
+            totalCharges = chargeBreakdown.getOrDefault("total", 0.0);
+
+            log.info("{} CHARGES scrip={} type={} exch={} grossPnl={} charges={} netPnl={} [brok={} stt={} txn={} gst={} sebi={} stamp={}]",
+                    LOG_PREFIX, scripCode, tradeType, normExchange,
+                    fmt(grossPnl), fmt(totalCharges), fmt(grossPnl - totalCharges),
+                    fmt(chargeBreakdown.getOrDefault("brokerage", 0.0)),
+                    fmt(chargeBreakdown.getOrDefault("stt", 0.0)),
+                    fmt(chargeBreakdown.getOrDefault("exchangeCharges", 0.0)),
+                    fmt(chargeBreakdown.getOrDefault("gst", 0.0)),
+                    fmt(chargeBreakdown.getOrDefault("sebiCharges", 0.0)),
+                    fmt(chargeBreakdown.getOrDefault("stampDuty", 0.0)));
+        } catch (Exception e) {
+            log.warn("{} CHARGES_CALC_ERROR scrip={} err={}, crediting gross PnL",
+                    LOG_PREFIX, scripCode, e.getMessage());
+        }
+
+        double netPnl = grossPnl - totalCharges;
 
         // Update position as fully closed
         try {
@@ -1257,7 +1554,14 @@ public class StrategyTradeExecutor {
                 Map<String, Object> pos = objectMapper.readValue(posJson, Map.class);
                 double existingRealizedPnl = pos.get("realizedPnl") != null
                     ? ((Number) pos.get("realizedPnl")).doubleValue() : 0;
-                pos.put("realizedPnl", existingRealizedPnl + pnl);
+                pos.put("realizedPnl", existingRealizedPnl + netPnl);
+                pos.put("totalCharges", totalCharges);
+                pos.put("chargesBrokerage", chargeBreakdown.getOrDefault("brokerage", 0.0));
+                pos.put("chargesStt", chargeBreakdown.getOrDefault("stt", 0.0));
+                pos.put("chargesExchange", chargeBreakdown.getOrDefault("exchangeCharges", 0.0));
+                pos.put("chargesGst", chargeBreakdown.getOrDefault("gst", 0.0));
+                pos.put("chargesSebi", chargeBreakdown.getOrDefault("sebiCharges", 0.0));
+                pos.put("chargesStamp", chargeBreakdown.getOrDefault("stampDuty", 0.0));
                 pos.put("qtyOpen", 0);
                 pos.put("currentPrice", exitPrice);
                 pos.put("unrealizedPnl", 0.0);
@@ -1279,14 +1583,14 @@ public class StrategyTradeExecutor {
             log.error("{} Failed to update position for exit: {}", LOG_PREFIX, e.getMessage());
         }
 
-        publishTradeOutcome(targets, scripCode, exitPrice, qty, exitReason, pnl, true);
+        publishTradeOutcome(targets, scripCode, exitPrice, qty, exitReason, netPnl, totalCharges, true);
 
-        // Credit PnL + release margin for REMAINING qty only (partial exits already released their share)
+        // Credit NET PnL + release margin for REMAINING qty only (partial exits already released their share)
         String strategy = (String) targets.get("strategy");
         int remainingQty = targets.get("remainingQty") != null
             ? ((Number) targets.get("remainingQty")).intValue() : qty;
         double marginToRelease = entryPrice * remainingQty;
-        boolean walletUpdated = updateStrategyWallet(strategy, pnl, marginToRelease, scripCode, exitReason);
+        boolean walletUpdated = updateStrategyWallet(strategy, netPnl, marginToRelease, scripCode, exitReason);
 
         if (walletUpdated) {
             redisTemplate.delete(targetKey);
@@ -1299,13 +1603,21 @@ public class StrategyTradeExecutor {
 
     }
 
+    /** Backward-compatible overload — zero charges. */
+    @SuppressWarnings("unchecked")
+    private void publishTradeOutcome(Map<String, Object> targets, String scripCode,
+                                      double exitPrice, int qty, String exitReason,
+                                      double pnl, boolean isFinalExit) {
+        publishTradeOutcome(targets, scripCode, exitPrice, qty, exitReason, pnl, 0.0, isFinalExit);
+    }
+
     /**
      * Publish trade outcome to Kafka (matches TradeOutcomeConsumer expected format).
      */
     @SuppressWarnings("unchecked")
     private void publishTradeOutcome(Map<String, Object> targets, String scripCode,
                                       double exitPrice, int qty, String exitReason,
-                                      double pnl, boolean isFinalExit) {
+                                      double pnl, double totalCharges, boolean isFinalExit) {
         try {
             String tradeId = (String) targets.get("tradeId");
             double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
@@ -1340,6 +1652,7 @@ public class StrategyTradeExecutor {
             outcome.put("entryPrice", entryPrice);
             outcome.put("exitPrice", exitPrice);
             outcome.put("pnl", pnl);
+            outcome.put("totalCharges", totalCharges);
             outcome.put("isWin", pnl > 0);
             outcome.put("exitReason", exitReason);
             boolean isOutcomeShort = "FUTURES".equals(targets.get("instrumentType"))

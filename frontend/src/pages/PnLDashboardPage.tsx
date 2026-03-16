@@ -1,449 +1,341 @@
-import React, { useState, useEffect } from 'react'
-import { fetchJson, putJson } from '../services/api'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { strategyWalletsApi } from '../services/api'
+import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
+import { getStrategyColors } from '../utils/strategyColors'
+import { computeAnalytics, computeAdvancedAnalytics, fmt, fmtINR } from '../utils/tradeAnalytics'
+import AnalyticsView from '../components/AnalyticsView'
+import DeepAnalyticsView from '../components/DeepAnalyticsView'
+import type { Trade } from '../types'
 
-type WalletType = 'PAPER' | 'REAL'
-type Period = '1W' | '1M' | '3M' | '6M' | '1Y' | 'ALL'
+type PnlTab = 'analytics' | 'deep'
+type StrategyTab = 'ALL' | string
+type ResultFilter = 'ALL' | 'WIN' | 'LOSS'
+type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
-interface PnlSummary {
-  initialCapital: number
-  currentCapital: number
-  realizedPnl: number
-  unrealizedPnl: number
-  dayPnl: number
-  weekPnl: number
-  monthPnl: number
-  totalTradesCount: number
-  winCount: number
-  lossCount: number
-  winRate: number
+// Known strategies in display order
+const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB', 'MCX_BBT1']
+
+// ── Period helpers for analytics tabs ──
+type AnalyticsPeriod = 'TODAY' | '1W' | '1M' | 'QTR' | '1Y' | 'ALL' | 'DATE'
+
+function getQuarterStart(d: Date): Date {
+  const m = d.getMonth()
+  let qMonth: number
+  if (m >= 3 && m <= 5) qMonth = 3
+  else if (m >= 6 && m <= 8) qMonth = 6
+  else if (m >= 9 && m <= 11) qMonth = 9
+  else qMonth = 0
+  return new Date(d.getFullYear(), qMonth, 1)
 }
 
-interface AdvancedMetrics {
-  sharpeRatio: number
-  maxDrawdown: number
-  maxDrawdownAmount: number
-  profitFactor: number
-  expectancy: number
-  avgRMultiple: number
-  avgWin: number
-  avgLoss: number
-  bestTrade: number
-  worstTrade: number
+function analyticsPeriodToRange(key: AnalyticsPeriod, customDate?: string): { from?: number; to?: number } {
+  const now = new Date()
+  const istOffset = 5.5 * 60 * 60 * 1000
+  const istNow = new Date(now.getTime() + istOffset)
+  const todayIST = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()) - istOffset)
+  switch (key) {
+    case 'TODAY': return { from: todayIST.getTime() }
+    case '1W': return { from: todayIST.getTime() - 7 * 86400000 }
+    case '1M': return { from: todayIST.getTime() - 30 * 86400000 }
+    case 'QTR': {
+      const qs = getQuarterStart(istNow)
+      const utcQs = new Date(Date.UTC(qs.getFullYear(), qs.getMonth(), qs.getDate()) - istOffset)
+      return { from: utcQs.getTime() }
+    }
+    case '1Y': return { from: todayIST.getTime() - 365 * 86400000 }
+    case 'DATE': {
+      if (!customDate) return { from: todayIST.getTime() }
+      const [y, m, d] = customDate.split('-').map(Number)
+      const dayStart = new Date(Date.UTC(y, m - 1, d) - istOffset)
+      return { from: dayStart.getTime(), to: dayStart.getTime() + 86400000 }
+    }
+    case 'ALL':
+    default: return {}
+  }
 }
 
-interface DailyPnl {
-  date: string
-  pnl: number
-  cumulative: number
-  trades: number
-}
-
-interface InstrumentPnl {
-  scripCode: string
-  companyName: string
-  totalPnl: number
-  trades: number
-  winRate: number
-}
-
-interface StrategyPnl {
-  strategy: string
-  totalPnl: number
-  trades: number
-  winRate: number
-}
-
-interface TradeEntry {
-  id: string
-  tradeId: string
-  scripCode: string
-  companyName: string
-  side: string
-  entryPrice: number
-  exitPrice: number
-  quantity: number
-  pnl: number
-  pnlPercent: number
-  rMultiple: number
-  exitReason: string
-  entryTime: string
-  exitTime: string
-  durationMinutes: number
-  strategy: string
-  notes: string
-  tags: string[]
-  status: string
+const ANALYTICS_PERIOD_LABELS: Record<AnalyticsPeriod, string> = {
+  TODAY: 'Today', '1W': '1 Week', '1M': '1 Month', QTR: 'Quarter', '1Y': '1 Year', ALL: 'All Time', DATE: 'Pick Date'
 }
 
 export default function PnLDashboardPage() {
-  const [walletType, setWalletType] = useState<WalletType>('PAPER')
-  const [period, setPeriod] = useState<Period>('1M')
-  const [summary, setSummary] = useState<PnlSummary | null>(null)
-  const [metrics, setMetrics] = useState<AdvancedMetrics | null>(null)
-  const [equityCurve, setEquityCurve] = useState<DailyPnl[]>([])
-  const [calendarData, setCalendarData] = useState<Record<string, number>>({})
-  const [instruments, setInstruments] = useState<InstrumentPnl[]>([])
-  const [strategies, setStrategies] = useState<StrategyPnl[]>([])
-  const [journal, setJournal] = useState<TradeEntry[]>([])
-  const [journalPage] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [expandedTrade, setExpandedTrade] = useState<string | null>(null)
-  const [editingNotes, setEditingNotes] = useState<string | null>(null)
-  const [notesText, setNotesText] = useState('')
+  // ── Tab state ──
+  const [activeTab, setActiveTab] = useState<PnlTab>('analytics')
 
-  // Period days mapping for future use with daily PnL endpoint
-  const _periodDays: Record<Period, number> = { '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365, 'ALL': 9999 }
-  void _periodDays
+  // ── Trade data state ──
+  const [trades, setTrades] = useState<StrategyWalletTrade[]>([])
+  const [summaries, setSummaries] = useState<StrategyWalletSummary[]>([])
+  const [tradesLoading, setTradesLoading] = useState(false)
+  const [tradesLoaded, setTradesLoaded] = useState(false)
+  const [activeStrategy, setActiveStrategy] = useState<StrategyTab>('ALL')
+  const [resultFilter, setResultFilter] = useState<ResultFilter>('ALL')
+  const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL')
+  const [analyticsPeriod, setAnalyticsPeriod] = useState<AnalyticsPeriod>('ALL')
+  const [customDate, setCustomDate] = useState<string>(() => {
+    const now = new Date()
+    const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000)
+    return ist.toISOString().slice(0, 10)
+  })
 
-  useEffect(() => {
-    loadData()
-  }, [walletType, period])
+  // Track last-known trade count to detect new exits
+  const lastTradeCountRef = useRef<number>(-1)
 
-  useEffect(() => {
-    loadJournal()
-  }, [walletType, journalPage])
-
-  const loadData = async () => {
-    setLoading(true)
-    const wt = walletType
-
+  // ── Full trade data loading (on mount, period change, or trade exit detected) ──
+  const loadTradeData = useCallback(async (p: AnalyticsPeriod, date?: string, isAutoRefresh = false) => {
+    if (!isAutoRefresh) setTradesLoading(true)
     try {
-      const [summaryData, metricsData, curveData, calData, instData, stratData] = await Promise.allSettled([
-        fetchJson<PnlSummary>(`/pnl/summary?walletType=${wt}`),
-        fetchJson<AdvancedMetrics>(`/pnl/metrics?walletType=${wt}`),
-        fetchJson<DailyPnl[]>(`/pnl/equity-curve?walletType=${wt}`),
-        fetchJson<Record<string, number>>(`/pnl/calendar?walletType=${wt}&year=${new Date().getFullYear()}`),
-        fetchJson<InstrumentPnl[]>(`/pnl/by-instrument?walletType=${wt}`),
-        fetchJson<StrategyPnl[]>(`/pnl/by-strategy?walletType=${wt}`),
+      const range = analyticsPeriodToRange(p, date)
+      const [sums, allTrades] = await Promise.all([
+        strategyWalletsApi.getSummaries().catch(() => []),
+        strategyWalletsApi.getWeeklyTrades({ limit: 5000, ...range }).catch(() => []),
       ])
-
-      if (summaryData.status === 'fulfilled') setSummary(summaryData.value)
-      if (metricsData.status === 'fulfilled') setMetrics(metricsData.value)
-      if (curveData.status === 'fulfilled') setEquityCurve(curveData.value)
-      if (calData.status === 'fulfilled') setCalendarData(calData.value)
-      if (instData.status === 'fulfilled') setInstruments(instData.value)
-      if (stratData.status === 'fulfilled') setStrategies(stratData.value)
-    } catch { /* ignore partial failures */ }
-    setLoading(false)
-  }
-
-  const loadJournal = async () => {
-    try {
-      const data = await fetchJson<{ content: TradeEntry[] }>(`/pnl/trade-journal?walletType=${walletType}&page=${journalPage}&size=20`)
-      setJournal(data.content || [])
-    } catch {
-      setJournal([])
+      setSummaries(sums)
+      setTrades(allTrades)
+      setTradesLoaded(true)
+      lastTradeCountRef.current = sums.reduce((s: number, w: StrategyWalletSummary) => s + w.totalTrades, 0)
+    } catch (e) {
+      console.error('Failed to load trade data for analytics:', e)
     }
-  }
+    if (!isAutoRefresh) setTradesLoading(false)
+  }, [])
 
-  const handleSaveNotes = async (tradeId: string) => {
-    try {
-      await putJson(`/pnl/trade-journal/${tradeId}/notes`, { notes: notesText })
-      setEditingNotes(null)
-      loadJournal()
-    } catch { /* ignore */ }
-  }
+  // ── Smart refresh: poll summaries every 30s, reload trades only when a trade exits ──
+  useEffect(() => {
+    loadTradeData(analyticsPeriod, customDate)
+    const interval = setInterval(async () => {
+      try {
+        const sums = await strategyWalletsApi.getSummaries().catch(() => [])
+        if (sums.length === 0) return
+        const newCount = sums.reduce((s: number, w: StrategyWalletSummary) => s + w.totalTrades, 0)
+        // Always update summaries (for live unrealizedPnl / wallet stats)
+        setSummaries(sums)
+        // Full trade reload only when trade count changed (a trade exited)
+        if (lastTradeCountRef.current >= 0 && newCount !== lastTradeCountRef.current) {
+          lastTradeCountRef.current = newCount
+          const range = analyticsPeriodToRange(analyticsPeriod, customDate)
+          const allTrades = await strategyWalletsApi.getWeeklyTrades({ limit: 5000, ...range }).catch(() => [])
+          setTrades(allTrades)
+        }
+      } catch { /* silent */ }
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [analyticsPeriod, customDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const formatCurrency = (n: number) => {
-    n = Number(n) || 0
-    const sign = n > 0 ? '+' : n < 0 ? '-' : ''
-    const abs = Math.abs(n)
-    if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(1) + 'L'
-    if (abs >= 1000) return sign + '₹' + (abs / 1000).toFixed(1) + 'K'
-    return sign + '₹' + abs.toFixed(0)
-  }
+  // ── Dynamic strategy keys ──
+  const STRATEGY_KEYS = useMemo(() => {
+    const fromTrades = new Set(trades.map(t => t.strategy).filter(Boolean))
+    const fromSummaries = new Set(summaries.map(s => s.strategy).filter(Boolean))
+    const all = new Set([...fromTrades, ...fromSummaries])
+    const ordered = KNOWN_STRATEGIES.filter(k => all.has(k))
+    for (const k of all) {
+      if (!ordered.includes(k) && k !== 'MANUAL') ordered.push(k)
+    }
+    return ordered
+  }, [trades, summaries])
 
-  const formatPct = (n: number) => {
-    n = Number(n) || 0
-    return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`
-  }
+  // ── Filtered trades for analytics ──
+  const filteredTrades = useMemo(() => {
+    return trades.filter(t => {
+      if (activeStrategy !== 'ALL' && t.strategy !== activeStrategy) return false
+      if (resultFilter === 'WIN' && t.pnl <= 0) return false
+      if (resultFilter === 'LOSS' && t.pnl >= 0) return false
+      if (exchangeFilter !== 'ALL' && t.exchange !== exchangeFilter) return false
+      return true
+    }).sort((a, b) => new Date(b.exitTime || b.entryTime).getTime() - new Date(a.exitTime || a.entryTime).getTime())
+  }, [trades, activeStrategy, resultFilter, exchangeFilter])
 
-  // Summary Cards
-  const statCards = summary ? [
-    { label: 'Total P&L', value: formatCurrency(summary.realizedPnl), sub: formatPct(summary.initialCapital ? (summary.realizedPnl / summary.initialCapital) * 100 : 0), positive: summary.realizedPnl >= 0 },
-    { label: 'Win Rate', value: `${summary.winRate?.toFixed(1) || 0}%`, sub: `${summary.winCount}W / ${summary.lossCount}L`, positive: (summary.winRate || 0) >= 50 },
-    { label: 'Sharpe Ratio', value: metrics?.sharpeRatio?.toFixed(2) || '-', sub: '', positive: (metrics?.sharpeRatio || 0) >= 1 },
-    { label: 'Max Drawdown', value: metrics ? `${metrics.maxDrawdown?.toFixed(1)}%` : '-', sub: metrics ? formatCurrency(metrics.maxDrawdownAmount || 0) : '', positive: false },
-    { label: 'Profit Factor', value: metrics?.profitFactor?.toFixed(1) || '-', sub: '', positive: (metrics?.profitFactor || 0) >= 1.5 },
-  ] : []
+  const analytics = useMemo(() => computeAnalytics(filteredTrades), [filteredTrades])
+  const advAnalytics = useMemo(() => computeAdvancedAnalytics(filteredTrades), [filteredTrades])
+
+  // Convert to Trade[] for PerformanceCharts compatibility
+  const chartsData = useMemo((): Trade[] => {
+    return filteredTrades.filter(t => t.exitTime).map(t => ({
+      tradeId: t.tradeId, signalId: '', scripCode: t.scripCode, companyName: t.companyName,
+      side: t.side as 'LONG' | 'SHORT',
+      status: t.pnl > 0 ? 'CLOSED_WIN' : 'CLOSED_LOSS' as Trade['status'],
+      entryPrice: t.entryPrice, entryTime: t.entryTime, exitPrice: t.exitPrice, exitTime: t.exitTime,
+      quantity: t.quantity, stopLoss: t.stopLoss ?? 0, target1: t.target1 ?? 0,
+      pnl: t.pnl, pnlPercent: t.pnlPercent, rMultiple: t.rMultiple ?? (t as any).rmultiple ?? 0, durationMinutes: t.durationMinutes ?? 0,
+      strategy: t.strategy, executionMode: t.executionMode,
+      // Pass through target/exit data for streak analysis
+      target1Hit: t.target1Hit, target2Hit: t.target2Hit, target3Hit: t.target3Hit, target4Hit: t.target4Hit,
+      exitReason: t.exitReason, target2: t.target2, instrumentType: t.instrumentType,
+    } as Trade))
+  }, [filteredTrades])
+
+  const activeSummary = activeStrategy === 'ALL' ? null : summaries.find(s => s.strategy === activeStrategy)
+
+  // Live drawdown: realized P&L peak vs (realized + unrealized) current equity
+  const liveDrawdown = useMemo(() => {
+    const relevantSummaries = activeStrategy === 'ALL'
+      ? summaries
+      : summaries.filter(s => s.strategy === activeStrategy)
+    const totalUnrealized = relevantSummaries.reduce((s, w) => s + (w.unrealizedPnl ?? 0), 0)
+    if (totalUnrealized === 0 || !analytics) return null
+    // Current equity = realized cumulative P&L + unrealized
+    const currentEquity = analytics.totalPnl + totalUnrealized
+    // If current equity dips below the realized peak, that's live drawdown
+    const realizedPeak = analytics.totalPnl > 0 ? analytics.totalPnl : 0
+    if (currentEquity < realizedPeak) {
+      return realizedPeak - currentEquity
+    }
+    return null
+  }, [summaries, activeStrategy, analytics])
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-display font-bold text-white">P&L Analytics</h1>
-        <div className="flex items-center gap-3">
-          {/* Wallet Toggle */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-display font-bold text-white">P&L Analytics</h1>
+          {/* Tab Selector */}
           <div className="flex bg-slate-800 rounded-lg p-1">
-            {(['PAPER', 'REAL'] as WalletType[]).map(wt => (
+            {([
+              { key: 'analytics' as PnlTab, label: 'Analytics' },
+              { key: 'deep' as PnlTab, label: 'Deep Analysis' },
+            ]).map(tab => (
               <button
-                key={wt}
-                onClick={() => setWalletType(wt)}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                  walletType === wt
-                    ? wt === 'PAPER' ? 'bg-blue-500 text-white' : 'bg-amber-500 text-slate-900'
-                    : 'text-slate-400 hover:text-white'
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`px-3 sm:px-4 py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${
+                  activeTab === tab.key ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                {wt === 'PAPER' ? '📝 Paper' : '💰 Real'}
-              </button>
-            ))}
-          </div>
-          {/* Period Selector */}
-          <div className="flex bg-slate-800 rounded-lg p-1">
-            {(['1W', '1M', '3M', '6M', '1Y', 'ALL'] as Period[]).map(p => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  period === p ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-white'
-                }`}
-              >
-                {p}
+                {tab.label}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        {loading ? [...Array(5)].map((_, i) => (
-          <div key={i} className="bg-slate-800/50 rounded-xl p-4 animate-pulse"><div className="h-16 bg-slate-700/30 rounded" /></div>
-        )) : statCards.map((card, i) => (
-          <div key={i} className={`bg-slate-800/50 backdrop-blur border rounded-xl p-4 ${
-            card.positive ? 'border-emerald-500/20' : 'border-red-500/20'
-          }`}>
-            <p className="text-xs text-slate-400 mb-1">{card.label}</p>
-            <p className={`text-2xl font-bold font-mono tabular-nums ${card.positive ? 'text-emerald-400' : 'text-red-400'}`}>
-              {card.value}
-            </p>
-            {card.sub && <p className="text-xs text-slate-500 mt-1">{card.sub}</p>}
-          </div>
-        ))}
-      </div>
-
-      {/* Equity Curve */}
-      <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Equity Curve</h2>
-        {equityCurve.length > 0 ? (
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={equityCurve}>
-              <defs>
-                <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickLine={false} tickFormatter={v => `₹${(v / 1000).toFixed(0)}K`} />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                labelStyle={{ color: '#f8fafc' }}
-                formatter={(value: number) => [`₹${value.toLocaleString('en-IN')}`, 'Cumulative P&L']}
-              />
-              <Area type="monotone" dataKey="cumulative" stroke="#10b981" fill="url(#equityGrad)" strokeWidth={2} />
-            </AreaChart>
-          </ResponsiveContainer>
-        ) : (
-          <div className="h-64 flex items-center justify-center text-slate-500">No data available yet</div>
-        )}
-      </div>
-
-      {/* Calendar Heatmap */}
-      <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Calendar Heatmap ({new Date().getFullYear()})</h2>
-        <div className="flex flex-wrap gap-1">
-          {Object.entries(calendarData).length > 0 ? (
-            Object.entries(calendarData).map(([date, rawPnl]) => {
-              const pnl = Number(rawPnl) || 0
-              const intensity = Math.min(Math.abs(pnl) / 5000, 1)
-              const color = pnl >= 0
-                ? `rgba(16, 185, 129, ${0.2 + intensity * 0.6})`
-                : `rgba(239, 68, 68, ${0.2 + intensity * 0.6})`
-              return (
-                <div
-                  key={date}
-                  className="w-3 h-3 rounded-sm cursor-pointer"
-                  style={{ backgroundColor: color }}
-                  title={`${date}: ₹${pnl.toFixed(0)}`}
-                />
-              )
-            })
-          ) : (
-            <div className="w-full text-center text-slate-500 py-8">No trading data for this year</div>
-          )}
-        </div>
-        <div className="flex items-center gap-2 mt-3 text-xs text-slate-500">
-          <span>Less</span>
-          <div className="w-3 h-3 rounded-sm bg-red-500/30" />
-          <div className="w-3 h-3 rounded-sm bg-red-500/60" />
-          <div className="w-3 h-3 rounded-sm bg-slate-700" />
-          <div className="w-3 h-3 rounded-sm bg-emerald-500/30" />
-          <div className="w-3 h-3 rounded-sm bg-emerald-500/60" />
-          <span>More</span>
-        </div>
-      </div>
-
-      {/* Breakdowns Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* By Instrument */}
-        <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">By Instrument</h2>
-          {instruments.length > 0 ? (
-            <div className="space-y-3">
-              {instruments.slice(0, 10).map(inst => {
-                const maxPnl = Math.max(...instruments.map(i => Math.abs(i.totalPnl)), 1)
-                const width = (Math.abs(inst.totalPnl) / maxPnl) * 100
+      {/* Strategy Wallet Tabs */}
+          <div className="overflow-x-auto pb-1 -mx-2 px-2 scrollbar-thin scrollbar-thumb-slate-700">
+            <div className="flex gap-2" style={{ minWidth: 'max-content' }}>
+              <button onClick={() => setActiveStrategy('ALL')}
+                className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all border ${
+                  activeStrategy === 'ALL' ? 'bg-blue-600 text-white border-blue-500' : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-white'
+                }`}
+              >
+                ALL
+                <span className="ml-1.5 text-[10px] opacity-70">{trades.length}</span>
+              </button>
+              {STRATEGY_KEYS.map(key => {
+                const sum = summaries.find(s => s.strategy === key)
+                const c = getStrategyColors(key)
+                const isActive = activeStrategy === key
+                const count = trades.filter(t => t.strategy === key).length
                 return (
-                  <div key={inst.scripCode} className="flex items-center gap-3">
-                    <span className="text-sm text-white font-medium w-24 truncate">{inst.companyName || inst.scripCode}</span>
-                    <div className="flex-1 h-5 bg-slate-700/30 rounded overflow-hidden">
-                      <div
-                        className={`h-full rounded ${inst.totalPnl >= 0 ? 'bg-emerald-500/40' : 'bg-red-500/40'}`}
-                        style={{ width: `${width}%` }}
-                      />
-                    </div>
-                    <span className={`text-sm font-mono tabular-nums w-20 text-right ${inst.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {formatCurrency(inst.totalPnl)}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="text-center text-slate-500 py-8">No data</div>
-          )}
-        </div>
-
-        {/* By Strategy */}
-        <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">By Strategy</h2>
-          {strategies.length > 0 ? (
-            <div className="space-y-3">
-              {strategies.map(strat => {
-                const maxPnl = Math.max(...strategies.map(s => Math.abs(s.totalPnl)), 1)
-                const width = (Math.abs(strat.totalPnl) / maxPnl) * 100
-                return (
-                  <div key={strat.strategy} className="flex items-center gap-3">
-                    <span className="text-sm text-white font-medium w-24 truncate">{strat.strategy}</span>
-                    <div className="flex-1 h-5 bg-slate-700/30 rounded overflow-hidden">
-                      <div
-                        className={`h-full rounded ${strat.totalPnl >= 0 ? 'bg-emerald-500/40' : 'bg-red-500/40'}`}
-                        style={{ width: `${width}%` }}
-                      />
-                    </div>
-                    <span className={`text-sm font-mono tabular-nums w-20 text-right ${strat.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {formatCurrency(strat.totalPnl)}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="text-center text-slate-500 py-8">No data</div>
-          )}
-        </div>
-      </div>
-
-      {/* Trade Journal */}
-      <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-          <h2 className="text-lg font-semibold text-white">Trade Journal</h2>
-        </div>
-        {journal.length > 0 ? (
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-700 text-xs text-slate-400 uppercase tracking-wider">
-                <th className="text-left px-4 py-3">Date</th>
-                <th className="text-left px-4 py-3">Stock</th>
-                <th className="text-left px-4 py-3">Side</th>
-                <th className="text-right px-4 py-3">Entry</th>
-                <th className="text-right px-4 py-3">Exit</th>
-                <th className="text-right px-4 py-3">P&L</th>
-                <th className="text-right px-4 py-3">R</th>
-                <th className="text-left px-4 py-3">Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {journal.map(trade => (
-                <React.Fragment key={trade.id}>
-                  <tr
-                    onClick={() => setExpandedTrade(expandedTrade === trade.id ? null : trade.id)}
-                    className="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors cursor-pointer"
+                  <button key={key} onClick={() => setActiveStrategy(key)}
+                    className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all border ${
+                      isActive ? `${c.bg} ${c.text} ${c.border}` : 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-white'
+                    }`}
                   >
-                    <td className="px-4 py-3 text-sm text-slate-300">
-                      {trade.exitTime ? new Date(trade.exitTime).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-white font-medium">{trade.companyName || trade.scripCode}</td>
-                    <td className="px-4 py-3">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                        trade.side === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
-                      }`}>{trade.side}</span>
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-sm text-slate-300 tabular-nums">{trade.entryPrice?.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-sm text-slate-300 tabular-nums">{trade.exitPrice?.toFixed(2)}</td>
-                    <td className={`px-4 py-3 text-right font-mono text-sm font-medium tabular-nums ${(trade.pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {formatCurrency(trade.pnl ?? 0)}
-                    </td>
-                    <td className={`px-4 py-3 text-right font-mono text-sm tabular-nums ${(trade.rMultiple || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {(trade.rMultiple ?? 0).toFixed(1)}R
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-400">{trade.exitReason}</td>
-                  </tr>
-                  {expandedTrade === trade.id && (
-                    <tr key={`${trade.id}-detail`}>
-                      <td colSpan={8} className="px-6 py-4 bg-slate-900/50 border-b border-slate-700/50">
-                        <div className="grid grid-cols-4 gap-4 mb-4 text-sm">
-                          <div><span className="text-slate-500">Duration:</span> <span className="text-white">{trade.durationMinutes}m</span></div>
-                          <div><span className="text-slate-500">Strategy:</span> <span className="text-white">{trade.strategy}</span></div>
-                          <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
-                          <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>
-                        </div>
-                        {trade.tags?.length > 0 && (
-                          <div className="flex gap-2 mb-3">
-                            {trade.tags.map(tag => (
-                              <span key={tag} className="px-2 py-0.5 bg-slate-700 text-slate-300 rounded text-xs">{tag}</span>
-                            ))}
-                          </div>
-                        )}
-                        <div className="mt-2">
-                          <label className="text-xs text-slate-500 block mb-1">Notes</label>
-                          {editingNotes === trade.id ? (
-                            <div className="flex gap-2">
-                              <textarea
-                                value={notesText}
-                                onChange={e => setNotesText(e.target.value)}
-                                className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-amber-500 resize-none"
-                                rows={2}
-                              />
-                              <div className="flex flex-col gap-1">
-                                <button onClick={() => handleSaveNotes(trade.id)} className="px-3 py-1 bg-amber-500 text-slate-900 rounded text-xs font-medium">Save</button>
-                                <button onClick={() => setEditingNotes(null)} className="px-3 py-1 bg-slate-700 text-slate-300 rounded text-xs">Cancel</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <p
-                              onClick={() => { setEditingNotes(trade.id); setNotesText(trade.notes || '') }}
-                              className="text-sm text-slate-400 cursor-pointer hover:text-white transition-colors min-h-[24px]"
-                            >
-                              {trade.notes || 'Click to add notes...'}
-                            </p>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
+                    <div className="flex items-center gap-2">
+                      <span>{key}</span>
+                      <span className="text-[10px] opacity-70">{count}</span>
+                    </div>
+                    {sum && (
+                      <div className={`text-[10px] mt-0.5 ${sum.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {fmtINR(sum.totalPnl)} ({fmt(sum.winRate, 0)}%)
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-wrap gap-2 items-center">
+            {/* Period filter */}
+            {(['TODAY', '1W', '1M', 'QTR', '1Y', 'ALL'] as AnalyticsPeriod[]).map(p => (
+              <button key={p} onClick={() => setAnalyticsPeriod(p)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                  analyticsPeriod === p ? 'bg-indigo-600 text-white border border-indigo-500' : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
+                }`}
+              >{ANALYTICS_PERIOD_LABELS[p]}</button>
+            ))}
+            <input
+              type="date"
+              value={analyticsPeriod === 'DATE' ? customDate : ''}
+              onChange={e => {
+                setCustomDate(e.target.value)
+                setAnalyticsPeriod('DATE')
+              }}
+              onClick={() => { if (analyticsPeriod !== 'DATE') setAnalyticsPeriod('DATE') }}
+              max={new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10)}
+              className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer ${
+                analyticsPeriod === 'DATE'
+                  ? 'bg-indigo-600 text-white border border-indigo-500'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
+              } [&::-webkit-calendar-picker-indicator]:invert [&::-webkit-calendar-picker-indicator]:opacity-60`}
+            />
+            <span className="w-px h-5 bg-slate-700 mx-0.5" />
+            {/* Result filter */}
+            {(['ALL', 'WIN', 'LOSS'] as ResultFilter[]).map(f => (
+              <button key={f} onClick={() => setResultFilter(f)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                  resultFilter === f
+                    ? f === 'WIN' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : f === 'LOSS' ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-blue-600 text-white border border-blue-500'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
+                }`}
+              >{f === 'ALL' ? 'All' : f === 'WIN' ? 'Winners' : 'Losers'}</button>
+            ))}
+            <span className="w-px h-5 bg-slate-700 mx-0.5" />
+            {/* Exchange filter */}
+            {(['ALL', 'N', 'M', 'C'] as ExchangeFilter[]).map(f => (
+              <button key={f} onClick={() => setExchangeFilter(f)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                  exchangeFilter === f
+                    ? f === 'N' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+                      : f === 'M' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                      : f === 'C' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
+                      : 'bg-blue-600 text-white border border-blue-500'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
+                }`}
+              >{f === 'ALL' ? 'All Exch' : f === 'N' ? 'NSE' : f === 'M' ? 'MCX' : 'CDS'}</button>
+            ))}
+            {tradesLoading && <span className="text-[10px] text-slate-500 animate-pulse ml-2">Loading trades...</span>}
+          </div>
+
+      {/* ═══ Tab Content ═══ */}
+
+      {/* Analytics Tab */}
+      {activeTab === 'analytics' && (
+        tradesLoading && !tradesLoaded ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+              {[...Array(6)].map((_, i) => <div key={i} className="h-20 bg-slate-800 rounded-xl animate-pulse" />)}
+            </div>
+            <div className="h-64 bg-slate-800 rounded-xl animate-pulse" />
+          </div>
         ) : (
-          <div className="text-center text-slate-500 py-12">No trades recorded yet</div>
-        )}
-      </div>
+          <AnalyticsView
+            analytics={analytics}
+            chartsData={chartsData}
+            initialCapital={activeSummary?.initialCapital ?? 1000000}
+            activeStrategy={activeStrategy}
+            liveDrawdown={liveDrawdown ?? undefined}
+            unrealizedPnl={(activeStrategy === 'ALL'
+              ? summaries.reduce((s, w) => s + (w.unrealizedPnl ?? 0), 0)
+              : activeSummary?.unrealizedPnl) ?? undefined}
+          />
+        )
+      )}
+
+      {/* Deep Analysis Tab */}
+      {activeTab === 'deep' && (
+        tradesLoading && !tradesLoaded ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div className="h-64 bg-slate-800 rounded-xl animate-pulse" />
+              <div className="h-64 bg-slate-800 rounded-xl animate-pulse" />
+            </div>
+          </div>
+        ) : (
+          <DeepAnalyticsView analytics={analytics} advAnalytics={advAnalytics} />
+        )
+      )}
     </div>
   )
 }

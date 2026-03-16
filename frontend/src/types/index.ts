@@ -67,6 +67,14 @@ export interface Position {
   exitReason?: string;    // "1% DD", "SL-EQ", "SL-OP", "T1-OP", "T2-EQ", "EOD", etc.
   confidence?: number;
   equityLtp?: number;     // live equity/futures price for dual display
+  // Transaction charges (Zerodha round-trip)
+  totalCharges?: number;
+  chargesBrokerage?: number;
+  chargesStt?: number;
+  chargesExchange?: number;
+  chargesGst?: number;
+  chargesSebi?: number;
+  chargesStamp?: number;
   // Per-target exit history
   exitHistory?: ExitEvent[];
 }
@@ -303,6 +311,7 @@ export interface Trade {
   durationMinutes: number;
   strategy?: string;
   executionMode?: 'AUTO' | 'MANUAL';
+  totalCharges?: number;
 }
 
 // Regime types
@@ -792,80 +801,87 @@ export interface PatternStats {
 
 // ==================== Risk Analytics Types ====================
 
-export interface RiskMetrics {
-  portfolioExposure: PortfolioExposure;
-  concentrationRisk: ConcentrationRisk;
-  sectorExposure: Record<string, number>;
-  directionExposure: DirectionExposure;
-  riskBreakdown: RiskBreakdown;
-  valueAtRisk: ValueAtRisk;
-  maxLossExposure: number;
-  correlationMetrics: CorrelationMetrics;
-  riskScore: RiskScore;
-  alerts: RiskAlert[];
-  lastUpdated: string;
+// ==================== Risk Types (per-strategy, real wallet data) ====================
+
+export interface StrategyRiskProfile {
+  strategy: string
+  displayName: string
+  currentBalance: number
+  initialCapital: number
+  usedMargin: number
+  availableMargin: number
+  dayPnl: number
+  unrealizedPnl: number
+  peakBalance: number
+  maxDrawdown: number
+  maxDailyLoss: number
+  circuitBreakerTripped: boolean
+  circuitBreakerReason: string | null
+  winRate: number
+  profitFactor: number
+  totalTradeCount: number
+  dayTradeCount: number
+  openPositionCount: number
+  healthScore: number
+  healthStatus: 'HEALTHY' | 'DEGRADING' | 'CRITICAL'
+  drawdownPercent: number
+  dailyLossPercent: number
+  marginUtilPercent: number
+  last10WinRate: number
+  winRateDeclining: boolean
+  consecutiveLosses: number
+  avgRMultiple: number
+  last10AvgPnl: number
 }
 
-export interface PortfolioExposure {
-  longExposure: number;
-  shortExposure: number;
-  netExposure: number;
-  grossExposure: number;
-  longCount: number;
-  shortCount: number;
-  netDirection: string;
+export interface PortfolioRiskSummary {
+  strategies: StrategyRiskProfile[]
+  totalBalance: number
+  totalUnrealizedPnl: number
+  totalDayPnl: number
+  totalUsedMargin: number
+  totalAvailableMargin: number
+  overallHealthScore: number
+  overallHealthStatus: string
+  totalOpenPositions: number
+  circuitBreakersTripped: number
+  alerts: RiskAlert[]
+  lastUpdated: string
 }
 
-export interface ConcentrationRisk {
-  herfindahlIndex: number;
-  riskLevel: 'LOW' | 'MODERATE' | 'HIGH';
-  uniqueStocks: number;
-  topHoldings: Record<string, number>;
-  singleStockMaxPercent: number;
-}
-
-export interface DirectionExposure {
-  bullishPercent: number;
-  bearishPercent: number;
-  neutralPercent: number;
-  bullishCount: number;
-  bearishCount: number;
-  neutralCount: number;
-}
-
-export interface RiskBreakdown {
-  totalRiskAmount: number;
-  averageRiskPerTrade: number;
-  averageRiskReward: number;
-  openPositions: number;
-}
-
-export interface ValueAtRisk {
-  var95: number;
-  var99: number;
-  expectedShortfall: number;
-  sampleSize: number;
-}
-
-export interface CorrelationMetrics {
-  sourceConcentration: number;
-  diversificationScore: number;
-  signalsBySource: Record<string, number>;
-}
-
-export interface RiskScore {
-  score: number;
-  level: 'LOW' | 'MODERATE' | 'HIGH';
-  concentrationComponent: number;
-  exposureComponent: number;
-  varComponent: number;
+export interface DrawdownPoint {
+  timestamp: string
+  balance: number
+  peakBalance: number
+  drawdownPercent: number
+  pnl: number
 }
 
 export interface RiskAlert {
-  type: string;
-  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-  message: string;
-  recommendation?: string;
+  strategy: string
+  type: string
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
+  message: string
+  recommendation: string
+}
+
+// Legacy types kept for RiskStatusPanel compatibility
+export interface RiskStatus {
+  healthy: boolean
+  status: string
+  message: string
+  circuitBreakerTripped: boolean
+  circuitBreakerReason: string | null
+  dailyLossPercent: number
+  dailyLossAmount: number
+  dailyLossLimit: number
+  drawdownPercent: number
+  drawdownAmount: number
+  drawdownLimit: number
+  openPositions: number
+  maxOpenPositions: number
+  currentBalance: number
+  availableMargin: number
 }
 
 // ==================== Alert History Types ====================

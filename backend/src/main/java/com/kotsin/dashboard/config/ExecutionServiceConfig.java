@@ -20,10 +20,22 @@ public class ExecutionServiceConfig {
      * Includes timeout settings for reliable proxy behavior.
      */
     @Bean(name = "executionRestTemplate")
+    @org.springframework.context.annotation.Primary
     public RestTemplate executionRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeout);
         factory.setReadTimeout(timeout);
+        return new RestTemplate(factory);
+    }
+
+    /**
+     * RestTemplate for ML proxy calls — longer timeout for model training/loading.
+     */
+    @Bean(name = "mlRestTemplate")
+    public RestTemplate mlRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(120000); // 2 min for ML training
         return new RestTemplate(factory);
     }
 }

@@ -43,6 +43,9 @@ public class TradeDTO {
     private double pnl;
     private double pnlPercent;
     private double rMultiple;
+
+    // Transaction charges (Zerodha round-trip)
+    private Double totalCharges;
     
     // Duration
     private long durationMinutes;

@@ -293,6 +293,15 @@ public class WalletService {
             String exitReason = data.get("exitReason") != null ? data.get("exitReason").toString() : null;
             Double equityLtp = data.get("equityLtp") != null ? ((Number) data.get("equityLtp")).doubleValue() : null;
 
+            // Transaction charges
+            Double totalCharges = data.get("totalCharges") != null ? ((Number) data.get("totalCharges")).doubleValue() : null;
+            Double chargesBrokerage = data.get("chargesBrokerage") != null ? ((Number) data.get("chargesBrokerage")).doubleValue() : null;
+            Double chargesStt = data.get("chargesStt") != null ? ((Number) data.get("chargesStt")).doubleValue() : null;
+            Double chargesExchange = data.get("chargesExchange") != null ? ((Number) data.get("chargesExchange")).doubleValue() : null;
+            Double chargesGst = data.get("chargesGst") != null ? ((Number) data.get("chargesGst")).doubleValue() : null;
+            Double chargesSebi = data.get("chargesSebi") != null ? ((Number) data.get("chargesSebi")).doubleValue() : null;
+            Double chargesStamp = data.get("chargesStamp") != null ? ((Number) data.get("chargesStamp")).doubleValue() : null;
+
             // Exit history: per-target exit events
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> exitHistory = data.get("exitHistory") != null
@@ -348,6 +357,13 @@ public class WalletService {
                     .delta(delta)
                     .exitReason(exitReason)
                     .equityLtp(equityLtp)
+                    .totalCharges(totalCharges)
+                    .chargesBrokerage(chargesBrokerage)
+                    .chargesStt(chargesStt)
+                    .chargesExchange(chargesExchange)
+                    .chargesGst(chargesGst)
+                    .chargesSebi(chargesSebi)
+                    .chargesStamp(chargesStamp)
                     .exitHistory(exitHistory)
                     .build();
 

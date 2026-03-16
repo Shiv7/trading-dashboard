@@ -531,6 +531,26 @@ function TradeDetailDrawer({ trade, onClose }: { trade: StrategyWalletTrade; onC
                 </span>
               )}
             </div>
+            {(trade.totalCharges ?? 0) > 0 && (
+              <div className="mt-3 pt-2 border-t border-slate-700/50 space-y-1 text-xs font-mono">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Gross P&L</span>
+                  <span className={(trade.pnl + (trade.totalCharges ?? 0)) >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                    {(trade.pnl + (trade.totalCharges ?? 0)) >= 0 ? '+' : ''}{formatINR(trade.pnl + (trade.totalCharges ?? 0))}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Charges</span>
+                  <span className="text-red-400">-{formatINR(trade.totalCharges ?? 0)}</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-slate-700/40">
+                  <span className="text-slate-300 font-medium">Net P&L</span>
+                  <span className={`font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {positive ? '+' : ''}{formatINR(trade.pnl)}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Entry / Exit */}

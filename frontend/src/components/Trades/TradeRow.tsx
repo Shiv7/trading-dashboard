@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Trade } from '../../types'
 
 interface TradeRowProps {
@@ -5,8 +6,10 @@ interface TradeRowProps {
 }
 
 export default function TradeRow({ trade }: TradeRowProps) {
+  const [showCharges, setShowCharges] = useState(false)
   const isLong = trade.side === 'LONG'
-  
+  const charges = trade.totalCharges ?? 0
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -57,12 +60,39 @@ export default function TradeRow({ trade }: TradeRowProps) {
         {trade.exitPrice?.toFixed(2) || '-'}
       </td>
       <td className="py-3 px-4">
-        <span className={trade.pnl >= 0 ? 'num-positive' : 'num-negative'}>
-          {formatCurrency(trade.pnl)}
-        </span>
-        <div className={`text-xs ${trade.pnl >= 0 ? 'num-positive' : 'num-negative'}`}>
-          {trade.pnlPercent >= 0 ? '+' : ''}{(trade.pnlPercent ?? 0).toFixed(2)}%
+        <div
+          className={`${charges > 0 ? 'cursor-pointer' : ''}`}
+          onClick={charges > 0 ? () => setShowCharges(v => !v) : undefined}
+          title={charges > 0 ? 'Click to see charges' : undefined}
+        >
+          <span className={trade.pnl >= 0 ? 'num-positive' : 'num-negative'}>
+            {formatCurrency(trade.pnl)}
+          </span>
+          <div className={`text-xs ${trade.pnl >= 0 ? 'num-positive' : 'num-negative'}`}>
+            {trade.pnlPercent >= 0 ? '+' : ''}{(trade.pnlPercent ?? 0).toFixed(2)}%
+            {charges > 0 && <span className="text-slate-500 ml-1">{showCharges ? '\u25B2' : '\u25BC'}</span>}
+          </div>
         </div>
+        {showCharges && charges > 0 && (
+          <div className="mt-1 text-[10px] bg-slate-800/80 rounded px-2 py-1 border border-slate-600/40 space-y-0.5">
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-400">Gross</span>
+              <span className={(trade.pnl + charges) >= 0 ? 'num-positive' : 'num-negative'}>
+                {formatCurrency(trade.pnl + charges)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-400">Charges</span>
+              <span className="text-red-400">-{formatCurrency(charges)}</span>
+            </div>
+            <div className="flex justify-between gap-3 border-t border-slate-600/40 pt-0.5">
+              <span className="text-slate-300 font-medium">Net</span>
+              <span className={`font-medium ${trade.pnl >= 0 ? 'num-positive' : 'num-negative'}`}>
+                {formatCurrency(trade.pnl)}
+              </span>
+            </div>
+          </div>
+        )}
       </td>
       <td className="py-3 px-4">
         <span className={`font-medium ${trade.rMultiple >= 0 ? 'num-positive' : 'num-negative'}`}>

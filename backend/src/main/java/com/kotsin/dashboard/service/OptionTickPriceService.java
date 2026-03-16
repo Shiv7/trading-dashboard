@@ -275,6 +275,40 @@ public class OptionTickPriceService {
         }
     }
 
+    // ==================== LTP READING ====================
+
+    /**
+     * Get the latest LTP (Last Traded Price) for a given scripCode from Redis candle data.
+     * Reads the first element (index 0, newest) from tick:{scripCode}:1m:history
+     * and returns the close price.
+     *
+     * @param scripCode the scrip code to look up
+     * @return the close price as Double, or null if not available
+     */
+    public Double getLatestLtp(String scripCode) {
+        if (scripCode == null || scripCode.isEmpty()) return null;
+
+        try {
+            String key = "tick:" + scripCode + ":1m:history";
+            String raw = redisTemplate.opsForList().index(key, 0);
+            if (raw == null || raw.isEmpty()) return null;
+
+            JsonNode root = objectMapper.readTree(raw);
+            // Handle type-wrapped format: ["com.class.Name", {actual data}]
+            JsonNode data = (root.isArray() && root.size() == 2) ? root.get(1) : root;
+
+            if (data.has("close")) {
+                double close = data.get("close").asDouble();
+                return close > 0 ? close : null;
+            }
+            return null;
+
+        } catch (Exception e) {
+            log.debug("{} Failed to read LTP for {}: {}", LOG_PREFIX, scripCode, e.getMessage());
+            return null;
+        }
+    }
+
     // ==================== HELPERS ====================
 
     /**

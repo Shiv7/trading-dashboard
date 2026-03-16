@@ -4,10 +4,12 @@ import {
   Volume2, Check, Zap, AlertTriangle, Loader2, Clock
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { fetchJson, strategyTradesApi, strategyWalletsApi } from '../../services/api';
+import { fetchJson, strategyTradesApi, strategyWalletsApi, marketDataApi, greeksApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
+import StalePriceModal from './StalePriceModal';
 
 type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -88,6 +90,30 @@ interface FukaaTrigger {
   futuresExchange?: string;
   futuresExchangeType?: string;
   futuresVolume?: number;
+  // Greek enrichment from Streaming Candle (Black-Scholes)
+  greekEnriched?: boolean;
+  greekDelta?: number;
+  greekGamma?: number;
+  greekTheta?: number;
+  greekVega?: number;
+  greekIV?: number;
+  greekDte?: number;
+  greekMoneynessType?: string;
+  greekThetaImpaired?: boolean;
+  greekSlMethod?: string;
+  greekGammaBoost?: number;
+  optionRR?: number;
+  optionSL?: number;
+  optionT1?: number;
+  optionT2?: number;
+  optionT3?: number;
+  optionT4?: number;
+  lotAllocation?: string;
+  futuresSL?: number;
+  futuresT1?: number;
+  futuresT2?: number;
+  futuresT3?: number;
+  futuresT4?: number;
 }
 
 interface TradePlan {
@@ -560,7 +586,16 @@ const FukaaCard: React.FC<{
   isFunded: boolean;
 }> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded }) => {
   const [pressing, setPressing] = useState(false);
+  const [showRevisedPopup, setShowRevisedPopup] = useState(false);
+  const [revisedData, setRevisedData] = useState<any>(null);
+  const [loadingRevised, setLoadingRevised] = useState(false);
+  const [ltpDriftPct, setLtpDriftPct] = useState<number | null>(null);
   const isLong = trigger.direction === 'BULLISH';
+
+  const signalAgeMs = trigger.triggerTimeEpoch ? Date.now() - trigger.triggerTimeEpoch : 0;
+  const isWithin30mWindow = signalAgeMs <= 30 * 60 * 1000;
+  const isBeyond30mBoundary = !isWithin30mWindow;
+  const isStale = ltpDriftPct !== null && ltpDriftPct > 10;
 
   // Colors
   const dirColor = isLong ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
@@ -637,9 +672,27 @@ const FukaaCard: React.FC<{
   })();
 
   const sizing = (instrumentMode === 'NONE')
-    ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0 }
+    ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0, slotsUsed: 0, maxSlots: 0, exchangeFull: false }
     : computeSlotSizing(confidence, walletState, premium, lotSize, multiplier,
         (trigger.exchange || 'N').substring(0, 1).toUpperCase(), trigger.riskReward ?? 2.0, 60);
+
+  // Periodic LTP drift check (every 30s) for stale badge
+  const scripForDrift = trigger.optionScripCode || '';
+  const premiumForDrift = premium;
+  useEffect(() => {
+    if (!scripForDrift || premiumForDrift <= 0) return;
+    const checkDrift = async () => {
+      try {
+        const res = await marketDataApi.getLtp(scripForDrift);
+        if (res?.ltp && res.ltp > 0) {
+          setLtpDriftPct(Math.abs(res.ltp - premiumForDrift) / premiumForDrift * 100);
+        }
+      } catch {}
+    };
+    checkDrift();
+    const iv = setInterval(checkDrift, 30000);
+    return () => clearInterval(iv);
+  }, [scripForDrift, premiumForDrift]);
 
   // Metrics — use real FUKAA surge data and OI
   const surgeVal = (trigger.surgeT ?? 0).toFixed(1);
@@ -769,6 +822,47 @@ const FukaaCard: React.FC<{
           <RiskRewardBar rr={plan.rr} />
         </div>
 
+        {/* ── GREEK METADATA (only when greekEnriched) ── */}
+        {trigger.greekEnriched && (
+          <div className="mt-2 flex items-center gap-1 flex-wrap">
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
+              Greek
+            </span>
+            <span className="text-[9px] font-mono text-slate-400">
+              {'\u03B4'} {(trigger.greekDelta ?? 0).toFixed(2)}
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className="text-[9px] font-mono text-slate-400">
+              {'\u03B3'} {(trigger.greekGamma ?? 0).toFixed(3)}
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className={`text-[9px] font-mono ${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
+              {'\u03B8'} {(trigger.greekTheta ?? 0).toFixed(1)}
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className="text-[9px] font-mono text-slate-400">
+              IV {((trigger.greekIV ?? 0) * 100).toFixed(0)}%
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className={`text-[9px] font-mono ${(trigger.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
+              DTE {trigger.greekDte ?? 0}
+            </span>
+            {trigger.optionRR != null && trigger.optionRR > 0 && (
+              <>
+                <span className="text-slate-600">|</span>
+                <span className="text-[9px] font-mono text-emerald-400">
+                  R:R {trigger.optionRR.toFixed(1)}
+                </span>
+              </>
+            )}
+            {trigger.greekThetaImpaired && (
+              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
+                {'\u03B8'}-IMPAIRED
+              </span>
+            )}
+          </div>
+        )}
+
         {/* ── METRICS ROW ── */}
         <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
           <MetricsChip label="ATR" value={fmt(plan.atr)} />
@@ -883,17 +977,117 @@ const FukaaCard: React.FC<{
               </span>
             )}
             <button
-              onClick={() => onBuy(trigger, plan, sizing.lots)}
+              onClick={async () => {
+                if ((isBeyond30mBoundary || (isWithin30mWindow && isStale)) && instrumentMode === 'OPTION' && trigger.optionScripCode) {
+                  setLoadingRevised(true);
+                  try {
+                    const ltpRes = await marketDataApi.getLtp(trigger.optionScripCode);
+                    const currentLtp = ltpRes?.ltp;
+                    if (currentLtp && currentLtp > 0) {
+                      const eqEntry = plan.entry || trigger.triggerPrice || 0;
+                      const eqSl = plan.sl || 0;
+                      const eqT1 = plan.t1 || 0;
+                      const eqT2 = plan.t2 || 0;
+                      const eqT3 = plan.t3 || 0;
+                      const eqT4 = plan.t4 || 0;
+                      const revised = await greeksApi.compute({
+                        spot: eqEntry,
+                        strike: plan.strike || trigger.optionStrike || 0,
+                        optionLtp: currentLtp,
+                        optionType: plan.optionType || 'CE',
+                        expiry: trigger.optionExpiry || '',
+                        equityEntry: eqEntry,
+                        equitySl: eqSl,
+                        equityT1: eqT1,
+                        equityT2: eqT2,
+                        equityT3: eqT3,
+                        equityT4: eqT4,
+                      });
+                      setRevisedData({ ...revised, currentLtp, originalLtp: premium, signalAge: Math.round(signalAgeMs / 60000), slotsFullOverride: sizing.exchangeFull });
+                      setShowRevisedPopup(true);
+                    } else {
+                      if (sizing.exchangeFull) {
+                        if (window.confirm(`Exchange slots are full (${sizing.maxSlots}/${sizing.maxSlots}). Manual override — proceed?`)) onBuy(trigger, plan, sizing.lots);
+                      } else {
+                        onBuy(trigger, plan, sizing.lots);
+                      }
+                    }
+                  } catch (e) {
+                    console.error('Greeks compute failed:', e);
+                    onBuy(trigger, plan, sizing.lots);
+                  } finally {
+                    setLoadingRevised(false);
+                  }
+                } else if (sizing.exchangeFull) {
+                  if (window.confirm(`Exchange slots are full (${sizing.maxSlots}/${sizing.maxSlots}). Manual override — proceed?`)) onBuy(trigger, plan, sizing.lots);
+                } else {
+                  onBuy(trigger, plan, sizing.lots);
+                }
+              }}
               onMouseDown={() => setPressing(true)}
               onMouseUp={() => setPressing(false)}
               onMouseLeave={() => setPressing(false)}
+              disabled={loadingRevised}
               className={`w-full h-12 rounded-xl text-white font-semibold text-sm
                 transition-all duration-100 select-none
-                ${buyBg} ${buyHover} ${buyBgActive}
+                ${isBeyond30mBoundary
+                  ? (isLong ? 'bg-[#18C964]/40 hover:bg-[#18C964]/60' : 'bg-[#FF4D6D]/40 hover:bg-[#FF4D6D]/60')
+                  : `${buyBg} ${buyHover} ${buyBgActive}`}
                 ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
             >
-              {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{Number(premium.toFixed(2))}/- * {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}
+              <span className="flex items-center justify-center gap-2">
+                {isStale && isWithin30mWindow && <span className="text-yellow-300 text-base animate-pulse" title={`LTP drifted ${ltpDriftPct?.toFixed(1)}% from signal`}>⚠</span>}
+                {sizing.exchangeFull && !isBeyond30mBoundary && <span className="text-[10px] text-amber-300 bg-amber-500/20 px-1 rounded">SLOTS FULL</span>}
+                {loadingRevised ? 'Computing...' : (
+                  <>{instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{fmt(premium)}/- * {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}</>
+                )}
+              </span>
             </button>
+
+            {showRevisedPopup && revisedData && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowRevisedPopup(false)}>
+                <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+                  <h3 className="text-lg font-bold text-white mb-1">Revised Trade Levels</h3>
+                  <p className="text-xs text-slate-400 mb-4">Signal is {revisedData.signalAge}m old — levels recomputed with current LTP</p>
+
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="bg-slate-700/50 rounded-lg p-3">
+                      <div className="text-[10px] text-slate-500 mb-1">Signal LTP</div>
+                      <div className="text-sm font-bold text-slate-300">&#8377;{fmt(revisedData.originalLtp)}</div>
+                    </div>
+                    <div className={`rounded-lg p-3 ${revisedData.currentLtp > revisedData.originalLtp ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                      <div className="text-[10px] text-slate-500 mb-1">Current LTP</div>
+                      <div className={`text-sm font-bold ${revisedData.currentLtp > revisedData.originalLtp ? 'text-green-400' : 'text-red-400'}`}>
+                        &#8377;{fmt(revisedData.currentLtp)} ({((revisedData.currentLtp - revisedData.originalLtp) / revisedData.originalLtp * 100).toFixed(1)}%)
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 mb-4 text-sm">
+                    <div className="flex justify-between"><span className="text-slate-400">SL</span><span className="text-red-400 font-medium">&#8377;{fmt(revisedData.optionSL)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">T1</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT1)}</span></div>
+                    {revisedData.optionT2 > 0 && <div className="flex justify-between"><span className="text-slate-400">T2</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT2)}</span></div>}
+                    {revisedData.optionT3 > 0 && <div className="flex justify-between"><span className="text-slate-400">T3</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT3)}</span></div>}
+                    {revisedData.optionT4 > 0 && <div className="flex justify-between"><span className="text-slate-400">T4</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT4)}</span></div>}
+                    <div className="flex justify-between"><span className="text-slate-400">R:R</span><span className="text-blue-400 font-medium">{revisedData.optionRR.toFixed(1)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Greeks</span><span className="text-violet-400 font-medium text-xs">δ{revisedData.delta.toFixed(2)} γ{revisedData.gamma.toFixed(3)} θ{revisedData.theta.toFixed(1)} IV{revisedData.iv.toFixed(0)}%</span></div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button onClick={() => setShowRevisedPopup(false)}
+                      className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">
+                      Cancel
+                    </button>
+                    <button onClick={() => {
+                      setShowRevisedPopup(false);
+                      onBuy(trigger, { ...plan, sl: revisedData.optionSL, t1: revisedData.optionT1, t2: revisedData.optionT2, t3: revisedData.optionT3, t4: revisedData.optionT4, entry: revisedData.currentLtp }, sizing.lots);
+                    }} className={`flex-1 h-10 rounded-xl text-white font-semibold text-sm transition-colors ${buyBg} ${buyHover}`}>
+                      Execute @ &#8377;{fmt(revisedData.currentLtp)}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -928,6 +1122,13 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     premium: number; lotSize: number; multiplier: number; confidence: number;
   } | null>(null);
   const [fundedScripCodes, setFundedScripCodes] = useState<Set<string>>(new Set());
+  const [stalePriceCheck, setStalePriceCheck] = useState<{
+    result: StalePriceResult;
+    instrumentName: string;
+    originalSl: number;
+    originalTargets: { t1: number | null; t2: number | null; t3: number | null; t4: number | null };
+    pendingBuy: () => void;
+  } | null>(null);
 
   const fetchFukaa = useCallback(async () => {
     try {
@@ -1039,14 +1240,18 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
   const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Recent';
 
-  /* ── BUY HANDLER — dispatches to strategy trades module ── */
-  const handleBuy = useCallback(async (sig: FukaaTrigger, plan: TradePlan, lots: number) => {
+  /* ── EXECUTE TRADE (inner) — builds request and sends to backend ── */
+  const executeTrade = useCallback(async (
+    sig: FukaaTrigger, plan: TradePlan, lots: number,
+    overrideEntry?: number, overrideSl?: number,
+    overrideT1?: number | null, overrideT2?: number | null,
+    overrideT3?: number | null, overrideT4?: number | null
+  ) => {
     const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
     const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
     const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(sig.symbol);
     const isLong = sig.direction === 'BULLISH';
 
-    // Determine instrument details based on mode
     let premium = 0;
     let instrumentSymbol = '';
     let instrumentType: 'OPTION' | 'FUTURES' = 'OPTION';
@@ -1080,7 +1285,6 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
       instrumentType = 'FUTURES';
     } else if (isCurrencyPair) {
-      // Currency FUT fallback: signal scrip IS the FUT contract
       premium = sig.triggerPrice;
       instrumentSymbol = `${sig.symbol}`;
       tradingScripCode = sig.scripCode;
@@ -1092,6 +1296,9 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       instrumentType = 'OPTION';
     }
 
+    // Use override entry (current LTP) if provided
+    const entryPrice = overrideEntry ?? premium;
+
     setExecution({
       visible: true,
       symbol: sig.symbol || sig.scripCode,
@@ -1099,13 +1306,12 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       strike,
       optionType,
       lots,
-      filledPrice: premium,
+      filledPrice: entryPrice,
       riskPercent: 0.8,
       status: 'sending',
     });
 
     try {
-      // Compute delta-mapped levels for options, or use equity levels directly for futures
       let tradeSl = plan.sl;
       let tradeT1 = plan.t1 ?? 0;
       let tradeT2 = plan.t2 ?? 0;
@@ -1115,12 +1321,9 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
 
       if (instrumentType === 'OPTION' && hasRealOption) {
         const mapped = mapToOptionLevels(
-          premium,
-          sig.triggerPrice,
-          plan.sl,
+          premium, sig.triggerPrice, plan.sl,
           [plan.t1, plan.t2, plan.t3, plan.t4],
-          strike,
-          optionType
+          strike, optionType
         );
         tradeSl = mapped.sl;
         tradeT1 = mapped.targets[0] ?? 0;
@@ -1129,6 +1332,13 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         tradeT4 = mapped.targets[3] ?? 0;
         delta = mapped.delta;
       }
+
+      // Apply stale-price overrides if provided
+      if (overrideSl != null) tradeSl = overrideSl;
+      if (overrideT1 !== undefined) tradeT1 = overrideT1 ?? 0;
+      if (overrideT2 !== undefined) tradeT2 = overrideT2 ?? 0;
+      if (overrideT3 !== undefined) tradeT3 = overrideT3 ?? 0;
+      if (overrideT4 !== undefined) tradeT4 = overrideT4 ?? 0;
 
       const confidence = computeConfidence(sig);
 
@@ -1143,7 +1353,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
         lots,
         lotSize,
         multiplier,
-        entryPrice: premium,
+        entryPrice,
         sl: tradeSl,
         t1: tradeT1,
         t2: tradeT2,
@@ -1170,7 +1380,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       setExecution(prev => ({
         ...prev,
         status: 'filled',
-        filledPrice: result?.entryPrice ?? premium,
+        filledPrice: result?.entryPrice ?? entryPrice,
         orderId: result?.tradeId,
         riskPercent: plan.sl && sig.triggerPrice
           ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
@@ -1184,6 +1394,81 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       }));
     }
   }, []);
+
+  /* ── BUY HANDLER — stale price check then dispatch ── */
+  const handleBuy = useCallback(async (sig: FukaaTrigger, plan: TradePlan, lots: number) => {
+    // Determine which scripCode to check LTP for
+    const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
+    const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
+    const ltpScripCode = hasRealOption ? (sig.optionScripCode ?? sig.scripCode)
+      : hasFutures ? (sig.futuresScripCode ?? sig.scripCode)
+      : sig.scripCode;
+    const instrumentName = hasRealOption
+      ? `${sig.symbol} ${sig.optionStrike ?? plan.strike} ${sig.optionType ?? plan.optionType}`
+      : hasFutures ? `${sig.futuresSymbol ?? sig.symbol} FUT`
+      : sig.symbol;
+
+    // Compute the trade-level SL/targets that would be used
+    let tradeSl = plan.sl;
+    let tradeT1 = plan.t1;
+    let tradeT2 = plan.t2;
+    let tradeT3 = plan.t3;
+    let tradeT4 = plan.t4;
+
+    if (hasRealOption) {
+      const mapped = mapToOptionLevels(
+        sig.optionLtp!, sig.triggerPrice, plan.sl,
+        [plan.t1, plan.t2, plan.t3, plan.t4],
+        sig.optionStrike ?? plan.strike,
+        (sig.optionType ?? plan.optionType) as 'CE' | 'PE'
+      );
+      tradeSl = mapped.sl;
+      tradeT1 = mapped.targets[0] ?? null;
+      tradeT2 = mapped.targets[1] ?? null;
+      tradeT3 = mapped.targets[2] ?? null;
+      tradeT4 = mapped.targets[3] ?? null;
+    }
+
+    // Fetch current LTP
+    try {
+      const ltpData = await marketDataApi.getLtp(ltpScripCode);
+      if (ltpData?.ltp != null && ltpData.ltp > 0) {
+        const currentLtp = ltpData.ltp;
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4);
+
+        if (staleCheck) {
+          // Show modal — store pending trade details
+          setStalePriceCheck({
+            result: staleCheck,
+            instrumentName,
+            originalSl: tradeSl,
+            originalTargets: { t1: tradeT1, t2: tradeT2, t3: tradeT3, t4: tradeT4 },
+            pendingBuy: () => {
+              if (staleCheck.type === 'below-sl') {
+                // User chose to proceed despite being below SL — use current LTP, keep original levels
+                executeTrade(sig, plan, lots, currentLtp);
+              } else {
+                // Targets shifted — use current LTP as entry, use adjusted levels
+                executeTrade(sig, plan, lots, currentLtp,
+                  staleCheck.adjustedSl, staleCheck.adjustedT1, staleCheck.adjustedT2,
+                  staleCheck.adjustedT3, staleCheck.adjustedT4);
+              }
+            },
+          });
+          return;
+        }
+
+        // LTP available but no adjustment needed — use current LTP as entry
+        executeTrade(sig, plan, lots, currentLtp);
+        return;
+      }
+    } catch {
+      // LTP fetch failed — proceed with original price (graceful degradation)
+    }
+
+    // Fallback: no LTP available, proceed with signal price
+    executeTrade(sig, plan, lots);
+  }, [executeTrade]);
 
   const resetFilters = useCallback(() => {
     setDirectionFilter('ALL');
@@ -1325,6 +1610,31 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
                 handleBuy(ctx.sig, ctx.plan, newSizing.lots);
               }
             } catch { /* ignore */ }
+          }}
+        />
+      )}
+
+      {/* ── STALE PRICE CHECK MODAL ── */}
+      {stalePriceCheck && (
+        <StalePriceModal
+          type={stalePriceCheck.result.type}
+          currentLtp={stalePriceCheck.result.currentLtp}
+          originalEntry={stalePriceCheck.result.currentLtp}
+          originalSl={stalePriceCheck.originalSl}
+          originalTargets={stalePriceCheck.originalTargets}
+          adjustedSl={stalePriceCheck.result.adjustedSl}
+          adjustedTargets={{
+            t1: stalePriceCheck.result.adjustedT1,
+            t2: stalePriceCheck.result.adjustedT2,
+            t3: stalePriceCheck.result.adjustedT3,
+            t4: stalePriceCheck.result.adjustedT4,
+          }}
+          levelsShifted={stalePriceCheck.result.levelsShifted}
+          instrumentName={stalePriceCheck.instrumentName}
+          onCancel={() => setStalePriceCheck(null)}
+          onProceed={() => {
+            stalePriceCheck.pendingBuy();
+            setStalePriceCheck(null);
           }}
         />
       )}

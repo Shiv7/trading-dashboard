@@ -2,7 +2,7 @@ import type {
   Wallet, Position, FamilyScore, Signal, Trade, TradeStats, IPUSignal, VCPSignal,
   QuantScore, QuantScoreStats, CreateOrderRequest, ModifyPositionRequest, VirtualOrder, VirtualPosition,
   PerformanceMetrics, PatternSignal, PatternSummary, PatternStats,
-  RiskMetrics, RiskScore, RiskAlert,
+  PortfolioRiskSummary, StrategyRiskProfile, DrawdownPoint, RiskAlert,
   AlertHistory, AlertStats, AlertSummary,
   StrategyTradeRequest, StrategyTradeResponse
 } from '../types'
@@ -336,29 +336,20 @@ export const patternsApi = {
 
 // Risk Analytics API
 export const riskApi = {
-  getMetrics: () => fetchJson<RiskMetrics>('/risk'),
-
-  getExposure: () => fetchJson<RiskMetrics['portfolioExposure']>('/risk/exposure'),
-
-  getConcentration: () => fetchJson<RiskMetrics['concentrationRisk']>('/risk/concentration'),
-
-  getDirection: () => fetchJson<RiskMetrics['directionExposure']>('/risk/direction'),
-
-  getVaR: () => fetchJson<RiskMetrics['valueAtRisk']>('/risk/var'),
-
-  getRiskScore: () => fetchJson<RiskScore>('/risk/score'),
-
+  getPortfolioRisk: () => fetchJson<PortfolioRiskSummary>('/risk'),
+  getStrategyRisk: (key: string) => fetchJson<StrategyRiskProfile>(`/risk/strategy/${key}`),
+  getDrawdownHistory: (strategy: string, period: string) =>
+    fetchJson<DrawdownPoint[]>(`/risk/drawdown/${strategy}?period=${period}`),
   getAlerts: () => fetchJson<RiskAlert[]>('/risk/alerts'),
-
-  getSummary: () => fetchJson<{
-    riskScore: number
-    riskLevel: string
-    openPositions: number
-    maxLossExposure: number
-    netDirection: string
-    alertCount: number
-    var95: number
-  }>('/risk/summary'),
+  tripCircuitBreaker: (strategy: string, reason: string) =>
+    postJson<{ success: boolean; message: string }>(
+      `/risk/circuit-breaker/trip?strategy=${strategy}&reason=${encodeURIComponent(reason)}`, {}),
+  resetCircuitBreaker: (strategy: string) =>
+    postJson<{ success: boolean; message: string }>(
+      `/risk/circuit-breaker/reset?strategy=${strategy}`, {}),
+  forceCloseAll: (strategy: string) =>
+    postJson<{ strategy: string; closedCount: number }>(
+      `/risk/force-close?strategy=${strategy}`, {}),
 }
 
 // Initial State API - for loading cached data on page refresh
@@ -623,18 +614,6 @@ export interface RiskStatus {
 
 export const riskStatusApi = {
   getStatus: () => fetchJson<RiskStatus>('/risk/status'),
-
-  tripCircuitBreaker: (reason?: string) =>
-    postJson<{ success: boolean; message: string }>(
-      `/risk/circuit-breaker/trip?reason=${encodeURIComponent(reason || 'Manual intervention')}`,
-      {}
-    ),
-
-  resetCircuitBreaker: () =>
-    postJson<{ success: boolean; message: string }>(
-      '/risk/circuit-breaker/reset',
-      {}
-    ),
 }
 
 // ===== AUTH API =====
@@ -772,6 +751,13 @@ export interface StrategyWalletSummary {
   mcxUsedMargin?: number
   dayPnl?: number
   circuitBreakerTripped?: boolean
+  unrealizedPnl?: number
+  peakBalance?: number
+  maxDrawdown?: number
+  maxDrawdownPercent?: number
+  profitFactor?: number
+  avgWin?: number
+  avgLoss?: number
 }
 
 export interface WalletTransaction {
@@ -850,6 +836,8 @@ export interface StrategyWalletTrade {
   rMultiple?: number | null
   confidence?: number | null
   durationMinutes?: number | null
+  // Transaction charges (Zerodha round-trip)
+  totalCharges?: number | null
   // Signal-level metrics (for correlation analytics)
   atr?: number | null
   volumeSurge?: number | null
@@ -874,6 +862,8 @@ export const strategyWalletsApi = {
     exchange?: string
     sortBy?: string
     limit?: number
+    from?: number
+    to?: number
   }) => {
     const p = new URLSearchParams()
     if (params?.strategy) p.set('strategy', params.strategy)
@@ -881,6 +871,8 @@ export const strategyWalletsApi = {
     if (params?.exchange) p.set('exchange', params.exchange)
     if (params?.sortBy) p.set('sortBy', params.sortBy)
     if (params?.limit) p.set('limit', String(params.limit))
+    if (params?.from) p.set('from', String(params.from))
+    if (params?.to) p.set('to', String(params.to))
     const qs = p.toString()
     return fetchJson<StrategyWalletTrade[]>(`/strategy-wallets/trades${qs ? '?' + qs : ''}`)
   },
@@ -916,6 +908,31 @@ export const pivotAutoTradeApi = {
       '/strategy-state/pivot/auto-trade/toggle',
       enabled !== undefined ? { enabled } : {}
     ),
+}
+
+// ===== MARKET DATA API (LTP lookup for stale price checks) =====
+export const marketDataApi = {
+  getLtp: (scripCode: string) => fetchJson<{ scripCode: string; ltp: number | null }>(`/market-data/ltp/${scripCode}`),
+}
+
+// ===== GREEKS API (compute revised SL/targets for CTA) =====
+export interface GreeksResult {
+  delta: number; gamma: number; theta: number; vega: number; iv: number; dte: number;
+  moneynessType: string; thetaImpaired: boolean;
+  optionSL: number; optionT1: number; optionT2: number; optionT3: number; optionT4: number;
+  optionRR: number; slMethod: string; gammaBoost: number; lotAllocation: string;
+  optionLtp: number; spot: number;
+}
+export const greeksApi = {
+  compute: (params: {
+    spot: number; strike: number; optionLtp: number; optionType: string; expiry: string;
+    equityEntry: number; equitySl: number; equityT1: number;
+    equityT2?: number; equityT3?: number; equityT4?: number;
+  }) => {
+    const q = new URLSearchParams()
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined) q.set(k, String(v)) })
+    return fetchJson<GreeksResult>(`/greeks/compute?${q}`)
+  },
 }
 
 // Export helpers for use in other service files

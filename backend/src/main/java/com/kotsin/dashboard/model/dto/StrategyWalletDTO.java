@@ -29,6 +29,20 @@ public class StrategyWalletDTO {
         private double mcxUsedMargin;
         private double dayPnl;
         private boolean circuitBreakerTripped;
+        private double peakBalance;
+        private double maxDrawdown;
+        private double maxDailyLoss;
+        private double maxDrawdownPercent;
+        private double maxDailyLossPercent;
+        private double profitFactor;
+        private double avgWin;
+        private double avgLoss;
+        private String circuitBreakerReason;
+        private double unrealizedPnl;
+        private int dayTradeCount;
+        private int dayWinCount;
+        private int dayLossCount;
+        private int maxOpenPositions;
     }
 
     @Data
@@ -89,6 +103,9 @@ public class StrategyWalletDTO {
         private Double rMultiple;
         private Double confidence;
         private Long durationMinutes;
+
+        // Transaction charges (Zerodha round-trip)
+        private Double totalCharges;
 
         // Signal-level metrics (for correlation analytics)
         private Double atr;

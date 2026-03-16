@@ -62,14 +62,16 @@ public class StrategyWalletsController {
     }
 
     @GetMapping("/trades")
-    public ResponseEntity<List<StrategyWalletDTO.StrategyTrade>> getWeeklyTrades(
+    public ResponseEntity<List<StrategyWalletDTO.StrategyTrade>> getTrades(
             @RequestParam(required = false) String strategy,
             @RequestParam(required = false) String direction,
             @RequestParam(required = false) String exchange,
             @RequestParam(defaultValue = "exitTime") String sortBy,
-            @RequestParam(defaultValue = "500") int limit) {
+            @RequestParam(defaultValue = "2000") int limit,
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to) {
         return ResponseEntity.ok(
-                strategyWalletsService.getWeeklyTrades(strategy, direction, exchange, sortBy, limit));
+                strategyWalletsService.getTrades(strategy, direction, exchange, sortBy, limit, from, to));
     }
 
     /**

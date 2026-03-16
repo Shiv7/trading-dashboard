@@ -29,7 +29,7 @@ export default function RiskStatusPanel() {
   const handleResetCircuitBreaker = async () => {
     setResetting(true)
     try {
-      await riskStatusApi.resetCircuitBreaker()
+      await riskStatusApi.getStatus() // CB reset now handled via RiskPage per-strategy controls
       await loadStatus()
     } catch (err) {
       setError('Failed to reset circuit breaker')

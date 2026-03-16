@@ -1,21 +1,34 @@
 import { useState, useEffect, useCallback } from 'react'
 
-const ML_EXEC_BASE = 'http://localhost:8089/api/ml'
-const ML_FA_BASE = 'http://localhost:8002/api/ml'
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8085/api'
+const ML_BASE = `${API_BASE}/ml`
 
+// Regime /info returns model metadata with metrics.regime_distribution
 interface RegimeInfo {
-  regime: string
-  confidence: number
-  probabilities: Record<string, number>
-  version: string
+  version?: string
+  exchange?: string
+  metrics?: {
+    n_samples: number
+    log_likelihood: number
+    n_regimes: number
+    regime_distribution: Record<string, number>
+  }
+  transitionMatrix?: number[][]
+  error?: string
 }
 
+// Quality /info returns model metadata with metrics nested
 interface QualityInfo {
-  status: string
   version?: string
-  cv_auc_mean?: number
-  n_samples?: number
-  top_features?: Array<{ name: string; importance: number }>
+  metrics?: {
+    cv_auc_mean: number
+    cv_auc_std: number
+    n_samples: number
+    n_positive: number
+    n_negative: number
+  }
+  topFeatures?: Array<{ name: string; importance: number }>
+  error?: string
 }
 
 interface ShadowLog {
@@ -51,6 +64,15 @@ interface ComparisonStats {
   mlSkipRuleTrade: number
 }
 
+// Train endpoints return different shape
+interface TrainResult {
+  status?: string
+  cv_auc_mean?: number
+  n_samples?: number
+  regime_distribution?: Record<string, number>
+  error?: string
+}
+
 const REGIME_COLORS: Record<string, string> = {
   TRENDING_UP: 'text-green-400 bg-green-500/10 border-green-500/30',
   TRENDING_DOWN: 'text-red-400 bg-red-500/10 border-red-500/30',
@@ -63,7 +85,9 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   try {
     const r = await fetch(url)
     if (!r.ok) return null
-    return await r.json()
+    const data = await r.json()
+    if (data?.error) return null
+    return data
   } catch {
     return null
   }
@@ -79,15 +103,15 @@ export default function MLShadowPage() {
 
   const refresh = useCallback(async () => {
     const [r, q, logs, dists, comp] = await Promise.all([
-      fetchJson<RegimeInfo>(`${ML_FA_BASE}/regime/info`),
-      fetchJson<QualityInfo>(`${ML_FA_BASE}/quality/info`),
-      fetchJson<ShadowLog[]>(`${ML_EXEC_BASE}/shadow/logs?limit=30`),
-      fetchJson<Record<string, BayesianDist>>(`${ML_EXEC_BASE}/bayesian/distributions`),
-      fetchJson<ComparisonStats>(`${ML_EXEC_BASE}/shadow/comparison`),
+      fetchJson<RegimeInfo>(`${ML_BASE}/regime/info`),
+      fetchJson<QualityInfo>(`${ML_BASE}/quality/info`),
+      fetchJson<ShadowLog[]>(`${ML_BASE}/shadow/logs?limit=30`),
+      fetchJson<Record<string, BayesianDist>>(`${ML_BASE}/bayesian/distributions`),
+      fetchJson<ComparisonStats>(`${ML_BASE}/shadow/comparison`),
     ])
     if (r) setRegime(r)
     if (q) setQuality(q)
-    if (logs) setShadowLogs(logs)
+    if (logs) setShadowLogs(Array.isArray(logs) ? logs : [])
     if (dists) setDistributions(dists)
     if (comp) setComparison(comp)
   }, [])
@@ -99,17 +123,25 @@ export default function MLShadowPage() {
   }, [refresh])
 
   const trainModels = async () => {
-    setTraining('Training...')
+    setTraining('Reconstructing features...')
     try {
-      await fetch(`${ML_FA_BASE}/reconstruct`, { method: 'POST' })
+      const reconRes = await fetch(`${ML_BASE}/reconstruct`, { method: 'POST' })
+      const reconResult = await reconRes.json()
+      setTraining(`Reconstructed ${reconResult.records || 0} records. Training models...`)
+
       const [qRes, rRes] = await Promise.all([
-        fetch(`${ML_FA_BASE}/quality/train`, { method: 'POST' }),
-        fetch(`${ML_FA_BASE}/regime/train`, { method: 'POST' }),
+        fetch(`${ML_BASE}/quality/train`, { method: 'POST' }),
+        fetch(`${ML_BASE}/regime/train`, { method: 'POST' }),
       ])
-      const qResult = await qRes.json()
-      const rResult = await rRes.json()
-      setTraining(`Quality AUC: ${qResult.cv_auc_mean?.toFixed(3) || 'N/A'} | Regime: ${rResult.status}`)
-      refresh()
+      const qResult: TrainResult = await qRes.json()
+      const rResult: TrainResult = await rRes.json()
+
+      const aucStr = qResult.cv_auc_mean ? qResult.cv_auc_mean.toFixed(3) : (qResult.error ? 'Error' : 'N/A')
+      const regimeStr = rResult.status || (rResult.error ? 'Error' : 'N/A')
+      const regimeSamples = rResult.n_samples || 0
+
+      setTraining(`Quality AUC: ${aucStr} (${qResult.n_samples || 0} samples) | Regime: ${regimeStr} (${regimeSamples} candles)`)
+      setTimeout(refresh, 1000)
     } catch (e) {
       setTraining(`Error: ${e}`)
     }
@@ -118,14 +150,26 @@ export default function MLShadowPage() {
   const initBayesian = async () => {
     setTraining('Initializing Bayesian from trade history...')
     try {
-      const r = await fetch(`${ML_EXEC_BASE}/bayesian/init-from-history`, { method: 'POST' })
+      const r = await fetch(`${ML_BASE}/bayesian/init-from-history`, { method: 'POST' })
       const result = await r.json()
-      setTraining(`Initialized: ${Object.keys(result).join(', ')}`)
-      refresh()
+      if (result.error) {
+        setTraining(`Error: ${result.error}`)
+      } else {
+        const strategies = Object.entries(result).map(
+          ([k, v]: [string, unknown]) => `${k}: ${(v as Record<string, unknown>).winRate}`
+        ).join(', ')
+        setTraining(`Initialized: ${strategies}`)
+      }
+      setTimeout(refresh, 1000)
     } catch (e) {
       setTraining(`Error: ${e}`)
     }
   }
+
+  // Compute largest regime from distribution
+  const topRegime = regime?.metrics?.regime_distribution
+    ? Object.entries(regime.metrics.regime_distribution).sort((a, b) => b[1] - a[1])[0]
+    : null
 
   return (
     <div className="min-h-screen bg-slate-900 p-4 space-y-4">
@@ -157,41 +201,54 @@ export default function MLShadowPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Regime Card */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-slate-400 mb-2">Current Regime (HMM)</h3>
-          {regime && regime.regime !== undefined ? (
+          <h3 className="text-sm font-medium text-slate-400 mb-2">Regime Detection (HMM)</h3>
+          {regime?.version ? (
             <>
-              <div className={`inline-block px-3 py-1 rounded-full text-sm font-bold border ${REGIME_COLORS[regime.regime] || REGIME_COLORS.UNKNOWN}`}>
-                {regime.regime}
-              </div>
-              {regime.probabilities && (
-                <div className="mt-3 space-y-1">
-                  {Object.entries(regime.probabilities).map(([name, prob]) => (
-                    <div key={name} className="flex justify-between text-xs">
-                      <span className="text-slate-400">{name}</span>
-                      <span className="text-slate-300">{(prob * 100).toFixed(1)}%</span>
-                    </div>
-                  ))}
+              {topRegime && (
+                <div className={`inline-block px-3 py-1 rounded-full text-sm font-bold border ${REGIME_COLORS[topRegime[0]] || REGIME_COLORS.UNKNOWN}`}>
+                  Dominant: {topRegime[0]}
                 </div>
               )}
-              <p className="text-xs text-slate-500 mt-2">v{regime.version}</p>
+              <p className="text-sm text-slate-400 mt-2">
+                {regime.metrics?.n_samples?.toLocaleString()} candles trained
+              </p>
+              {regime.metrics?.regime_distribution && (
+                <div className="mt-3 space-y-1">
+                  {Object.entries(regime.metrics.regime_distribution)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([name, count]) => {
+                      const total = regime.metrics?.n_samples || 1
+                      const pct = ((count / total) * 100).toFixed(1)
+                      return (
+                        <div key={name} className="flex justify-between text-xs">
+                          <span className={`${REGIME_COLORS[name]?.split(' ')[0] || 'text-slate-400'}`}>{name}</span>
+                          <span className="text-slate-300">{pct}% ({count.toLocaleString()})</span>
+                        </div>
+                      )
+                    })}
+                </div>
+              )}
+              <p className="text-xs text-slate-500 mt-2">v{regime.version} | {regime.exchange}</p>
             </>
           ) : (
-            <p className="text-slate-500 text-sm italic">Not trained yet</p>
+            <p className="text-slate-500 text-sm italic">Not trained yet — click Train Models</p>
           )}
         </div>
 
         {/* Quality Model Card */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
           <h3 className="text-sm font-medium text-slate-400 mb-2">Signal Quality (XGBoost)</h3>
-          {quality && quality.version ? (
+          {quality?.version ? (
             <>
               <div className="text-2xl font-bold text-white">
-                AUC {quality.cv_auc_mean?.toFixed(3) || 'N/A'}
+                AUC {quality.metrics?.cv_auc_mean?.toFixed(3) || 'N/A'}
               </div>
-              <p className="text-sm text-slate-400">{quality.n_samples || 0} training samples</p>
-              {quality.top_features && (
+              <p className="text-sm text-slate-400">
+                {quality.metrics?.n_samples || 0} samples ({quality.metrics?.n_positive || 0}W / {quality.metrics?.n_negative || 0}L)
+              </p>
+              {quality.topFeatures && quality.topFeatures.length > 0 && (
                 <div className="mt-2 space-y-1">
-                  {quality.top_features.slice(0, 5).map(f => (
+                  {quality.topFeatures.slice(0, 5).map(f => (
                     <div key={f.name} className="flex justify-between text-xs">
                       <span className="text-slate-400">{f.name}</span>
                       <div className="flex items-center gap-1">
@@ -208,14 +265,14 @@ export default function MLShadowPage() {
               <p className="text-xs text-slate-500 mt-2">v{quality.version}</p>
             </>
           ) : (
-            <p className="text-slate-500 text-sm italic">Not trained yet</p>
+            <p className="text-slate-500 text-sm italic">Not trained yet — click Train Models</p>
           )}
         </div>
 
         {/* Comparison Card */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
           <h3 className="text-sm font-medium text-slate-400 mb-2">Rule vs ML Agreement</h3>
-          {comparison ? (
+          {comparison && comparison.totalEvaluated > 0 ? (
             <>
               <div className="text-2xl font-bold text-white">{comparison.agreementRate}</div>
               <p className="text-sm text-slate-400">{comparison.totalEvaluated} signals evaluated</p>
@@ -235,7 +292,10 @@ export default function MLShadowPage() {
               </div>
             </>
           ) : (
-            <p className="text-slate-500 text-sm italic">No shadow data yet</p>
+            <div>
+              <p className="text-slate-500 text-sm italic">No shadow data yet</p>
+              <p className="text-slate-600 text-xs mt-2">Shadow logs will appear during market hours when signals fire through the ML pipeline</p>
+            </div>
           )}
         </div>
       </div>
@@ -250,7 +310,7 @@ export default function MLShadowPage() {
                 <div className="text-xs text-slate-400 mb-1">{key}</div>
                 <div className="text-lg font-bold text-white">{dist.winRate}</div>
                 <div className="text-xs text-slate-500">
-                  {dist.totalSamples} samples | a={dist.alpha.toFixed(1)} b={dist.beta.toFixed(1)}
+                  {dist.totalSamples} samples | a={dist.alpha?.toFixed(1)} b={dist.beta?.toFixed(1)}
                 </div>
               </div>
             ))}
@@ -321,12 +381,12 @@ export default function MLShadowPage() {
             </table>
           </div>
         ) : (
-          <p className="text-slate-500 text-sm italic">No shadow logs yet. Enable ml.shadow.enabled=true and wait for signals.</p>
+          <p className="text-slate-500 text-sm italic">No shadow logs yet. Shadow logs appear during market hours when signals fire.</p>
         )}
       </div>
 
       <div className="text-center text-xs text-slate-600 pb-4">
-        SHADOW MODE - ML decisions are logged only, not executed. Auto-refreshes every 30s.
+        SHADOW MODE — ML decisions are logged only, not executed. Auto-refreshes every 30s.
       </div>
     </div>
   )

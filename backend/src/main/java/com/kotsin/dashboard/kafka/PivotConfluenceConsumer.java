@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.kotsin.dashboard.model.dto.SignalDTO;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import com.kotsin.dashboard.service.ScripLookupService;
 import jakarta.annotation.PostConstruct;
@@ -40,11 +41,12 @@ import java.util.concurrent.TimeUnit;
  */
 @Component
 @Slf4j
-public class PivotConfluenceConsumer {
+public class PivotConfluenceConsumer implements OptionSwapAware {
 
     private final WebSocketSessionManager sessionManager;
     private final RedisTemplate<String, String> redisTemplate;
     private final ScripLookupService scripLookup;
+    private final SignalConsumer signalConsumer;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -76,10 +78,12 @@ public class PivotConfluenceConsumer {
     public PivotConfluenceConsumer(
             WebSocketSessionManager sessionManager,
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
-            ScripLookupService scripLookup) {
+            ScripLookupService scripLookup,
+            SignalConsumer signalConsumer) {
         this.sessionManager = sessionManager;
         this.redisTemplate = redisTemplate;
         this.scripLookup = scripLookup;
+        this.signalConsumer = signalConsumer;
     }
 
     @PostConstruct
@@ -164,6 +168,36 @@ public class PivotConfluenceConsumer {
                                 ((Number) pivotData.getOrDefault("riskReward", 0)).doubleValue()));
                 // Broadcast triggered signal to /topic/pivot-confluence (WebSocket push to frontend)
                 sessionManager.broadcastPivotConfluence(scripCode, pivotData);
+
+                // Add to signal cache so it appears on the Signals/Strategy page
+                try {
+                    double entryPrice = ((Number) pivotData.getOrDefault("entryPrice", 0)).doubleValue();
+                    double stopLoss = ((Number) pivotData.getOrDefault("stopLoss", 0)).doubleValue();
+                    double target1 = ((Number) pivotData.getOrDefault("target1", 0)).doubleValue();
+                    double rr = ((Number) pivotData.getOrDefault("riskReward", 0)).doubleValue();
+                    SignalDTO signalDTO = SignalDTO.builder()
+                        .signalId("PIVOT-" + scripCode + "-" + System.currentTimeMillis())
+                        .scripCode(scripCode)
+                        .companyName(displayName)
+                        .timestamp(java.time.LocalDateTime.now(IST))
+                        .signalSource("PIVOT_CONFLUENCE")
+                        .signalSourceLabel("📐 Pivot Confluence")
+                        .signalType("PIVOT_CONFLUENCE")
+                        .direction((String) pivotData.getOrDefault("direction", "NEUTRAL"))
+                        .confidence(((Number) pivotData.getOrDefault("score", 0)).doubleValue() / 100.0)
+                        .rationale(String.format("Pivot Confluence: %s | HTF=%s | Score=%.0f | R:R=%.1f",
+                            pivotData.get("direction"), pivotData.get("htfDirection"),
+                            ((Number) pivotData.getOrDefault("score", 0)).doubleValue(), rr))
+                        .entryPrice(entryPrice)
+                        .stopLoss(stopLoss)
+                        .target1(target1)
+                        .riskRewardRatio(rr)
+                        .allGatesPassed(true)
+                        .build();
+                    signalConsumer.addExternalSignal(signalDTO);
+                } catch (Exception ex) {
+                    log.debug("Failed to add pivot signal to cache: {}", ex.getMessage());
+                }
             } else {
                 activeTriggers.invalidate(scripCode);
             }
@@ -409,5 +443,37 @@ public class PivotConfluenceConsumer {
     public int getDailySignalCount(String scripCode) {
         String dailyKey = scripCode + "|" + currentTradeDate;
         return dailySignalCount.getOrDefault(dailyKey, 0);
+    }
+
+    @Override
+    public void updateTradedOption(String underlyingScripCode, String strategy,
+                                   String newScripCode, String newSymbol,
+                                   double newStrike, double newLtp, String optionType) {
+        if (!"PIVOT".equals(strategy) && !"PIVOT_CONFLUENCE".equals(strategy)) return;
+
+        Map<String, Object> signal = latestPivotSignals.get(underlyingScripCode);
+        if (signal != null) {
+            signal.put("optionAvailable", true);
+            signal.put("optionPendingSwap", false);
+            signal.put("optionScripCode", newScripCode);
+            signal.put("optionSymbol", newSymbol);
+            signal.put("optionStrike", newStrike);
+            signal.put("optionLtp", newLtp);
+            signal.put("optionType", optionType);
+            log.info("PIVOT option swap applied to cached signal: scrip={} -> {}@{} strike={}",
+                    underlyingScripCode, newSymbol, newLtp, newStrike);
+            sessionManager.broadcastPivotConfluence(underlyingScripCode, signal);
+        }
+
+        Map<String, Object> trigger = activeTriggers.getIfPresent(underlyingScripCode);
+        if (trigger != null) {
+            trigger.put("optionAvailable", true);
+            trigger.put("optionPendingSwap", false);
+            trigger.put("optionScripCode", newScripCode);
+            trigger.put("optionSymbol", newSymbol);
+            trigger.put("optionStrike", newStrike);
+            trigger.put("optionLtp", newLtp);
+            trigger.put("optionType", optionType);
+        }
     }
 }

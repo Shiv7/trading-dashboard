@@ -12,3 +12,5 @@ export { FudkoiTabContent } from './FudkoiTabContent';
 export { PivotTabContent } from './PivotTabContent';
 export { MicroAlphaTabContent } from './MicroAlphaTabContent';
 export { MereTabContent } from './MereTabContent';
+export { McxBbTabContent } from './McxBbTabContent';
+export { McxBbt1TabContent } from './McxBbt1TabContent';

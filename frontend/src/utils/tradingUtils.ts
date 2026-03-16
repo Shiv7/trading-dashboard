@@ -124,7 +124,7 @@ export function computeSlotSizing(
   multiplier: number = 1,
   exchangeCode: string = 'N',
   rrRatio: number = 2.0,
-  confidenceThreshold: number = 60
+  confidenceThreshold: number = 0  // Confidence gating handled by backend FundAllocationService — frontend is display-only
 ): { lots: number; quantity: number; disabled: boolean; insufficientFunds: boolean; creditAmount: number; allocPct: number; slotsUsed: number; maxSlots: number; exchangeFull: boolean } {
   const empty = { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0, slotsUsed: 0, maxSlots: 0, exchangeFull: false };
 
@@ -137,7 +137,16 @@ export function computeSlotSizing(
   const availableSlots = budget.maxPositions - openInExchange;
 
   if (availableSlots <= 0) {
-    return { ...empty, exchangeFull: true, maxSlots: budget.maxPositions };
+    // Slots full or exchange closed — still compute sizing for manual CTA override
+    const safeMaxPos = budget.maxPositions > 0 ? budget.maxPositions : 5;
+    const safeBudget = exchangeBudget > 0 ? exchangeBudget : wallet.availableMargin * 0.20;
+    const slotCap = safeBudget / safeMaxPos;
+    const costPerLot = optionLtp * lotSize * multiplier;
+    const manualLots = costPerLot > 0 ? Math.floor(slotCap / costPerLot) : 0;
+    const manualQty = manualLots * lotSize;
+    return { lots: Math.max(manualLots, 1), quantity: Math.max(manualQty, lotSize), disabled: false,
+      insufficientFunds: false, creditAmount: slotCap, allocPct: budget.allocPct || 0.20,
+      slotsUsed: 0, maxSlots: safeMaxPos, exchangeFull: true };
   }
 
   // High-conviction + high R:R → double slot
@@ -249,4 +258,83 @@ export function isNseNoTradeWindow(exchange?: string, signalTimestamp?: number |
 
   // Also check current time (live window)
   return inWindow(new Date());
+}
+
+// ─────────────────────────────────────────────
+//  Stale Price Adjustment
+// ─────────────────────────────────────────────
+
+/**
+ * Check current LTP against trade plan and compute adjusted levels if needed.
+ * Returns null if no adjustment needed (LTP is between SL and T1).
+ */
+export interface StalePriceResult {
+  type: 'below-sl' | 'targets-shifted';
+  currentLtp: number;
+  adjustedSl: number;
+  adjustedT1: number | null;
+  adjustedT2: number | null;
+  adjustedT3: number | null;
+  adjustedT4: number | null;
+  levelsShifted: number;
+}
+
+export function checkStalePriceAdjustment(
+  currentLtp: number,
+  sl: number,
+  t1: number | null,
+  t2: number | null,
+  t3: number | null,
+  t4: number | null
+): StalePriceResult | null {
+  // If LTP < SL -> warning
+  if (currentLtp < sl) {
+    return {
+      type: 'below-sl',
+      currentLtp,
+      adjustedSl: sl,
+      adjustedT1: t1,
+      adjustedT2: t2,
+      adjustedT3: t3,
+      adjustedT4: t4,
+      levelsShifted: 0,
+    };
+  }
+
+  // Build ordered levels array
+  const levels = [t1, t2, t3, t4];
+
+  // Count how many targets LTP has crossed
+  let crossed = 0;
+  for (const level of levels) {
+    if (level != null && currentLtp > level) {
+      crossed++;
+    } else {
+      break; // Stop at first non-crossed target
+    }
+  }
+
+  if (crossed === 0) return null; // Normal case: SL < LTP < T1
+
+  // Shift targets up by `crossed` levels
+  // Original: SL, T1, T2, T3, T4
+  // All levels in order:
+  const allLevels = [sl, t1, t2, t3, t4];
+  // After shifting by `crossed`: new SL = allLevels[crossed], new T1 = allLevels[crossed+1], etc.
+  const newSl = allLevels[crossed] ?? allLevels[crossed - 1] ?? sl;
+  const newT1 = (crossed + 1 < allLevels.length) ? allLevels[crossed + 1] : null;
+  const newT2 = (crossed + 2 < allLevels.length) ? allLevels[crossed + 2] : null;
+  const newT3 = (crossed + 3 < allLevels.length) ? allLevels[crossed + 3] : null;
+  const newT4 = (crossed + 4 < allLevels.length) ? allLevels[crossed + 4] : null;
+
+  return {
+    type: 'targets-shifted',
+    currentLtp,
+    adjustedSl: newSl!,
+    adjustedT1: newT1 ?? null,
+    adjustedT2: newT2 ?? null,
+    adjustedT3: newT3 ?? null,
+    adjustedT4: newT4 ?? null,
+    levelsShifted: crossed,
+  };
 }
