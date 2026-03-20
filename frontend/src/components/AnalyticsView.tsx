@@ -190,7 +190,7 @@ export default function AnalyticsView({ analytics, chartsData, initialCapital, a
               {(() => {
                 const isOptionView = activeStrategy === 'ALL'
                   ? analytics.byInstrument['OPTIONS'] && !analytics.byInstrument['EQUITY'] && !analytics.byInstrument['FUTURES']
-                  : ['FUDKII','FUKAA','FUDKOI','PIVOT','PIVOT_CONFLUENCE','MICROALPHA','MERE','QUANT','MCX_BB','MCX_BBT1'].includes(activeStrategy)
+                  : ['FUDKII','FUKAA','FUDKOI','PIVOT','PIVOT_CONFLUENCE','MICROALPHA','MERE','QUANT','MCX-BB','MCX-BBT+1','MCX_BB','MCX_BBT1'].includes(activeStrategy)
                 const dirData = Object.entries(analytics.byDirection).map(([dir, data]) => ({
                   name: isOptionView ? (dir === 'bullish' ? 'CE' : 'PE') : (dir === 'bullish' ? 'LONG' : 'SHORT'),
                   value: data.count,

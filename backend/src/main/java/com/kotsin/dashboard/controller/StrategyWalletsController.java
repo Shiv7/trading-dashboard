@@ -40,9 +40,13 @@ public class StrategyWalletsController {
      */
     @GetMapping("/capital/{strategy}")
     public ResponseEntity<Map<String, Object>> getCapital(@PathVariable String strategy) {
+        // Normalize input so both canonical (MCX_BB) and display (MCX-BB) keys match
+        String normalizedInput = com.kotsin.dashboard.service.StrategyNameResolver.displayName(
+                com.kotsin.dashboard.service.StrategyNameResolver.normalize(strategy));
         List<StrategyWalletDTO.StrategySummary> summaries = strategyWalletsService.getSummaries();
         for (StrategyWalletDTO.StrategySummary s : summaries) {
-            if (s.getStrategy().equalsIgnoreCase(strategy)
+            if (s.getStrategy().equalsIgnoreCase(normalizedInput)
+                    || s.getStrategy().equalsIgnoreCase(strategy)
                     || s.getDisplayName().equalsIgnoreCase(strategy)) {
                 Map<String, Integer> posByExchange = strategyWalletsService.getActivePositionCountsByExchange(s.getStrategy());
                 int openCount = posByExchange.values().stream().mapToInt(Integer::intValue).sum();
@@ -90,6 +94,44 @@ public class StrategyWalletsController {
             log.error("ERR [STRATEGY-WALLETS] Failed to proxy add-funds for {}: {}", strategy, e.getMessage());
             return ResponseEntity.internalServerError().body(Map.of(
                     "success", false, "message", "Failed to add funds: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Reset daily circuit breaker for a strategy wallet (proxies to Trade Execution Module).
+     */
+    @PostMapping("/{strategy}/reset-circuit-breaker")
+    public ResponseEntity<?> resetCircuitBreaker(@PathVariable String strategy) {
+        String walletId = "strategy-wallet-" + strategy.toUpperCase();
+        String url = executionUrl + "/api/wallet/strategy/" + walletId + "/circuit-breaker/reset";
+        try {
+            @SuppressWarnings("unchecked")
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, null, Map.class);
+            log.info("[STRATEGY-WALLETS] CB reset proxied for strategy={}", strategy);
+            return ResponseEntity.ok(response.getBody());
+        } catch (RestClientException e) {
+            log.error("ERR [STRATEGY-WALLETS] CB reset proxy failed for {}: {}", strategy, e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "success", false, "message", "Failed to reset circuit breaker: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Unlock cumulative lockdown for a strategy wallet (proxies to Trade Execution Module).
+     */
+    @PostMapping("/{strategy}/unlock-cumulative")
+    public ResponseEntity<?> unlockCumulativeLockdown(@PathVariable String strategy) {
+        String walletId = "strategy-wallet-" + strategy.toUpperCase();
+        String url = executionUrl + "/api/wallet/strategy/" + walletId + "/cumulative-lockdown/unlock";
+        try {
+            @SuppressWarnings("unchecked")
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, null, Map.class);
+            log.info("[STRATEGY-WALLETS] Cumulative unlock proxied for strategy={}", strategy);
+            return ResponseEntity.ok(response.getBody());
+        } catch (RestClientException e) {
+            log.error("ERR [STRATEGY-WALLETS] Cumulative unlock proxy failed for {}: {}", strategy, e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "success", false, "message", "Failed to unlock cumulative lockdown: " + e.getMessage()));
         }
     }
 

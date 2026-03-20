@@ -46,7 +46,7 @@ export default function StalePriceModal({
               <TrendingUp className="w-5 h-5 text-blue-400" />
             )}
             <h3 className="text-lg font-semibold text-white">
-              {isBelowSl ? 'Price Below Stop Loss' : 'Price Moved \u2014 Targets Adjusted'}
+              {isBelowSl ? 'Price Breached Stop Loss' : 'Price Moved \u2014 Targets Adjusted'}
             </h3>
           </div>
           <button
@@ -64,7 +64,7 @@ export default function StalePriceModal({
         {isBelowSl ? (
           <div className="mb-4">
             <p className="text-sm text-amber-300">
-              Current LTP {fmt(currentLtp)} is below the SL {fmt(originalSl)}.
+              Current LTP {fmt(currentLtp)} has breached the SL {fmt(originalSl)}.
               This trade is already in loss territory.
             </p>
             <div className="mt-3 grid grid-cols-2 gap-3">

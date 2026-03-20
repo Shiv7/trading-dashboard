@@ -55,7 +55,37 @@ interface FudkiiSignal {
   blockTradeDetected?: boolean;
   blockTradeVol?: number;
   blockTradePct?: number;
+  blockTradeFlowLabel?: string;
   oiBuildupPct?: number;
+  // KII Quality Adjustment
+  effectiveKii?: number;
+  rawKii?: number;
+  gapFactor?: number;
+  expiryFactor?: number;
+  gapPct?: number;
+  excessGapPct?: number;
+  // Gap Quality Score (GQS) — gap-fill trap detection
+  gapQualityScore?: number;
+  gqsGapAtrRatio?: number;
+  gqsGapAtrScore?: number;
+  gqsCandleScore?: number;
+  gqsBlockFactor?: number;
+  gqsDivergenceScore?: number;
+  gqsRecoveryScore?: number;
+  gqsCandleOpposesGap?: boolean;
+  gqsGapRecoveryPct?: number;
+  kiiLabel?: string;
+  volumeLabel?: string;
+  oiChangeLabel?: string;
+  oiBuildupLabel?: string;
+  gapWarning?: string;
+  expiryWarning?: string;
+  vixContext?: string;
+  indiaVix?: number;
+  vixRegime?: string;
+  vixAmplifier?: number;
+  vixCoupling?: number;
+  alignmentScore?: number;
   // Option enrichment from backend (real LTP, strike, lot size)
   optionAvailable?: boolean;
   optionFailureReason?: string;
@@ -104,6 +134,11 @@ interface FudkiiSignal {
   futuresT2?: number;
   futuresT3?: number;
   futuresT4?: number;
+  // GIFT Nifty overnight
+  giftNiftyOvernightChangePct?: number;
+  niftyGapPct?: number;
+  optionLotAllocation?: string;
+  optionRRpassed?: boolean;
 }
 
 interface TradePlan {
@@ -229,6 +264,207 @@ function computeStrength(sig: FudkiiSignal, plan: TradePlan): number {
 }
 
 // computeSlotSizing: imported from ../../utils/tradingUtils
+
+/* ═══════════════════════════════════════════════════════════════
+   SIGNAL CARD UTILITY FUNCTIONS
+   ═══════════════════════════════════════════════════════════════ */
+
+type TradeType = 'QUICK_SCALP' | 'CAUTION' | 'GAMMA_SCALP' | 'MOMENTUM' | 'SWING' | 'STANDARD';
+
+function classifyTradeType(sig: FudkiiSignal): { type: TradeType; label: string; color: string } {
+  const thetaImpaired = sig.greekThetaImpaired === true;
+  const align = (sig.alignmentScore ?? 0) * 100;
+  const gapF = sig.gapFactor ?? 1;
+  const dte = sig.greekDte ?? 30;
+  const gammaBoost = sig.greekGammaBoost ?? 0;
+  const gamma = sig.greekGamma ?? 0;
+  const iv = sig.greekIV ?? 20;
+
+  if (thetaImpaired)
+    return { type: 'QUICK_SCALP', label: 'QUICK SCALP \u2014 all-out at T1', color: 'text-red-400' };
+  if (align < 30 && gapF < 0.5)
+    return { type: 'CAUTION', label: 'CAUTION \u2014 gap against market, volume inflated', color: 'text-amber-400' };
+  if (dte <= 2 && gamma > 0.005)
+    return { type: 'GAMMA_SCALP', label: 'GAMMA SCALP \u2014 fast in, fast out', color: 'text-orange-400' };
+  if (gammaBoost > 0.2 && align > 50)
+    return { type: 'MOMENTUM', label: 'MOMENTUM \u2014 trail to T4', color: 'text-green-400' };
+  if (dte > 10 && iv < 20)
+    return { type: 'SWING', label: 'SWING \u2014 patient hold, wider stops', color: 'text-cyan-400' };
+  return { type: 'STANDARD', label: 'STANDARD \u2014 partial exits T1 \u2192 T4', color: 'text-blue-400' };
+}
+
+function generateTradeNarrative(sig: FudkiiSignal, tradeType: TradeType, lotAlloc: number[]): string {
+  const delta = sig.greekDelta ?? 0;
+  const dte = sig.greekDte ?? 0;
+  const theta = sig.greekTheta ?? 0;
+  const premium = sig.optionLtp ?? 0;
+  const deflation = sig.gapFactor != null ? Math.round((1 - sig.gapFactor) * 100) : 0;
+  const oiLabel = sig.oiLabel ?? '';
+  const blockPct = sig.blockTradePct ?? 0;
+  const blockDetected = sig.blockTradeDetected === true;
+  const align = Math.round((sig.alignmentScore ?? 0) * 100);
+  const coupling = sig.vixCoupling ?? 0.8;
+  const exchange = sig.exchange ?? 'N';
+
+  const oiDesc = oiLabel === 'LONG_BUILDUP' ? 'OI buildup confirms fresh longs'
+    : oiLabel === 'SHORT_BUILDUP' ? 'OI buildup confirms fresh shorts'
+    : oiLabel === 'SHORT_COVERING' ? 'Short covering in progress'
+    : oiLabel === 'LONG_UNWINDING' ? 'Long unwinding in progress' : '';
+
+  const blockDesc = blockDetected && blockPct >= 20
+    ? `institutional ${sig.direction === 'BULLISH' ? 'buying' : 'selling'} into `
+    : blockDetected ? 'modest institutional presence in ' : '';
+
+  const gapDesc = deflation > 0
+    ? ` Volume surge is ${deflation <= 30 ? 'genuine' : 'partially inflated'} (${deflation > 0 ? deflation + '% deflated' : 'no deflation'}).`
+    : '';
+
+  const deltaDesc = delta > 0 && premium > 0
+    ? ` \u20B9${delta.toFixed(2)} option move per \u20B91 underlying${sig.greekGammaBoost && sig.greekGammaBoost > 0.15 ? ', accelerating on T2+' : ''}.`
+    : '';
+
+  switch (tradeType) {
+    case 'QUICK_SCALP': {
+      const thetaPct = premium > 0 ? Math.abs(theta / premium * 100).toFixed(1) : '0';
+      return `${blockDesc}${blockDesc ? 'a strong signal' : oiDesc || 'Strong signal detected'}. But \u03B8 eats \u20B9${Math.abs(theta).toFixed(2)}/day (${thetaPct}% of premium) \u2014 cannot hold overnight. 100% exit at T1. T2\u2013T4 are for reference only. If T1 doesn\u2019t hit by 3:00 PM, consider manual exit.`;
+    }
+    case 'CAUTION': {
+      const stockGap = Math.abs(sig.excessGapPct ?? 0).toFixed(1);
+      return `Stock gapped ${stockGap}% ${sig.gapPct && sig.gapPct > 0 ? 'up' : 'down'} against market trend. ${blockDetected ? '' : 'No institutional support \u2014 zero block trades. '}Volume is ${deflation}% gap-driven.${deltaDesc} If taken: tight SL, all-out at T1, do not trail.`;
+    }
+    case 'GAMMA_SCALP':
+      return `${blockDesc}${oiDesc || 'Near-expiry signal'} with DTE ${dte}. Extreme \u03B3 means \u03B4 shifts rapidly.${deltaDesc}${gapDesc} Exit at T1\u2013T2, don\u2019t overstay.`;
+    case 'MOMENTUM':
+      return `${blockDesc}${align > 50 ? 'trend-aligned gap' : 'confirmed trend'}.${gapDesc}${deltaDesc} ${oiDesc ? oiDesc + '.' : ''} Hold for targets.`;
+    case 'SWING': {
+      const thetaDaily = premium > 0 ? Math.abs(theta / premium * 100).toFixed(1) : '0';
+      return `${oiDesc || 'Genuine signal'}. DTE ${dte} means minimal \u03B8 (${thetaDaily}%/day).${deltaDesc}${gapDesc} Patient hold viable.${exchange !== 'N' && coupling < 0.3 ? ' VIX-decoupled.' : ''}`;
+    }
+    default:
+      return `${blockDesc ? blockDesc + 'a ' : ''}${oiDesc || 'Standard signal'}.${gapDesc}${deltaDesc} Follow lot-split exit plan.`;
+  }
+}
+
+function inferBlockDirection(sig: FudkiiSignal): { arrow: string; text: string } | null {
+  if (!sig.blockTradeDetected) return null;
+  const oiLabel = sig.oiLabel ?? '';
+  switch (oiLabel) {
+    case 'LONG_BUILDUP': return { arrow: '\u25B2', text: 'Institutional Buying' };
+    case 'SHORT_BUILDUP': return { arrow: '\u25BC', text: 'Institutional Selling' };
+    case 'SHORT_COVERING': return { arrow: '\u25B2', text: 'Institutional Covering' };
+    case 'LONG_UNWINDING': return { arrow: '\u25BC', text: 'Institutional Unwinding' };
+    default: return { arrow: sig.direction === 'BULLISH' ? '\u25B2' : '\u25BC', text: 'Institutional Activity' };
+  }
+}
+
+function generateGapNarrative(sig: FudkiiSignal): string[] {
+  const lines: string[] = [];
+  const exchange = (sig.exchange ?? 'N').toUpperCase();
+  const coupling = sig.vixCoupling ?? 0.8;
+  const giftNifty = sig.giftNiftyOvernightChangePct ?? 0;
+  const gapPct = sig.gapPct ?? 0;
+  const niftyGap = sig.niftyGapPct ?? 0;
+  const excessGap = sig.excessGapPct ?? 0;
+  const align = Math.round((sig.alignmentScore ?? 0) * 100);
+  const gapF = sig.gapFactor ?? 1;
+  const deflation = Math.round((1 - gapF) * 100);
+  const symbol = sig.symbol || sig.scripCode;
+
+  if (exchange === 'M' || exchange === 'MCX') {
+    lines.push('MCX decoupled from Nifty (0% VIX sensitivity)');
+    if (symbol.match(/GOLD|SILVER/i)) lines.push('Gold/Silver is safe-haven \u2014 moves inverse to equity risk');
+    if (Math.abs(gapPct) >= 0.3) lines.push(`Gap ${gapPct > 0 ? '+' : ''}${gapPct.toFixed(1)}% \u2014 full gap is commodity-specific`);
+  } else if (exchange === 'C' || exchange === 'CDS') {
+    lines.push(`CDS 30% coupled with Nifty via FII flows`);
+    if (Math.abs(gapPct) >= 0.3) lines.push(`Gap ${gapPct > 0 ? '+' : ''}${gapPct.toFixed(1)}% \u2014 negligible`);
+  } else {
+    if (giftNifty !== 0) lines.push(`GIFT Nifty ${giftNifty > 0 ? '+' : ''}${giftNifty.toFixed(1)}% overnight`);
+    if (Math.abs(gapPct) >= 0.3) {
+      lines.push(`${symbol} ${gapPct > 0 ? '+' : ''}${gapPct.toFixed(1)}% gap (Nifty ${niftyGap > 0 ? '+' : ''}${niftyGap.toFixed(1)}%, stock ${excessGap > 0 ? '+' : ''}${excessGap.toFixed(1)}%)`);
+      const alignDesc = align > 60 ? 'WITH trend' : align > 30 ? 'MIXED signals' : 'AGAINST market';
+      const riskDesc = align > 60 ? 'low fill risk' : align > 30 ? 'uncertain fill risk' : 'high fill risk';
+      lines.push(`Gap ${alignDesc}, ${align}% aligned \u2014 ${riskDesc}`);
+      if (deflation > 0) {
+        const volDesc = deflation <= 30 ? `partly genuine, deflated only ${deflation}%`
+          : deflation <= 50 ? `partially inflated, deflated ${deflation}%`
+          : `likely gap-driven, heavily deflated ${deflation}%`;
+        lines.push(`Volume surge ${volDesc}`);
+      }
+    }
+  }
+  return lines;
+}
+
+function generateExpiryNarrative(sig: FudkiiSignal): string[] {
+  const dte = sig.greekDte ?? 0;
+  const expF = sig.expiryFactor ?? 1;
+  const deflation = Math.round((1 - expF) * 100);
+  const theta = sig.greekTheta ?? 0;
+  const premium = sig.optionLtp ?? 0;
+  const gammaBoost = sig.greekGammaBoost ?? 0;
+  const lines: string[] = [];
+  if (!sig.greekEnriched && dte === 0) return lines;
+
+  if (dte <= 1) {
+    lines.push(`Expiry TOMORROW \u2014 heavy rollover, OI deflated ${deflation}%`);
+    const thetaPct = premium > 0 ? `${Math.abs(theta / premium * 100).toFixed(1)}% of premium` : '';
+    lines.push(`DTE ${dte}: extreme \u03B3 but \u03B8 decays \u20B9${Math.abs(theta).toFixed(2)}/day${thetaPct ? ` (${thetaPct})` : ''}`);
+  } else if (dte <= 3) {
+    lines.push(`Expiry in ${dte}d \u2014 rollover noise, OI deflated ${deflation}%`);
+    lines.push(`DTE ${dte}: high \u03B3${gammaBoost > 0.2 ? ', \u03B4 accelerates targets on T2+' : ', monitor \u03B8 carefully'}`);
+  } else if (dte <= 7) {
+    lines.push(`Expiry in ${dte}d \u2014 mild rollover noise, OI deflated ${deflation}%`);
+    lines.push(`DTE ${dte}: moderate \u03B8, \u03B3 accelerates targets on T2+`);
+  } else {
+    lines.push(`Expiry in ${dte}d \u2014 OI genuine, no rollover effect`);
+    lines.push(`DTE ${dte}: low \u03B8 decay, patient hold viable`);
+  }
+  return lines;
+}
+
+function generateVixNarrative(sig: FudkiiSignal): string[] {
+  const vix = sig.indiaVix ?? 0;
+  const regime = sig.vixRegime ?? (vix >= 30 ? 'Extreme' : vix >= 25 ? 'High' : vix >= 20 ? 'Elevated' : vix >= 15 ? 'Normal' : 'Low');
+  const coupling = sig.vixCoupling ?? 0.8;
+  const exchange = (sig.exchange ?? 'N').toUpperCase();
+  const symbol = sig.symbol ?? '';
+  const isLong = sig.direction === 'BULLISH';
+  const lines: string[] = [];
+  if (vix <= 0) return lines;
+
+  lines.push(`VIX ${vix.toFixed(1)} ${regime}`);
+
+  if (exchange === 'M' || exchange === 'MCX') {
+    if (symbol.match(/GOLD|SILVER/i)) lines.push('MCX Gold/Silver \u2014 does NOT affect pricing');
+    else lines.push('MCX (10% coupled) \u2014 minimal VIX impact');
+  } else if (exchange === 'C' || exchange === 'CDS') {
+    lines.push('CDS 30% coupled \u2014 moderate FII flow effect');
+  } else {
+    const meaning = vix >= 30 ? 'crisis-level, gap risk both ways'
+      : vix >= 25 ? `panic ${isLong ? 'may reverse' : 'amplifies'} ${isLong ? 'CE' : 'PE'} premium`
+      : vix >= 20 ? 'wider swings favor option premium'
+      : vix >= 15 ? 'fair premium moves'
+      : 'calm market, muted premium response';
+    lines.push(`NSE 80% coupled \u2014 ${meaning}`);
+  }
+  return lines;
+}
+
+function computeLotSplit(lotAllocation: string | undefined, totalLots: number): number[] {
+  const pcts = (lotAllocation || '40,30,20,10').split(',').map(Number);
+  if (totalLots <= 0) return [0, 0, 0, 0];
+  // Largest remainder method for lot-aligned splits
+  const raw = pcts.map(p => (p / 100) * totalLots);
+  const floored = raw.map(Math.floor);
+  let remaining = totalLots - floored.reduce((a, b) => a + b, 0);
+  const remainders = raw.map((r, i) => ({ i, rem: r - floored[i] })).sort((a, b) => b.rem - a.rem);
+  for (const r of remainders) {
+    if (remaining <= 0) break;
+    floored[r.i]++;
+    remaining--;
+  }
+  return floored;
+}
 
 /** Extract enriched trade plan from signal (OTM strikes) */
 function extractTradePlan(sig: FudkiiSignal): TradePlan {
@@ -528,7 +764,7 @@ const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bol
 );
 
 /* ═══════════════════════════════════════════════════════════════
-   FUDKII SIGNAL TRADING CARD
+   FUDKII SIGNAL TRADING CARD — v2 (cross-instrumental)
    ═══════════════════════════════════════════════════════════════ */
 
 const FudkiiTradingCard: React.FC<{
@@ -546,11 +782,10 @@ const FudkiiTradingCard: React.FC<{
   const [ltpDriftPct, setLtpDriftPct] = useState<number | null>(null);
   const isLong = sig.direction === 'BULLISH';
 
-  // Signal timing: within active 30m window vs expired
+  // Signal timing
   const signalAgeMs = sig.triggerTimeEpoch ? Date.now() - sig.triggerTimeEpoch : 0;
   const isWithin30mWindow = signalAgeMs <= 30 * 60 * 1000;
   const isBeyond30mBoundary = !isWithin30mWindow;
-
   const isStale = ltpDriftPct !== null && ltpDriftPct > 10;
 
   // Colors
@@ -562,17 +797,23 @@ const FudkiiTradingCard: React.FC<{
     ? 'border-green-500/20 hover:border-green-500/40'
     : 'border-red-500/20 hover:border-red-500/40';
 
-  // KII Score = (|OIChange%| + surgeT×100) / 2
+  // KII
   const kiiScore = computeKiiScore(sig);
+  const effectiveKii = sig.effectiveKii && sig.effectiveKii > 0 ? Math.round(sig.effectiveKii) : kiiScore;
+  const rawKii = sig.rawKii && sig.rawKii > 0 ? Math.round(sig.rawKii) : kiiScore;
+  const kiiBarPct = Math.min(100, (effectiveKii / 150) * 100);
+  const kiiBarColor = effectiveKii >= 80 ? 'bg-green-500' : effectiveKii >= 50 ? 'bg-amber-500' : 'bg-red-500';
 
-  // Option: prefer real data from backend; check futures fallback for MCX/currency
+  // KII deflation text
+  const volDeflation = sig.gapFactor != null && sig.gapFactor < 0.99 ? Math.round((1 - sig.gapFactor) * 100) : 0;
+  const oiDeflation = sig.expiryFactor != null && sig.expiryFactor < 0.99 ? Math.round((1 - sig.expiryFactor) * 100) : 0;
+
+  // Instrument detection
   const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
   const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
   const noDerivatives = sig.optionAvailable === false && !hasFutures;
-  // Currency pairs: the signal itself IS the FUT instrument, triggerPrice = FUT LTP
   const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(sig.symbol);
 
-  // Determine instrument mode: OPTION, FUTURES, or NONE
   let instrumentMode: 'OPTION' | 'FUTURES' | 'NONE' = 'NONE';
   let premium = 0;
   let displayInstrumentName = '';
@@ -592,53 +833,67 @@ const FudkiiTradingCard: React.FC<{
       const monthIdx = parseInt(parts[1], 10) - 1;
       return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
     })();
-    displayInstrumentName = `${sig.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike}${displayOptionType}`;
+    displayInstrumentName = `${sig.symbol || sig.companyName || sig.scripCode} ${expiryMonth ? expiryMonth + ' ' : ''}${displayStrike} ${displayOptionType}`;
     lotSize = sig.optionLotSize ?? 1;
     multiplier = sig.optionMultiplier ?? 1;
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
     premium = sig.futuresLtp!;
-    const futExpiryMonth = (() => {
-      if (!sig.futuresExpiry) return '';
-      const parts = sig.futuresExpiry.split('-');
-      if (parts.length < 2) return '';
-      const monthIdx = parseInt(parts[1], 10) - 1;
-      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
-    })();
-    displayInstrumentName = `${sig.futuresSymbol ?? sig.symbol}${futExpiryMonth ? ' ' + futExpiryMonth : ''} FUT`;
+    displayInstrumentName = `${sig.futuresSymbol ?? sig.symbol ?? sig.scripCode} FUT`;
     lotSize = sig.futuresLotSize ?? 1;
     multiplier = sig.futuresMultiplier ?? 1;
   } else if (isCurrencyPair && noDerivatives) {
-    // Currency FUT fallback: signal scrip IS the FUT contract, triggerPrice = FUT LTP
     instrumentMode = 'FUTURES';
     premium = sig.triggerPrice;
-    displayInstrumentName = `${sig.symbol}`;
+    displayInstrumentName = '';
     lotSize = 1;
   } else if (!noDerivatives) {
-    // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${sig.symbol} ${plan.strike}${plan.optionType}`;
+    displayInstrumentName = `${sig.symbol || sig.companyName || sig.scripCode} ${plan.strike} ${plan.optionType}`;
     lotSize = 1;
     isEstimatedPremium = true;
   }
-
-  // Near-expiry warning: option expires within 2 trading days
-  const isNearExpiry = (() => {
-    const expiry = sig.optionExpiry ?? sig.futuresExpiry;
-    if (!expiry || instrumentMode !== 'OPTION') return false;
-    const expiryDate = new Date(expiry + 'T00:00:00');
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const diffDays = Math.floor((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    return diffDays >= 0 && diffDays <= 2;
-  })();
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0, slotsUsed: 0, maxSlots: 0, exchangeFull: false }
     : computeSlotSizing(kiiScore > 100 ? 80 : kiiScore > 50 ? 65 : 50, walletState, premium, lotSize, multiplier,
         (sig.exchange || 'N').substring(0, 1).toUpperCase(), sig.riskReward ?? 2.0, 50);
 
-  // Periodic LTP drift check (every 30s) for "!" badge
+  // Cross-instrumental levels
+  const hasOptionLevels = (sig.optionSL ?? 0) > 0 && (sig.optionT1 ?? 0) > 0;
+  const hasFuturesLevels = (sig.futuresSL ?? 0) > 0 && (sig.futuresT1 ?? 0) > 0;
+  const optSL = sig.optionSL ?? 0;
+  const optT1 = sig.optionT1 ?? 0;
+  const optT2 = sig.optionT2 ?? 0;
+  const optT3 = sig.optionT3 ?? 0;
+  const optT4 = sig.optionT4 ?? 0;
+  const optRR = sig.optionRR ?? plan.rr;
+
+  // Lot allocation
+  const lotAlloc = computeLotSplit(sig.optionLotAllocation ?? sig.lotAllocation, sizing.lots);
+  const isAllOutT1 = lotAlloc[0] === sizing.lots;
+
+  // Trade type classification
+  const tradeInfo = classifyTradeType(sig);
+  const narrative = generateTradeNarrative(sig, tradeInfo.type, lotAlloc);
+
+  // Market context
+  const blockDir = inferBlockDirection(sig);
+  const gapLines = generateGapNarrative(sig);
+  const expiryLines = generateExpiryNarrative(sig);
+  const vixLines = generateVixNarrative(sig);
+
+  // Metrics
+  const volMultiplier = computeVolumeSurge(sig).toFixed(1);
+  const oiVal = computeOIChange(sig);
+  const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
+  const oiStyle = getOILabelStyle(sig.oiLabel);
+  const blockPct = sig.blockTradePct ?? 0;
+  const flowLabel = sig.blockTradeFlowLabel ?? (blockPct >= 40 ? 'DOMINANT_INSTITUTIONAL' : blockPct >= 20 ? 'HEAVY_INSTITUTIONAL' : blockPct >= 10 ? 'MODEST_INSTITUTIONAL' : 'NONE');
+  const flowText = flowLabel === 'DOMINANT_INSTITUTIONAL' ? 'Dominant' : flowLabel === 'HEAVY_INSTITUTIONAL' ? 'Heavy' : flowLabel === 'MODEST_INSTITUTIONAL' ? 'Modest' : '';
+
+  // LTP drift check
   const scripForDrift = sig.optionScripCode || '';
   const premiumForDrift = premium;
   useEffect(() => {
@@ -646,9 +901,7 @@ const FudkiiTradingCard: React.FC<{
     const checkDrift = async () => {
       try {
         const res = await marketDataApi.getLtp(scripForDrift);
-        if (res?.ltp && res.ltp > 0) {
-          setLtpDriftPct(Math.abs(res.ltp - premiumForDrift) / premiumForDrift * 100);
-        }
+        if (res?.ltp && res.ltp > 0) setLtpDriftPct(Math.abs(res.ltp - premiumForDrift) / premiumForDrift * 100);
       } catch {}
     };
     checkDrift();
@@ -656,38 +909,57 @@ const FudkiiTradingCard: React.FC<{
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
-  // Real metrics from backend; IV and Delta are not available (no real options data)
-  const volMultiplier = computeVolumeSurge(sig).toFixed(1);
-  const oiVal = computeOIChange(sig);
-  const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
-  const oiStyle = getOILabelStyle(sig.oiLabel);
-  const absOi = Math.abs(oiVal);
-  const oiAccent = absOi >= 200 ? 'bg-emerald-500/20 text-emerald-300 font-bold' : absOi >= 100 ? 'bg-orange-500/15 text-orange-300' : absOi >= 30 ? 'bg-slate-500/15 text-slate-300' : 'bg-red-500/15 text-red-300';
+  // Format helpers
+  const fmtEq = (v: number | null | undefined) => v != null && v > 0 ? Number(v.toFixed(0)).toLocaleString('en-IN') : 'DM';
+  const fmtOpt = (v: number) => v > 0 ? '\u20B9' + v.toFixed(2) : 'DM';
+  const fmtFut = (v: number) => v > 0 ? '\u20B9' + Number(v.toFixed(2)).toLocaleString('en-IN') : 'DM';
+
+  const exitLabel = (idx: number, lots: number) => {
+    if (lots <= 0) return '\u2014';
+    if (idx === 0 && isAllOutT1) return `\u2713 ${lots} lot${lots > 1 ? 's' : ''} (100%) \u2190 ALL OUT`;
+    if (idx === 0) return `\u2717 All ${sizing.lots} lot${sizing.lots > 1 ? 's' : ''}`;
+    if (isAllOutT1 && idx > 0) return '\u2014';
+    const pct = sizing.lots > 0 ? Math.round(lots / sizing.lots * 100) : 0;
+    if (idx <= 2) return `\u2713 ${lots} lot${lots > 1 ? 's' : ''} (${pct}%)`;
+    if (idx === 3) return `Trail (${pct}%)`;
+    return `Runner (${pct}%)`;
+  };
+
+  // Level data: [label, eqValue, optValue, exitText, isHit]
+  const levels: [string, number | null, number, string, boolean][] = [
+    ['SL', plan.sl, instrumentMode === 'OPTION' ? optSL : 0, exitLabel(0, sizing.lots), false],
+    ['T1', plan.t1, instrumentMode === 'OPTION' ? optT1 : 0, exitLabel(1, lotAlloc[0]), false],
+    ['T2', plan.t2, instrumentMode === 'OPTION' ? optT2 : 0, exitLabel(2, lotAlloc[1]), false],
+    ['T3', plan.t3, instrumentMode === 'OPTION' ? optT3 : 0, exitLabel(3, lotAlloc[2]), false],
+    ['T4', plan.t4, instrumentMode === 'OPTION' ? optT4 : 0, exitLabel(4, lotAlloc[3]), false],
+  ];
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
       overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
       <div className="p-3 sm:p-4">
 
-        {/* ── TOP SECTION ── */}
+        {/* ── HEADER ── */}
         <div className="flex items-start justify-between mb-1">
           <div>
             <h3 className="text-lg font-semibold text-white leading-tight">
               {sig.symbol || sig.companyName || sig.scripCode}
             </h3>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-slate-500">
-                KII <span className="font-mono text-slate-400">{kiiScore}</span>
-              </span>
-              <span className="text-slate-700">|</span>
-              <span className="text-xs text-slate-500 font-mono">
-                {formatTriggerTime(sig)}
-              </span>
+            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500">
+              <span>{sig.exchange || 'NSE'}</span>
+              <span className="text-slate-700">&bull;</span>
+              <span>{formatTriggerTime(sig)}</span>
+              {displayInstrumentName && (
+                <>
+                  <span className="text-slate-700">&bull;</span>
+                  <span className="text-slate-400 font-medium">{displayInstrumentName}</span>
+                </>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-1.5">
             {isNseNoTradeWindow(sig.exchange, sig.triggerTime) && (
-              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window (3:15–3:30 PM)">
+              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window">
                 <Clock className="w-3.5 h-3.5 text-amber-400" />
               </span>
             )}
@@ -698,254 +970,272 @@ const FudkiiTradingCard: React.FC<{
           </div>
         </div>
 
-        {/* ── SL / Entry / Targets Grid ── */}
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
-            <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
+        {/* ── KII BAR ── */}
+        <div className="mt-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500 font-medium w-6">KII</span>
+            <div className="flex-1 h-[6px] rounded-full bg-slate-700/60 overflow-hidden">
+              <div className={`h-full rounded-full ${kiiBarColor} transition-all`} style={{ width: `${kiiBarPct}%` }} />
+            </div>
+            <span className={`text-sm font-bold font-mono ${effectiveKii >= 80 ? 'text-green-400' : effectiveKii >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+              {effectiveKii}
+            </span>
           </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
-            <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
+          <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+            {rawKii !== effectiveKii ? (
+              <>{rawKii} &rarr; {effectiveKii}
+                {volDeflation > 0 && <span className="ml-2">vol <span className="text-amber-400">&darr;{volDeflation}%</span></span>}
+                {oiDeflation > 0 && <span className="ml-2">OI <span className="text-amber-400">&darr;{oiDeflation}%</span></span>}
+              </>
+            ) : (
+              <span>
+                {effectiveKii} &rarr; {effectiveKii}
+                {(sig.exchange ?? '').match(/^M/i) ? '  MCX decoupled \u2014 no Nifty gap adjustment' : '  no adjustments'}
+              </span>
+            )}
           </div>
-          {plan.t1 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
-              <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-            </div>
-          )}
-          {plan.t2 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2</span>
-              <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-            </div>
-          )}
-          {plan.t3 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T3</span>
-              <span className="font-mono text-sm font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-            </div>
-          )}
-          {plan.t4 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T4</span>
-              <span className="font-mono text-sm font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-            </div>
-          )}
+        </div>
+
+        {/* ── THIN SEPARATOR ── */}
+        <div className="border-t border-slate-700/30 my-3" />
+
+        {/* ── LEVELS GRID ── */}
+        <div className="space-y-1">
+          {levels.map(([label, eqVal, optVal, exitText], i) => {
+            const isSL = i === 0;
+            const labelColor = isSL ? 'text-red-400' : 'text-emerald-400';
+            const eqColor = isSL ? 'text-red-400' : 'text-green-400';
+            const optColor = isSL ? 'text-red-400/80' : 'text-green-400/80';
+            const dimmed = isAllOutT1 && i >= 2;
+            return (
+              <div key={label} className={`grid ${hasOptionLevels || hasFuturesLevels ? 'grid-cols-[32px_1fr_1fr_1fr]' : 'grid-cols-[32px_1fr_1fr]'} gap-1 items-center ${dimmed ? 'opacity-40' : ''}`}>
+                <span className={`text-[11px] font-semibold ${labelColor}`}>{label}</span>
+                <span className={`font-mono text-[12px] ${eqColor}`}>{fmtEq(eqVal)}</span>
+                {(hasOptionLevels || hasFuturesLevels) && (
+                  <span className={`font-mono text-[12px] ${optColor}`}>
+                    {instrumentMode === 'OPTION' && hasOptionLevels ? fmtOpt(optVal) : hasFuturesLevels ? fmtFut(instrumentMode === 'FUTURES' && i === 0 ? (sig.futuresSL ?? 0) : i === 1 ? (sig.futuresT1 ?? 0) : i === 2 ? (sig.futuresT2 ?? 0) : i === 3 ? (sig.futuresT3 ?? 0) : (sig.futuresT4 ?? 0)) : 'DM'}
+                  </span>
+                )}
+                <span className="text-[10px] text-slate-500 truncate">{exitText}</span>
+              </div>
+            );
+          })}
         </div>
 
         {/* ── R:R BAR ── */}
         <div className="mt-3">
-          <RiskRewardBar rr={plan.rr} />
+          <div className="flex h-[6px] rounded-full overflow-hidden">
+            <div className="bg-red-500/80 rounded-l-full" style={{ width: `${100 / (1 + Math.max(optRR, 0))}%` }} />
+            <div className="bg-green-500/80 rounded-r-full" style={{ width: `${100 - 100 / (1 + Math.max(optRR, 0))}%` }} />
+          </div>
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-[10px] text-slate-500">Risk</span>
+            <span className="font-mono text-xs">
+              {hasOptionLevels && (
+                <span className={`font-bold ${optRR >= 2 ? 'text-green-400' : optRR >= 1.5 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  R:R {optRR.toFixed(1)} opt
+                </span>
+              )}
+              {hasOptionLevels && plan.rr > 0 && <span className="text-slate-600 mx-1">/</span>}
+              {plan.rr > 0 && (
+                <span className="text-slate-400">{plan.rr.toFixed(1)} eq</span>
+              )}
+            </span>
+            <span className="flex items-center gap-1 text-[10px]">
+              {plan.hasPivots ? (
+                <span className="text-blue-400 font-medium">[Pivot]</span>
+              ) : (
+                <span className="text-slate-500">[ST]</span>
+              )}
+              <span className="text-slate-500">Reward</span>
+            </span>
+          </div>
         </div>
 
-        {/* ── GREEK METADATA (only when greekEnriched) ── */}
-        {sig.greekEnriched && (
-          <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-              Greek
-            </span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B4'} {(sig.greekDelta ?? 0).toFixed(2)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B3'} {(sig.greekGamma ?? 0).toFixed(3)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(sig.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
-              {'\u03B8'} {(sig.greekTheta ?? 0).toFixed(1)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              IV {((sig.greekIV ?? 0) * 100).toFixed(0)}%
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(sig.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
-              DTE {sig.greekDte ?? 0}
-            </span>
-            {sig.optionRR != null && sig.optionRR > 0 && (
-              <>
-                <span className="text-slate-600">|</span>
-                <span className="text-[9px] font-mono text-emerald-400">
-                  R:R {sig.optionRR.toFixed(1)}
-                </span>
-              </>
-            )}
-            {sig.greekThetaImpaired && (
-              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                {'\u03B8'}-IMPAIRED
-              </span>
-            )}
+        {/* ── MARKET SECTION ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          {/* Metric columns */}
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { val: `${volMultiplier}x`, label: sig.volumeLabel || 'Volume', sub: 'Volume',
+                color: parseFloat(volMultiplier) >= 3 ? 'text-green-300' : parseFloat(volMultiplier) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: `${oiChange}%`, label: sig.oiChangeLabel || 'OI Chg', sub: 'OI Chg',
+                color: Math.abs(oiVal) >= 100 ? 'text-green-300' : Math.abs(oiVal) >= 50 ? 'text-amber-300' : 'text-slate-300' },
+              { val: sig.oiBuildupPct != null ? `${sig.oiBuildupPct > 0 ? '+' : ''}${sig.oiBuildupPct.toFixed(1)}%` : 'DM',
+                label: sig.oiBuildupLabel || 'Buildup', sub: 'Buildup',
+                color: (sig.oiBuildupPct ?? 0) > 5 ? 'text-green-300' : (sig.oiBuildupPct ?? 0) > 0 ? 'text-amber-300' : 'text-red-300' },
+              { val: fmt(plan.atr), label: 'ATR', sub: 'ATR', color: 'text-slate-300' },
+            ].map(({ val, label, sub, color }) => (
+              <div key={sub}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
           </div>
-        )}
 
-        {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="Vol" value={`${volMultiplier}x`} bold accent="bg-amber-500/15 text-amber-300" />
-          <MetricsChip label="OIChange%" value={`${oiChange}%`} accent={oiAccent} />
-          {sig.oiBuildupPct != null && sig.oiBuildupPct !== 0 && (
-            <MetricsChip
-              label="OIBuildUp%"
-              value={`${sig.oiBuildupPct > 0 ? '+' : ''}${sig.oiBuildupPct.toFixed(1)}%`}
-              accent={sig.oiBuildupPct > 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}
-            />
+          {/* OI interpretation */}
+          {oiStyle.text && (
+            <div className="mt-2">
+              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${
+                oiStyle.color.includes('green') ? 'bg-green-500/15 border-green-500/30' :
+                oiStyle.color.includes('orange') ? 'bg-orange-500/15 border-orange-500/30' :
+                'bg-slate-700/50 border-slate-600/30'
+              } ${oiStyle.color}`}>
+                {oiStyle.text}
+              </span>
+            </div>
+          )}
+
+          {/* Block trade */}
+          {sig.blockTradeDetected && blockDir && (
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+              <span className={`text-[11px] font-bold ${isLong ? 'text-green-400' : 'text-red-400'}`}>{blockDir.arrow}</span>
+              <span className="text-[11px] font-semibold text-purple-300">{blockDir.text}</span>
+              <span className="text-[11px] font-bold text-purple-200">+{Math.round(blockPct)}%</span>
+              <span className="text-[10px] text-purple-400/70">{((sig.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares</span>
+            </div>
+          )}
+          {sig.blockTradeDetected && flowText && (
+            <div className="text-[10px] text-purple-400/60 mt-0.5">
+              {flowText} &mdash; {Math.round(blockPct)}% of session volume is large block deals
+            </div>
+          )}
+          {!sig.blockTradeDetected && (
+            <div className="text-[10px] text-slate-600 mt-2 italic">No block trades detected</div>
           )}
         </div>
 
-        {/* ── OI LABEL ── */}
-        {oiStyle.text && (
-          <div className="mt-1.5 px-1">
-            <span className={`text-[10px] font-semibold uppercase tracking-wider ${oiStyle.color}`}>
-              {oiStyle.text}
-            </span>
+        {/* ── GAP + EXPIRY + VIX NARRATIVE ── */}
+        {(gapLines.length > 0 || expiryLines.length > 0 || vixLines.length > 0) && (
+          <div className="mt-2 rounded-xl bg-slate-900/40 border border-slate-700/30 p-2.5 space-y-0.5">
+            {gapLines.map((line, i) => (
+              <div key={`g${i}`} className={`text-[10px] font-mono ${i === 0 ? 'text-slate-400' : i <= 1 ? 'text-slate-400/90' : 'text-amber-400/80'}`}>{line}</div>
+            ))}
+            {expiryLines.length > 0 && gapLines.length > 0 && <div className="h-px bg-slate-700/20 my-1" />}
+            {expiryLines.map((line, i) => (
+              <div key={`e${i}`} className={`text-[10px] font-mono ${i === 0 ? 'text-orange-400/80' : 'text-orange-400/60'}`}>{line}</div>
+            ))}
+            {vixLines.length > 0 && (gapLines.length > 0 || expiryLines.length > 0) && <div className="h-px bg-slate-700/20 my-1" />}
+            {vixLines.map((line, i) => (
+              <div key={`v${i}`} className={`text-[10px] font-mono ${(sig.indiaVix ?? 15) >= 25 ? 'text-red-400/70' : (sig.indiaVix ?? 15) >= 20 ? 'text-blue-400/70' : 'text-blue-400/50'}`}>{line}</div>
+            ))}
           </div>
         )}
 
-        {/* ── BLOCK TRADE LABEL ── */}
-        {sig.blockTradeDetected && (
-          <div className="mt-1.5 px-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-300">
-              Block Trade Detected
-            </span>
-            <span className="ml-1.5 text-[10px] text-purple-400/70">
-              {Math.round(sig.blockTradePct ?? 0)}% vol stripped, {((sig.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
-            </span>
+        {/* ── TRADE INSIGHT ── */}
+        <div className="border-t border-slate-700/30 mt-3 pt-3">
+          <div className={`text-xs font-bold ${tradeInfo.color} mb-1`}>
+            {tradeInfo.type === 'QUICK_SCALP' && '\u26A1 '}{tradeInfo.type === 'CAUTION' && '\u26A0 '}{tradeInfo.label}
           </div>
-        )}
+          <p className="text-[11px] text-slate-400 leading-relaxed">{narrative}</p>
+        </div>
 
-        {/* ── INSUFFICIENT FUNDS LABEL (clickable → Add Funds) ── */}
+        {/* ── INSUFFICIENT FUNDS ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
           <button
             onClick={() => onRequestFunds(sig, plan, sizing.creditAmount, premium, lotSize, multiplier, kiiScore)}
             className="mt-3 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 transition-colors cursor-pointer text-left"
           >
             <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
-            <span className="ml-auto text-[10px] text-orange-300 font-semibold whitespace-nowrap">Add Funds →</span>
+            <span className="text-[11px] text-orange-400">Insufficient Funds &mdash; forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+            <span className="ml-auto text-[10px] text-orange-300 font-semibold whitespace-nowrap">Add Funds &rarr;</span>
           </button>
         )}
 
-        {/* ── FUNDED TRADE BADGE ── */}
+        {/* ── FUNDED BADGE ── */}
         {isFunded && (
           <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
-            <span className="text-emerald-400 font-bold text-sm">₹</span>
+            <span className="text-emerald-400 font-bold text-sm">&#8377;</span>
             <span className="text-[10px] text-emerald-400">Trade executed with added funds</span>
           </div>
         )}
 
-        {/* ── FUTURES FALLBACK REASON ── */}
-        {instrumentMode === 'FUTURES' && sig.optionFailureReason && (
-          <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/25">
-            <Zap className="w-3 h-3 text-blue-400/80 flex-shrink-0" />
-            <span className="text-[10px] text-blue-400/80">
-              FUT: {sig.optionFailureReason}
-            </span>
-          </div>
-        )}
-
-        {/* ── ESTIMATED DATA WARNING ── */}
-        {isEstimatedPremium && instrumentMode !== 'NONE' && (
-          <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/25">
-            <AlertTriangle className="w-3 h-3 text-yellow-400/80 flex-shrink-0" />
-            <span className="text-[10px] text-yellow-400/80">
-              DM: Option LTP, lot size, strike — premium is estimated from ATR
-            </span>
-          </div>
-        )}
-
         {/* ── DEBUG STRIP ── */}
-        <div className="mt-2 flex gap-1 text-[9px] font-mono opacity-60 overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
+        <div className="mt-2 flex gap-1 text-[9px] font-mono opacity-50 overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
           <span className={`px-1 rounded whitespace-nowrap ${instrumentMode === 'NONE' ? 'bg-red-500/30 text-red-300' : instrumentMode === 'FUTURES' ? 'bg-blue-500/30 text-blue-300' : 'bg-green-500/30 text-green-300'}`}>
             {instrumentMode}
           </span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">KII={kiiScore}</span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lots={sizing.lots}</span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={fmt(premium)}</span>
-          {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
-          {sig.blockTradeDetected && <span className="px-1 rounded bg-purple-500/30 text-purple-300 whitespace-nowrap">BLK {Math.round(sig.blockTradePct ?? 0)}%</span>}
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">alloc={sizing.allocPct}%</span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(sig.optionAvailable)}</span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(sig.futuresAvailable)}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">eKII={effectiveKii}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">gapF={sig.gapFactor?.toFixed(2) ?? '1.00'}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">expF={sig.expiryFactor?.toFixed(2) ?? '1.00'}</span>
+          <span className={`px-1 rounded whitespace-nowrap ${(sig.gapQualityScore ?? 1) < 0.10 ? 'bg-red-500/40 text-red-300 font-bold' : (sig.gapQualityScore ?? 1) < 0.50 ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-600/50 text-slate-300'}`}>
+            GQS={sig.gapQualityScore?.toFixed(3) ?? '1.000'}
+          </span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">align={Math.round((sig.alignmentScore ?? 0) * 100)}%</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">slM={sig.greekSlMethod || 'N/A'}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">{'\u03B3'}B={sig.greekGammaBoost?.toFixed(2) ?? '0'}</span>
         </div>
 
-        {/* ── BUY BUTTON ── */}
+        {/* ── GQS DETAIL STRIP (only when GQS < 0.50 — shows why signal was penalized) ── */}
+        {sig.gapQualityScore != null && sig.gapQualityScore < 0.50 && (
+          <div className="mt-1 flex gap-1 text-[9px] font-mono overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
+            <span className="px-1 rounded bg-red-500/20 text-red-300 whitespace-nowrap">
+              Gap/ATR={sig.gqsGapAtrRatio?.toFixed(1) ?? 'DM'}x
+            </span>
+            <span className={`px-1 rounded whitespace-nowrap ${sig.gqsCandleOpposesGap ? 'bg-red-500/20 text-red-300' : 'bg-green-500/20 text-green-300'}`}>
+              {sig.gqsCandleOpposesGap ? 'Recovery candle' : 'Continuation'}
+            </span>
+            <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">
+              GapRecov={sig.gqsGapRecoveryPct?.toFixed(0) ?? 'DM'}%
+            </span>
+            <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">
+              Scores: ATR={sig.gqsGapAtrScore?.toFixed(2)} Cdl={sig.gqsCandleScore?.toFixed(2)} Blk={sig.gqsBlockFactor?.toFixed(2)} Div={sig.gqsDivergenceScore?.toFixed(2)} Rec={sig.gqsRecoveryScore?.toFixed(2)}
+            </span>
+          </div>
+        )}
+
+        {/* ── CTA BUTTON ── */}
         {instrumentMode === 'NONE' ? (
           <button
             disabled
-            className="w-full h-12 rounded-xl mt-4 text-slate-500 font-semibold text-sm bg-slate-700/30 border border-slate-600/30 cursor-not-allowed"
+            className="w-full h-12 rounded-xl mt-3 text-slate-500 font-semibold text-sm bg-slate-700/30 border border-slate-600/30 cursor-not-allowed"
           >
             No Derivatives Available for {sig.symbol || sig.scripCode}
           </button>
         ) : sizing.disabled ? (
           <button
             disabled
-            className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
+            className="w-full h-12 rounded-xl mt-3 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
           >
-            KII Score {kiiScore} — Sizing Unavailable
+            KII {effectiveKii} &mdash; Sizing Unavailable
           </button>
         ) : (
-          <div className="relative mt-4">
-            {isNearExpiry && (
-              <span className="absolute -top-2 right-2 z-10 px-2 py-0.5 rounded text-[10px] font-bold text-white bg-red-500">
-                Expiry in 2 days!
-              </span>
-            )}
+          <div className="relative mt-3">
             <button
               onClick={async () => {
-                // After 30m boundary: always show revised popup with fresh Greeks
-                // Within window + stale (>10% drift): also show popup
                 if ((isBeyond30mBoundary || (isWithin30mWindow && isStale)) && instrumentMode === 'OPTION' && sig.optionScripCode) {
                   setLoadingRevised(true);
                   try {
                     const ltpRes = await marketDataApi.getLtp(sig.optionScripCode);
                     const currentLtp = ltpRes?.ltp;
                     if (currentLtp && currentLtp > 0) {
-                      // Use plan values (ATR-based, wider targets suitable for manual trading)
-                      // sig.target1/stopLoss are tight BB/ST-based targets for automated scalps
                       const eqEntry = plan.entry || sig.triggerPrice || 0;
                       const eqSl = plan.sl || 0;
                       const eqT1 = plan.t1 || 0;
                       const eqT2 = plan.t2 || 0;
                       const eqT3 = plan.t3 || 0;
                       const eqT4 = plan.t4 || 0;
-                      // Always use frontend-computed ATM strike (plan.strike) for revised Greeks.
-                      // sig.optionStrike may be stale (from pre-market when price was different).
                       const revised = await greeksApi.compute({
                         spot: eqEntry,
                         strike: plan.strike || sig.optionStrike || 0,
                         optionLtp: currentLtp,
                         optionType: plan.optionType || 'CE',
                         expiry: sig.optionExpiry || '',
-                        equityEntry: eqEntry,
-                        equitySl: eqSl,
-                        equityT1: eqT1,
-                        equityT2: eqT2,
-                        equityT3: eqT3,
-                        equityT4: eqT4,
+                        equityEntry: eqEntry, equitySl: eqSl,
+                        equityT1: eqT1, equityT2: eqT2, equityT3: eqT3, equityT4: eqT4,
                       });
                       setRevisedData({ ...revised, currentLtp, originalLtp: premium, signalAge: Math.round(signalAgeMs / 60000), slotsFullOverride: sizing.exchangeFull });
                       setShowRevisedPopup(true);
                     } else {
                       if (sizing.exchangeFull) {
-                        if (window.confirm(`Exchange slots are full (${sizing.maxSlots}/${sizing.maxSlots}). Manual override — proceed?`)) onBuy(sig, plan, sizing.lots);
-                      } else {
-                        onBuy(sig, plan, sizing.lots);
-                      }
+                        if (window.confirm(`Exchange slots full (${sizing.maxSlots}/${sizing.maxSlots}). Override?`)) onBuy(sig, plan, sizing.lots);
+                      } else onBuy(sig, plan, sizing.lots);
                     }
-                  } catch (e) {
-                    console.error('Greeks compute failed:', e);
-                    onBuy(sig, plan, sizing.lots);
-                  } finally {
-                    setLoadingRevised(false);
-                  }
+                  } catch { onBuy(sig, plan, sizing.lots); }
+                  finally { setLoadingRevised(false); }
                 } else if (sizing.exchangeFull) {
-                  if (window.confirm(`Exchange slots are full (${sizing.maxSlots}/${sizing.maxSlots}). Manual override — proceed?`)) onBuy(sig, plan, sizing.lots);
-                } else {
-                  onBuy(sig, plan, sizing.lots);
-                }
+                  if (window.confirm(`Exchange slots full (${sizing.maxSlots}/${sizing.maxSlots}). Override?`)) onBuy(sig, plan, sizing.lots);
+                } else onBuy(sig, plan, sizing.lots);
               }}
               onMouseDown={() => setPressing(true)}
               onMouseUp={() => setPressing(false)}
@@ -959,21 +1249,20 @@ const FudkiiTradingCard: React.FC<{
                 ${pressing ? 'scale-[0.98] brightness-90' : 'scale-100'}`}
             >
               <span className="flex items-center justify-center gap-2">
-                {isStale && isWithin30mWindow && <span className="text-yellow-300 text-base animate-pulse" title={`LTP drifted ${ltpDriftPct?.toFixed(1)}% from signal`}>⚠</span>}
+                {isStale && isWithin30mWindow && <span className="text-yellow-300 text-base animate-pulse" title={`LTP drifted ${ltpDriftPct?.toFixed(1)}%`}>{'\u26A0'}</span>}
                 {sizing.exchangeFull && !isBeyond30mBoundary && <span className="text-[10px] text-amber-300 bg-amber-500/20 px-1 rounded">SLOTS FULL</span>}
                 {loadingRevised ? 'Computing...' : (
-                  <>{instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{fmt(premium)}/- * {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}</>
+                  <>{instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName} @ &#8377;{fmt(premium)} &times; {sizing.lots} lot{sizing.lots > 1 ? 's' : ''}</>
                 )}
               </span>
             </button>
 
-            {/* Revised Greeks Popup — shown when clicking CTA beyond 30m boundary */}
+            {/* Revised Greeks Popup */}
             {showRevisedPopup && revisedData && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowRevisedPopup(false)}>
                 <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
                   <h3 className="text-lg font-bold text-white mb-1">Revised Trade Levels</h3>
-                  <p className="text-xs text-slate-400 mb-4">Signal is {revisedData.signalAge}m old — levels recomputed with current LTP</p>
-
+                  <p className="text-xs text-slate-400 mb-4">Signal is {revisedData.signalAge}m old &mdash; levels recomputed with current LTP</p>
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="bg-slate-700/50 rounded-lg p-3">
                       <div className="text-[10px] text-slate-500 mb-1">Signal LTP</div>
@@ -986,7 +1275,6 @@ const FudkiiTradingCard: React.FC<{
                       </div>
                     </div>
                   </div>
-
                   <div className="space-y-1.5 mb-4 text-sm">
                     <div className="flex justify-between"><span className="text-slate-400">SL</span><span className="text-red-400 font-medium">&#8377;{fmt(revisedData.optionSL)}</span></div>
                     <div className="flex justify-between"><span className="text-slate-400">T1</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT1)}</span></div>
@@ -994,14 +1282,10 @@ const FudkiiTradingCard: React.FC<{
                     {revisedData.optionT3 > 0 && <div className="flex justify-between"><span className="text-slate-400">T3</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT3)}</span></div>}
                     {revisedData.optionT4 > 0 && <div className="flex justify-between"><span className="text-slate-400">T4</span><span className="text-green-400 font-medium">&#8377;{fmt(revisedData.optionT4)}</span></div>}
                     <div className="flex justify-between"><span className="text-slate-400">R:R</span><span className="text-blue-400 font-medium">{revisedData.optionRR.toFixed(1)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-400">Greeks</span><span className="text-violet-400 font-medium text-xs">δ{revisedData.delta.toFixed(2)} γ{revisedData.gamma.toFixed(3)} θ{revisedData.theta.toFixed(1)} IV{revisedData.iv.toFixed(0)}%</span></div>
                   </div>
-
                   <div className="flex gap-3">
                     <button onClick={() => setShowRevisedPopup(false)}
-                      className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">
-                      Cancel
-                    </button>
+                      className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">Cancel</button>
                     <button onClick={() => {
                       setShowRevisedPopup(false);
                       onBuy(sig, { ...plan, sl: revisedData.optionSL, t1: revisedData.optionT1, t2: revisedData.optionT2, t3: revisedData.optionT3, t4: revisedData.optionT4, entry: revisedData.currentLtp }, sizing.lots);
@@ -1018,6 +1302,7 @@ const FudkiiTradingCard: React.FC<{
     </div>
   );
 };
+
 
 /* ═══════════════════════════════════════════════════════════════
    EMPTY STATE
@@ -1379,7 +1664,8 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
       const ltpData = await marketDataApi.getLtp(ltpScripCode);
       if (ltpData?.ltp != null && ltpData.ltp > 0) {
         const currentLtp = ltpData.ltp;
-        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4);
+        const isLongTrade = hasRealOption || sig.direction === 'BULLISH';
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4, isLongTrade);
 
         if (staleCheck) {
           // Show modal — store pending trade details

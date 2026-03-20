@@ -9,6 +9,7 @@ import type { StrategyTradeRequest } from '../../types/orders';
 import { computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import StalePriceModal from './StalePriceModal';
+import CrossInstrumentLevels from './CrossInstrumentLevels';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -98,10 +99,12 @@ interface MicroAlphaSignal {
 interface TradePlan {
   entry: number;
   sl: number;
-  t1: number;
-  t2: number;
+  t1: number | null;
+  t2: number | null;
   t3: number | null;
+  t4: number | null;
   rr: number;
+  hasPivots: boolean;
   atr: number;
   optionType: 'CE' | 'PE';
   strike: number;
@@ -218,15 +221,17 @@ function extractTradePlan(sig: MicroAlphaSignal): TradePlan {
   const risk = Math.abs(entry - sl);
   const atr = risk > 0 ? risk : entry * 0.004;
 
-  const t1 = sig.target ?? entry;
+  const t1 = sig.target ?? (isLong ? entry + risk * 2 : entry - risk * 2);
   const t2 = isLong ? entry + risk * 3 : entry - risk * 3;
   const t3 = isLong ? entry + risk * 4 : entry - risk * 4;
+  const t4 = isLong ? entry + risk * 5 : entry - risk * 5;
 
   return {
     entry,
     sl,
-    t1, t2, t3,
+    t1, t2, t3, t4,
     rr: sig.riskReward ?? 0,
+    hasPivots: (sig as any).pivotSource === true || false,
     atr,
     optionType,
     strike,
@@ -280,6 +285,18 @@ function getModeIcon(mode: string): string {
     case 'TREND_WITH_CAUTION': return '\u26A0'; // ⚠
     default: return '\u2022'; // •
   }
+}
+
+/** Classify trade type based on signal characteristics */
+function classifyMicroAlphaTradeType(sig: MicroAlphaSignal): { label: string; narrative: string; color: string } {
+  const dte = sig.greekDte ?? 15;
+  const mode = sig.tradingMode ?? '';
+  const conviction = sig.absConviction ?? Math.abs(sig.conviction ?? 0);
+  if (dte < 3) return { label: 'QUICK SCALP', narrative: `DTE ${dte}d — exit at T1. ${mode} mode active.`, color: 'text-red-400' };
+  if (conviction > 30 && mode === 'TREND_FOLLOWING') return { label: 'MOMENTUM', narrative: `High conviction (${conviction.toFixed(0)}%) in TREND mode. Trail to T2.`, color: 'text-green-400' };
+  if (mode === 'MEAN_REVERSION') return { label: 'MEAN REVERSION', narrative: `Expect price to revert toward VWAP. Scale out at T1, let remainder trail.`, color: 'text-orange-400' };
+  if (mode === 'BREAKOUT_AWAITING') return { label: 'BREAKOUT', narrative: `Volatility expansion detected. Quick entry, tight trail.`, color: 'text-cyan-400' };
+  return { label: 'STANDARD', narrative: `${mode ? getModeLabel(mode) : 'Multi-factor'} signal — follow lot-split exit plan.`, color: 'text-blue-400' };
 }
 
 /** OI interpretation → human-readable label */
@@ -337,32 +354,6 @@ function buildSmartInference(sig: MicroAlphaSignal): string {
 
   return parts.length > 0 ? parts.join('. ') + '.' : '';
 }
-
-/* ═══════════════════════════════════════════════════════════════
-   R:R VISUAL BAR
-   ═══════════════════════════════════════════════════════════════ */
-
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
-  const rr = isFinite(rawRr) ? rawRr : 0;
-  const totalParts = 1 + Math.max(rr, 0);
-  const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
-  const rewardPct = 100 - riskPct;
-  return (
-    <div>
-      <div className="flex h-[6px] rounded-full overflow-hidden">
-        <div className="bg-red-500/80 rounded-l-full" style={{ width: `${riskPct}%` }} />
-        <div className="bg-green-500/80 rounded-r-full" style={{ width: `${rewardPct}%` }} />
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-[11px] text-slate-500">Risk</span>
-        <span className={`font-mono text-xs font-bold ${
-          rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-green-400/80' : rr >= 1 ? 'text-yellow-400' : 'text-red-400'
-        }`}>R:R 1:{rr.toFixed(1)}</span>
-        <span className="text-[11px] text-slate-500">Reward</span>
-      </div>
-    </div>
-  );
-};
 
 /* ═══════════════════════════════════════════════════════════════
    METRICS CHIP
@@ -613,7 +604,14 @@ const MicroAlphaCard: React.FC<{
     premium = sig.optionLtp!;
     const displayStrike = sig.optionStrike ?? plan.strike;
     const displayOptionType = sig.optionType ?? plan.optionType;
-    displayInstrumentName = `${sig.symbol || sig.scripCode} ${displayStrike} ${displayOptionType}`;
+    const expiryMonth = (() => {
+      if (!sig.optionExpiry) return '';
+      const parts = sig.optionExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${sig.symbol || sig.scripCode}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike} ${displayOptionType}`;
     lotSize = sig.optionLotSize ?? 1;
   } else if (hasFutures) {
     instrumentMode = 'FUTURES';
@@ -790,71 +788,95 @@ const MicroAlphaCard: React.FC<{
           ))}
         </div>
 
-        {/* ── SL / Entry / Targets ── */}
-        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-2">
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
-            <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
-            <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
-            <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2</span>
-            <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
+        {/* ── CROSS-INSTRUMENT LEVELS + R:R ── */}
+        <div className="mt-4">
+          <CrossInstrumentLevels
+            plan={plan}
+            signal={sig}
+            instrumentMode={instrumentMode}
+            sizing={sizing}
+          />
+        </div>
+
+        {/* ── 4-COLUMN METRICS GRID ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { val: sig.volumeXFactor != null ? `${sig.volumeXFactor.toFixed(1)}x` : 'DM', label: 'Vol Surge',
+                color: (sig.volumeXFactor ?? 0) >= 3 ? 'text-green-300' : (sig.volumeXFactor ?? 0) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: sig.oiChangePercent != null ? `${sig.oiChangePercent > 0 ? '+' : ''}${sig.oiChangePercent.toFixed(0)}%` : 'DM', label: 'OI Change',
+                color: Math.abs(sig.oiChangePercent ?? 0) >= 100 ? 'text-green-300' : Math.abs(sig.oiChangePercent ?? 0) >= 50 ? 'text-amber-300' : 'text-slate-300' },
+              { val: sig.pcrValue != null ? sig.pcrValue.toFixed(2) : 'DM', label: 'PCR',
+                color: (sig.pcrValue ?? 0) > 0.8 ? 'text-red-300' : (sig.pcrValue ?? 0) < 0.3 ? 'text-yellow-300' : 'text-green-300' },
+              { val: plan.atr > 0 ? plan.atr.toFixed(2) : 'DM', label: 'ATR', color: 'text-slate-300' },
+            ].map(({ val, label, color }) => (
+              <div key={label}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* ── R:R BAR ── */}
-        <div className="mt-3">
-          <RiskRewardBar rr={plan.rr} />
-        </div>
-
-        {/* ── GREEK METADATA (only when greekEnriched) ── */}
-        {sig.greekEnriched && (
-          <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-              Greek
-            </span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B4'} {(sig.greekDelta ?? 0).toFixed(2)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B3'} {(sig.greekGamma ?? 0).toFixed(3)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(sig.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
-              {'\u03B8'} {(sig.greekTheta ?? 0).toFixed(1)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              IV {((sig.greekIV ?? 0) * 100).toFixed(0)}%
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(sig.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
-              DTE {sig.greekDte ?? 0}
-            </span>
-            {sig.optionRR != null && sig.optionRR > 0 && (
-              <>
+        {/* ── TRANSLATED GREEKS (only when greekEnriched) ── */}
+        {sig.greekEnriched && (() => {
+          const dte = sig.greekDte ?? 0;
+          const delta = Math.abs(sig.greekDelta ?? 0);
+          const iv = (sig.greekIV ?? 0) * 100;
+          const thetaLabel = dte >= 10 ? 'SAFE' : dte >= 5 ? 'WATCH' : 'DANGER';
+          const thetaColor = dte >= 10 ? 'text-green-400' : dte >= 5 ? 'text-yellow-400' : 'text-red-400';
+          const deltaLabel = delta >= 0.3 && delta <= 0.5 ? 'MID' : delta > 0.5 ? 'HIGH' : 'LOW';
+          const deltaColor = delta >= 0.3 && delta <= 0.7 ? 'text-green-400' : 'text-yellow-400';
+          const ivLabel = iv > 60 ? 'EXTREME' : iv > 40 ? 'ELEVATED' : iv > 20 ? 'NORMAL' : 'LOW';
+          const ivColor = iv > 60 ? 'text-red-400' : iv > 40 ? 'text-yellow-400' : 'text-green-400';
+          return (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 flex-wrap text-[10px] font-mono">
+                <span className="text-slate-400">{'\u03B4'}{(sig.greekDelta ?? 0).toFixed(2)}</span>
                 <span className="text-slate-600">|</span>
-                <span className="text-[9px] font-mono text-emerald-400">
-                  R:R {sig.optionRR.toFixed(1)}
-                </span>
-              </>
-            )}
-            {sig.greekThetaImpaired && (
-              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                {'\u03B8'}-IMPAIRED
-              </span>
-            )}
+                <span className="text-slate-400">{'\u03B3'}{(sig.greekGamma ?? 0).toFixed(4)}</span>
+                <span className="text-slate-600">|</span>
+                <span className={`${(sig.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(sig.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">DTE {dte}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-semibold">
+                <span className={thetaColor}>{'\u03B8'} {thetaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={deltaColor}>{'\u03B4'} {deltaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={ivColor}>IV {ivLabel}</span>
+                {sig.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── DTE NARRATIVE ── */}
+        {sig.greekEnriched && sig.greekDte != null && (
+          <div className="mt-1.5 px-2 py-1.5 rounded-lg bg-slate-900/40 border border-slate-700/30">
+            <p className="text-[10px] text-slate-400 leading-relaxed">
+              {sig.greekDte < 3
+                ? `Only ${sig.greekDte}d to expiry — theta decay is aggressive. Exit at T1, do not hold overnight.`
+                : sig.greekDte < 7
+                ? `${sig.greekDte}d to expiry — moderate theta. Consider partial exit at T1, trail remainder.`
+                : `${sig.greekDte}d to expiry — comfortable time buffer. Full lot-split plan applies.`}
+            </p>
           </div>
         )}
+
+        {/* ── TRADE TYPE INSIGHT ── */}
+        {(() => {
+          const tradeType = classifyMicroAlphaTradeType(sig);
+          return (
+            <div className="mt-2 flex items-start gap-2 px-2 py-1.5 rounded-lg bg-slate-900/40 border border-slate-700/30">
+              <span className={`text-[10px] font-bold ${tradeType.color} shrink-0 mt-0.5`}>{tradeType.label}</span>
+              <p className="text-[10px] text-slate-400 leading-relaxed">{tradeType.narrative}</p>
+            </div>
+          );
+        })()}
 
         {/* ── INSUFFICIENT FUNDS LABEL ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
@@ -1226,8 +1248,8 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
       } else {
         delta = 1.0;
         tradeSl = plan.sl;
-        tradeT1 = plan.t1;
-        tradeT2 = plan.t2;
+        tradeT1 = plan.t1 ?? 0;
+        tradeT2 = plan.t2 ?? 0;
         tradeT3 = plan.t3 ?? 0;
       }
 
@@ -1255,10 +1277,10 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
         t4: 0,
         equitySpot: plan.entry,
         equitySl: plan.sl,
-        equityT1: plan.t1,
-        equityT2: plan.t2,
+        equityT1: plan.t1 ?? 0,
+        equityT2: plan.t2 ?? 0,
         equityT3: plan.t3 ?? 0,
-        equityT4: 0,
+        equityT4: plan.t4 ?? 0,
         delta,
         optionType: (displayOptionType === 'CE' || displayOptionType === 'PE') ? displayOptionType : undefined,
         strike: displayStrike,
@@ -1331,7 +1353,8 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
       const ltpData = await marketDataApi.getLtp(ltpScripCode);
       if (ltpData?.ltp != null && ltpData.ltp > 0) {
         const currentLtp = ltpData.ltp;
-        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, null);
+        const isLongTrade = hasRealOption || sig.direction === 'BULLISH';
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, null, isLongTrade);
 
         if (staleCheck) {
           setStalePriceCheck({

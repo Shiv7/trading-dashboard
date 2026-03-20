@@ -751,6 +751,10 @@ export interface StrategyWalletSummary {
   mcxUsedMargin?: number
   dayPnl?: number
   circuitBreakerTripped?: boolean
+  circuitBreakerReason?: string
+  cumulativeLockdown?: boolean
+  cumulativeLockdownReason?: string
+  cumulativeLockdownAt?: string
   unrealizedPnl?: number
   peakBalance?: number
   maxDrawdown?: number
@@ -880,6 +884,14 @@ export const strategyWalletsApi = {
   addFunds: (strategy: string, amount: number) =>
     postJson<{ success: boolean; newBalance: number; retriedSignals: number }>(
       `/strategy-wallets/capital/${encodeURIComponent(strategy)}/add-funds`, { amount }),
+
+  resetCircuitBreaker: (strategy: string) =>
+    postJson<{ success: boolean; message: string }>(
+      `/strategy-wallets/${encodeURIComponent(strategy)}/reset-circuit-breaker`, {}),
+
+  unlockCumulativeLockdown: (strategy: string) =>
+    postJson<{ success: boolean; message: string }>(
+      `/strategy-wallets/${encodeURIComponent(strategy)}/unlock-cumulative`, {}),
 
   getTransactions: (strategy: string, limit = 50) =>
     fetchJson<WalletTransaction[]>(

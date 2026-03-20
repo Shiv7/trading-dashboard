@@ -10,6 +10,7 @@ import { computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePrice
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
+import CrossInstrumentLevels from './CrossInstrumentLevels';
 
 type SortField = 'score' | 'rr' | 'time' | 'percentB' | 'timestamp';
 type SignalCategory = 'BULLISH_REVERSION' | 'BEARISH_REVERSION' | 'CONTINUE_BULLISH' | 'CONTINUE_BEARISH';
@@ -78,6 +79,8 @@ interface MereTrigger {
   blockTradeDetected?: boolean;
   blockTradeVol?: number;
   blockTradePct?: number;
+  blockTradeFlowLabel?: string;
+  oiBuildupPct?: number;
   // Option enrichment
   optionAvailable?: boolean;
   optionFailureReason?: string;
@@ -139,6 +142,7 @@ interface TradePlan {
   t3: number | null;
   t4: number | null;
   rr: number;
+  hasPivots: boolean;
   atr: number;
   optionType: 'CE' | 'PE';
   strike: number;
@@ -210,6 +214,7 @@ function extractTradePlan(sig: MereTrigger): TradePlan {
       t3: sig.target3 ?? null,
       t4: sig.target4 ?? null,
       rr: sig.riskReward ?? 0,
+      hasPivots: sig.pivotSource ?? false,
       atr,
       optionType,
       strike,
@@ -229,7 +234,7 @@ function extractTradePlan(sig: MereTrigger): TradePlan {
   return {
     entry: sig.triggerPrice,
     sl, t1, t2, t3: null, t4: null,
-    rr, atr, optionType, strike, strikeInterval: interval,
+    rr, hasPivots: sig.pivotSource ?? false, atr, optionType, strike, strikeInterval: interval,
   };
 }
 
@@ -300,21 +305,6 @@ function getEpoch(sig: MereTrigger): number {
   return sig.cachedAt || 0;
 }
 
-function getOILabelStyle(label?: string): { text: string; color: string } {
-  switch (label) {
-    case 'LONG_BUILDUP': return { text: 'Long Buildup', color: 'text-green-400' };
-    case 'SHORT_BUILDUP': return { text: 'Short Buildup', color: 'text-green-400' };
-    case 'SHORT_COVERING': return { text: 'Short Covering', color: 'text-orange-400' };
-    case 'LONG_UNWINDING': return { text: 'Long Unwinding', color: 'text-orange-400' };
-    default: return { text: '', color: 'text-slate-500' };
-  }
-}
-
-function getOIAccent(label?: string): string {
-  if (label === 'LONG_BUILDUP' || label === 'SHORT_BUILDUP') return 'bg-green-500/15 text-green-300';
-  if (label === 'SHORT_COVERING' || label === 'LONG_UNWINDING') return 'bg-orange-500/15 text-orange-300';
-  return 'bg-slate-700/50 text-slate-300';
-}
 
 function getVariantBadge(variant?: string): { label: string; color: string } | null {
   switch (variant) {
@@ -323,6 +313,23 @@ function getVariantBadge(variant?: string): { label: string; color: string } | n
     case 'MERE_POSITIONAL': return { label: 'Positional', color: 'bg-purple-500/15 text-purple-400 border-purple-500/30' };
     default: return null;
   }
+}
+
+/** Classify MERE trade type for narrative insight */
+function classifyMereTradeType(trigger: MereTrigger): { label: string; narrative: string; color: string } {
+  const dte = trigger.greekDte ?? 15;
+  const variant = trigger.mereVariant ?? '';
+  const percentB = trigger.percentB ?? 0.5;
+  const oiLabel = trigger.oiLabel ?? '';
+  const isUnwinding = oiLabel === 'LONG_UNWINDING' || oiLabel === 'SHORT_COVERING';
+
+  if (variant === 'MERE_SCALP' || dte < 5)
+    return { label: 'SCALP', narrative: `Mean reversion scalp. T1 = mean (${percentB < 0 ? 'oversold' : 'overbought'} at %B ${percentB.toFixed(2)}). Quick exit.`, color: 'text-orange-400' };
+  if (isUnwinding && dte > 10)
+    return { label: 'SWING', narrative: `OI unwinding confirms exhaustion. D1 support + patient hold to BB midline. DTE ${dte}d safe.`, color: 'text-cyan-400' };
+  if (variant === 'MERE_POSITIONAL')
+    return { label: 'POSITIONAL', narrative: `Multi-timeframe reversal. Hold for BB midline → upper band.`, color: 'text-green-400' };
+  return { label: 'STANDARD', narrative: `Mean reversion setup at %B ${percentB.toFixed(2)}. T1 = mean, T2 = BB mid. Follow exit plan.`, color: 'text-blue-400' };
 }
 
 /** Classify a MERE trigger into a signal category based on direction + %B */
@@ -438,46 +445,6 @@ const PercentBIndicator: React.FC<{ percentB: number; isSqueezing: boolean; dire
   );
 };
 
-/* ═══════════════════════════════════════════════════════════════
-   R:R VISUAL BAR
-   ═══════════════════════════════════════════════════════════════ */
-
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
-  const rr = isFinite(rawRr) ? rawRr : 0;
-  const totalParts = 1 + Math.max(rr, 0);
-  const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
-  const rewardPct = 100 - riskPct;
-
-  return (
-    <div>
-      <div className="flex h-[6px] rounded-full overflow-hidden">
-        <div className="bg-red-500/80 rounded-l-full" style={{ width: `${riskPct}%` }} />
-        <div className="bg-green-500/80 rounded-r-full" style={{ width: `${rewardPct}%` }} />
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-[11px] text-slate-500">Risk</span>
-        <span className={`font-mono text-xs font-bold ${
-          rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-green-400/80' : rr >= 1 ? 'text-yellow-400' : 'text-red-400'
-        }`}>
-          R:R 1:{rr.toFixed(1)}
-        </span>
-        <span className="text-[11px] text-slate-500">Reward</span>
-      </div>
-    </div>
-  );
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   METRICS CHIP
-   ═══════════════════════════════════════════════════════════════ */
-
-const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
-    ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
-    <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
-  </div>
-);
 
 /* ═══════════════════════════════════════════════════════════════
    EXECUTION OVERLAY
@@ -793,7 +760,14 @@ const MereCard: React.FC<{
     premium = trigger.optionLtp!;
     const displayStrike = trigger.optionStrike ?? plan.strike;
     const displayOptionType = trigger.optionType ?? plan.optionType;
-    displayInstrumentName = `${trigger.symbol} ${displayStrike} ${displayOptionType}`;
+    const expiryMonth = (() => {
+      if (!trigger.optionExpiry) return '';
+      const parts = trigger.optionExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${trigger.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike} ${displayOptionType}`;
     lotSize = trigger.optionLotSize ?? 1;
     multiplier = trigger.optionMultiplier ?? 1;
   } else if (hasFutures) {
@@ -840,10 +814,8 @@ const MereCard: React.FC<{
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
-  // Metrics
-  const oiStyle = getOILabelStyle(trigger.oiLabel);
-  const oiAccent = getOIAccent(trigger.oiLabel);
-  const surgeVal = (trigger.surgeT || 0).toFixed(1);
+  // Metrics + trade type
+  const tradeType = classifyMereTradeType(trigger);
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
@@ -912,118 +884,104 @@ const MereCard: React.FC<{
           />
         </div>
 
-        {/* SL / Entry / Targets Grid */}
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL {trigger.mereSLSource ? `(${trigger.mereSLSource})` : ''}</span>
-            <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
-            <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-          {plan.t1 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1 (BB Mid)</span>
-              <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-            </div>
-          )}
-          {plan.t2 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2 (Opp BB)</span>
-              <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-            </div>
-          )}
-          {plan.t3 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T3</span>
-              <span className="font-mono text-sm font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-            </div>
-          )}
-          {plan.t4 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T4</span>
-              <span className="font-mono text-sm font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-            </div>
-          )}
+        {/* ── CROSS-INSTRUMENT LEVELS + R:R ── */}
+        <div className="mt-4">
+          <CrossInstrumentLevels
+            plan={plan}
+            signal={trigger}
+            instrumentMode={instrumentMode}
+            sizing={sizing}
+          />
         </div>
 
-        {/* R:R BAR */}
-        <div className="mt-3">
-          <RiskRewardBar rr={plan.rr} />
-        </div>
-
-        {/* ── GREEK METADATA (only when greekEnriched) ── */}
-        {trigger.greekEnriched && (
-          <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-              Greek
-            </span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B4'} {(trigger.greekDelta ?? 0).toFixed(2)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B3'} {(trigger.greekGamma ?? 0).toFixed(3)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
-              {'\u03B8'} {(trigger.greekTheta ?? 0).toFixed(1)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              IV {((trigger.greekIV ?? 0) * 100).toFixed(0)}%
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(trigger.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
-              DTE {trigger.greekDte ?? 0}
-            </span>
-            {trigger.optionRR != null && trigger.optionRR > 0 && (
-              <>
+        {/* ── TRANSLATED GREEKS ── */}
+        {trigger.greekEnriched && (() => {
+          const dte = trigger.greekDte ?? 0;
+          const delta = Math.abs(trigger.greekDelta ?? 0);
+          const iv = (trigger.greekIV ?? 0) * 100;
+          const thetaLabel = dte >= 10 ? 'SAFE' : dte >= 5 ? 'WATCH' : 'DANGER';
+          const thetaColor = dte >= 10 ? 'text-green-400' : dte >= 5 ? 'text-yellow-400' : 'text-red-400';
+          const deltaLabel = delta >= 0.3 && delta <= 0.5 ? 'MID' : delta > 0.5 ? 'HIGH' : 'LOW';
+          const deltaColor = delta >= 0.3 && delta <= 0.7 ? 'text-green-400' : 'text-yellow-400';
+          // MERE-specific: IV ELEVATED = GOOD (expansion supports reversal premium capture)
+          const ivLabel = iv > 60 ? 'EXTREME' : iv > 40 ? 'ELEVATED' : iv > 20 ? 'NORMAL' : 'LOW';
+          const ivColor = iv > 40 ? 'text-green-400' : iv > 20 ? 'text-slate-400' : 'text-yellow-400';
+          return (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 flex-wrap text-[10px] font-mono">
+                <span className="text-slate-400">{'\u03B4'}{(trigger.greekDelta ?? 0).toFixed(2)}</span>
                 <span className="text-slate-600">|</span>
-                <span className="text-[9px] font-mono text-emerald-400">
-                  R:R {trigger.optionRR.toFixed(1)}
-                </span>
-              </>
-            )}
-            {trigger.greekThetaImpaired && (
-              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                {'\u03B8'}-IMPAIRED
-              </span>
-            )}
-          </div>
-        )}
+                <span className="text-slate-400">{'\u03B3'}{(trigger.greekGamma ?? 0).toFixed(4)}</span>
+                <span className="text-slate-600">|</span>
+                <span className={`${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(trigger.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">DTE {dte}</span>
+                {trigger.optionRR != null && trigger.optionRR > 0 && (
+                  <>
+                    <span className="text-slate-600">|</span>
+                    <span className="text-emerald-400">R:R {trigger.optionRR.toFixed(1)}</span>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-semibold">
+                <span className={thetaColor}>{'\u03B8'} {thetaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={deltaColor}>{'\u03B4'} {deltaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={ivColor}>IV {ivLabel}{iv > 40 ? ' (good for reversal)' : ''}</span>
+                {trigger.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
+              </div>
+            </div>
+          );
+        })()}
 
-        {/* METRICS ROW */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="%B" value={`${(trigger.percentB * 100).toFixed(1)}%`} bold accent="bg-teal-500/15 text-teal-300" />
-          {trigger.surgeT > 0 && <MetricsChip label="Vol" value={`${surgeVal}x`} />}
-          {trigger.oiLabel && <MetricsChip label="OI" value={getOILabelStyle(trigger.oiLabel).text} accent={oiAccent} />}
-          <MetricsChip
-            label="Signal"
-            value={trigger.direction === 'BULLISH' ? 'Bull Reversion' : 'Bear Reversion'}
-            accent={trigger.direction === 'BULLISH' ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'}
-          />
-          <MetricsChip
-            label="Valid"
-            value={
-              trigger.mereVariant === 'MERE_SCALP' ? '2-4H' :
-              trigger.mereVariant === 'MERE_SWING' ? '1-5D' :
-              trigger.mereVariant === 'MERE_POSITIONAL' ? '1-2W' : '4-8H'
-            }
-            accent="bg-slate-500/15 text-slate-300"
-          />
+        {/* ── 4-COLUMN METRICS GRID ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { val: `${(trigger.surgeT ?? 0).toFixed(1)}x`, label: 'Vol Surge',
+                color: (trigger.surgeT ?? 0) >= 3 ? 'text-green-300' : (trigger.surgeT ?? 0) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: trigger.oiChangeRatio != null ? `${trigger.oiChangeRatio > 0 ? '+' : ''}${trigger.oiChangeRatio.toFixed(0)}%` : 'DM', label: 'OI Change',
+                color: Math.abs(trigger.oiChangeRatio ?? 0) >= 100 ? 'text-green-300' : Math.abs(trigger.oiChangeRatio ?? 0) >= 50 ? 'text-amber-300' : 'text-slate-300' },
+              { val: trigger.oiBuildupPct != null ? `${trigger.oiBuildupPct > 0 ? '+' : ''}${trigger.oiBuildupPct.toFixed(1)}%` : 'DM', label: 'OI Buildup%',
+                color: (trigger.oiBuildupPct ?? 0) > 5 ? 'text-green-300' : (trigger.oiBuildupPct ?? 0) > 0 ? 'text-amber-300' : 'text-red-300' },
+              { val: plan.atr > 0 ? plan.atr.toFixed(2) : 'DM', label: 'ATR', color: 'text-slate-300' },
+            ].map(({ val, label, color }) => (
+              <div key={label}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
+          {/* OI interpretation for MERE — inverted: unwinding = GOOD */}
+          {trigger.oiLabel && (
+            <div className="mt-2">
+              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${
+                trigger.oiLabel === 'LONG_UNWINDING' || trigger.oiLabel === 'SHORT_COVERING' ? 'bg-green-500/15 border-green-500/30 text-green-400' :
+                trigger.oiLabel === 'LONG_BUILDUP' || trigger.oiLabel === 'SHORT_BUILDUP' ? 'bg-red-500/15 border-red-500/30 text-red-400' :
+                'bg-slate-700/50 border-slate-600/30 text-slate-400'
+              }`}>
+                {trigger.oiLabel.replace(/_/g, ' ')} {(trigger.oiLabel === 'LONG_UNWINDING' || trigger.oiLabel === 'SHORT_COVERING') ? '-- exhaustion (good for reversal)' : '-- trend continuing (caution)'}
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* OI LABEL */}
-        {oiStyle.text && (
-          <div className="mt-1.5 px-1">
-            <span className={`text-[10px] font-semibold uppercase tracking-wider ${oiStyle.color}`}>
-              {oiStyle.text}
-            </span>
-          </div>
-        )}
+        {/* ── DTE NARRATIVE ── */}
+        {trigger.greekEnriched && (() => {
+          const dte = trigger.greekDte ?? 0;
+          const dteLine = dte <= 2 ? `DTE ${dte}d -- expiry imminent, theta danger. Scalp only, exit at T1.` :
+            dte <= 5 ? `DTE ${dte}d -- theta watch. Mean reversion scalp window, quick exit.` :
+            dte <= 10 ? `DTE ${dte}d -- theta manageable. Swing hold to BB midline viable.` :
+            `DTE ${dte}d -- ample time for full mean reversion play. Patient hold through T2+.`;
+          return (
+            <div className="mt-2 rounded-lg bg-slate-900/40 border border-slate-700/30 p-2 space-y-0.5">
+              <div className={`text-[10px] font-mono ${dte <= 2 ? 'text-red-400' : dte <= 5 ? 'text-amber-400' : 'text-slate-400'}`}>{dteLine}</div>
+            </div>
+          );
+        })()}
 
         {/* MERE REASONS */}
         {trigger.mereReasons && trigger.mereReasons.length > 0 && (
@@ -1040,16 +998,36 @@ const MereCard: React.FC<{
         )}
 
         {/* BLOCK TRADE LABEL */}
-        {trigger.blockTradeDetected && (
-          <div className="mt-1.5 px-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-300">
-              Block Trade Detected
-            </span>
-            <span className="ml-1.5 text-[10px] text-purple-400/70">
-              {Math.round(trigger.blockTradePct ?? 0)}% vol stripped, {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
-            </span>
-          </div>
-        )}
+        {trigger.blockTradeDetected && (() => {
+          const pct = trigger.blockTradePct ?? 0;
+          const flowLabel = trigger.blockTradeFlowLabel ?? (pct >= 40 ? 'DOMINANT_INSTITUTIONAL' : pct >= 20 ? 'HEAVY_INSTITUTIONAL' : pct >= 10 ? 'MODEST_INSTITUTIONAL' : 'NONE');
+          const isModest = flowLabel === 'MODEST_INSTITUTIONAL';
+          const isHeavy = flowLabel === 'HEAVY_INSTITUTIONAL';
+          const isDominant = flowLabel === 'DOMINANT_INSTITUTIONAL';
+          const hasFlow = isModest || isHeavy || isDominant;
+          const bgColor = isDominant ? 'bg-purple-500/25 border-purple-400/50' : isHeavy ? 'bg-purple-500/20 border-purple-400/40' : isModest ? 'bg-purple-500/15 border-purple-400/30' : 'bg-purple-500/10 border-purple-400/20';
+          const textColor = isDominant ? 'text-purple-200' : isHeavy ? 'text-purple-300' : 'text-purple-300/80';
+          const flowText = isDominant ? 'Dominant Institutional Flow' : isHeavy ? 'Heavy Institutional Activity' : isModest ? 'Modest Institutional Presence' : 'Block Trade Detected';
+          return (
+            <div className={`mt-1.5 px-2 py-1 rounded-md border ${bgColor} flex items-center gap-2`}>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${textColor}`}>
+                {flowText}
+              </span>
+              <span className={`text-[10px] font-semibold ${hasFlow ? 'text-purple-200' : 'text-purple-400/70'}`}>
+                {Math.round(pct)}%
+              </span>
+              <span className="text-[10px] text-purple-400/60">
+                {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
+              </span>
+            </div>
+          );
+        })()}
+
+        {/* ── TRADE TYPE INSIGHT ── */}
+        <div className="border-t border-slate-700/30 mt-3 pt-2">
+          <div className={`text-xs font-bold ${tradeType.color} mb-0.5`}>{tradeType.label}</div>
+          <p className="text-[11px] text-slate-400 leading-relaxed">{tradeType.narrative}</p>
+        </div>
 
         {/* INSUFFICIENT FUNDS (clickable → Add Funds) */}
         {sizing.insufficientFunds && !sizing.disabled && (
@@ -1101,7 +1079,12 @@ const MereCard: React.FC<{
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={Number(premium.toFixed(2))}</span>
           {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
-          {trigger.blockTradeDetected && <span className="px-1 rounded bg-purple-500/30 text-purple-300 whitespace-nowrap">BLK {Math.round(trigger.blockTradePct ?? 0)}%</span>}
+          {trigger.blockTradeDetected && (() => {
+  const pct = trigger.blockTradePct ?? 0;
+  const label = pct >= 40 ? 'DOM' : pct >= 20 ? 'HVY' : pct >= 10 ? 'MOD' : 'BLK';
+  const bg = pct >= 40 ? 'bg-purple-500/40 text-purple-200' : pct >= 20 ? 'bg-purple-500/30 text-purple-300' : 'bg-purple-500/20 text-purple-300';
+  return <span className={`px-1 rounded ${bg} whitespace-nowrap`}>{label} {Math.round(pct)}%</span>;
+})()}
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">alloc={sizing.allocPct}%</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
@@ -1592,7 +1575,8 @@ export const MereTabContent: React.FC<MereTabContentProps> = ({ autoRefresh = tr
       const ltpData = await marketDataApi.getLtp(ltpScripCode);
       if (ltpData?.ltp != null && ltpData.ltp > 0) {
         const currentLtp = ltpData.ltp;
-        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4);
+        const isLongTrade = hasRealOption || sig.direction === 'BULLISH';
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4, isLongTrade);
 
         if (staleCheck) {
           setStalePriceCheck({

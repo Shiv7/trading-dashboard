@@ -50,8 +50,11 @@ public class StrategyWalletsService {
                     double initialCapital = getNumericValue(wallet, "initialCapital", INITIAL_CAPITAL);
                     double currentBalance = getNumericValue(wallet, "currentBalance", INITIAL_CAPITAL);
                     double realizedPnl = getNumericValue(wallet, "realizedPnl", 0);
-                    double unrealizedPnl = getNumericValue(wallet, "unrealizedPnl", 0);
-                    double totalPnl = realizedPnl + unrealizedPnl;
+                    // Don't read unrealizedPnl from wallet entity — position-level override below
+                    // is the fresh source (2s from monitoring). Wallet entity's unrealizedPnl is Lua-maintained
+                    // every 5s and including it here causes double-counting when position-level is added.
+                    double unrealizedPnl = 0;
+                    double totalPnl = realizedPnl;
                     int totalTrades = getIntValue(wallet, "totalTradeCount", 0);
                     int wins = getIntValue(wallet, "totalWinCount", 0);
                     int losses = getIntValue(wallet, "totalLossCount", 0);
@@ -73,13 +76,18 @@ public class StrategyWalletsService {
                     double avgLoss = getNumericValue(wallet, "avgLoss", 0);
                     String circuitBreakerReason = wallet.get("circuitBreakerReason") != null
                             ? wallet.get("circuitBreakerReason").toString() : null;
+                    boolean cumulativeLockdown = getBoolValue(wallet, "cumulativeLockdown", false);
+                    String cumulativeLockdownReason = wallet.get("cumulativeLockdownReason") != null
+                            ? wallet.get("cumulativeLockdownReason").toString() : null;
+                    String cumulativeLockdownAt = wallet.get("cumulativeLockdownAt") != null
+                            ? wallet.get("cumulativeLockdownAt").toString() : null;
                     int dayTradeCount = getIntValue(wallet, "dayTradeCount", 0);
                     int dayWinCount = getIntValue(wallet, "dayWinCount", 0);
                     int dayLossCount = getIntValue(wallet, "dayLossCount", 0);
                     int maxOpenPositions = getIntValue(wallet, "maxOpenPositions", 0);
 
                     result.add(StrategyWalletDTO.StrategySummary.builder()
-                            .strategy(key)
+                            .strategy(DISPLAY_NAMES.getOrDefault(key, key))
                             .displayName(DISPLAY_NAMES.getOrDefault(key, key))
                             .initialCapital(round2(initialCapital))
                             .currentCapital(round2(currentBalance))
@@ -102,6 +110,9 @@ public class StrategyWalletsService {
                             .avgWin(round2(avgWin))
                             .avgLoss(round2(avgLoss))
                             .circuitBreakerReason(circuitBreakerReason)
+                            .cumulativeLockdown(cumulativeLockdown)
+                            .cumulativeLockdownReason(cumulativeLockdownReason)
+                            .cumulativeLockdownAt(cumulativeLockdownAt)
                             .unrealizedPnl(round2(unrealizedPnl))
                             .dayTradeCount(dayTradeCount)
                             .dayWinCount(dayWinCount)
@@ -111,7 +122,7 @@ public class StrategyWalletsService {
                 } else {
                     // Wallet not yet created in Redis — show empty wallet
                     result.add(StrategyWalletDTO.StrategySummary.builder()
-                            .strategy(key)
+                            .strategy(DISPLAY_NAMES.getOrDefault(key, key))
                             .displayName(DISPLAY_NAMES.getOrDefault(key, key))
                             .initialCapital(INITIAL_CAPITAL)
                             .currentCapital(INITIAL_CAPITAL)
@@ -126,7 +137,7 @@ public class StrategyWalletsService {
             } catch (Exception e) {
                 log.error("ERR [STRATEGY-WALLETS] Failed to read wallet {}: {}", walletKey, e.getMessage());
                 result.add(StrategyWalletDTO.StrategySummary.builder()
-                        .strategy(key)
+                        .strategy(DISPLAY_NAMES.getOrDefault(key, key))
                         .displayName(DISPLAY_NAMES.getOrDefault(key, key))
                         .initialCapital(INITIAL_CAPITAL)
                         .currentCapital(INITIAL_CAPITAL)
@@ -158,12 +169,12 @@ public class StrategyWalletsService {
             // Update summaries with live unrealized P&L + MCX margin from positions
             for (StrategyWalletDTO.StrategySummary s : result) {
                 Double positionUnrealized = unrealizedByStrategy.get(s.getStrategy());
-                if (positionUnrealized != null && positionUnrealized != 0) {
-                    // The wallet entity may not reflect real-time unrealized P&L,
-                    // so add position-level unrealized to what's already in the summary
-                    s.setTotalPnl(round2(s.getTotalPnl() + positionUnrealized));
-                    s.setTotalPnlPercent(round2(s.getTotalPnl() / s.getInitialCapital() * 100));
-                }
+                double unrealFromPositions = positionUnrealized != null ? positionUnrealized : 0;
+                // Position-level unrealized is the single source (fresh from 2s monitoring).
+                // Set both unrealizedPnl and totalPnl from it — no double-counting.
+                s.setUnrealizedPnl(round2(unrealFromPositions));
+                s.setTotalPnl(round2(s.getTotalPnl() + unrealFromPositions));
+                s.setTotalPnlPercent(round2(s.getTotalPnl() / s.getInitialCapital() * 100));
                 Double mcxMargin = mcxMarginByStrategy.get(s.getStrategy());
                 s.setMcxUsedMargin(round2(mcxMargin != null ? mcxMargin : 0));
             }
@@ -183,12 +194,14 @@ public class StrategyWalletsService {
         counts.put("N", 0);
         counts.put("M", 0);
         counts.put("C", 0);
+        // Normalize input so both canonical (MCX_BB) and display (MCX-BB) keys match
+        String normalizedKey = StrategyNameResolver.normalize(strategyKey);
         try {
             List<Map<String, Object>> positions = getActivePositions();
             for (Map<String, Object> pos : positions) {
                 String norm = StrategyNameResolver.normalize(
                         StrategyNameResolver.extractFromRedis(pos));
-                if (!strategyKey.equalsIgnoreCase(norm)) continue;
+                if (!normalizedKey.equalsIgnoreCase(norm)) continue;
                 String exch = extractExchangeFromPosition(pos);
                 counts.merge(exch, 1, Integer::sum);
             }

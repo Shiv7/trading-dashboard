@@ -10,7 +10,7 @@ type ResultFilter = 'ALL' | 'WIN' | 'LOSS'
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
 // Known strategies in display order — new ones discovered from trades are appended dynamically
-const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB', 'MCX_BBT1']
+const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB', 'MCX-BBT+1']
 
 const fmtTime = (ts: string) => {
   try {

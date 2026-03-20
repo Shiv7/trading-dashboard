@@ -7,6 +7,7 @@ import { fetchJson, strategyWalletsApi, strategyTradesApi, pivotAutoTradeApi, ma
 import { useNavigate } from 'react-router-dom';
 import type { StrategyTradeRequest } from '../../types/orders';
 import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import CrossInstrumentLevels from './CrossInstrumentLevels';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import StalePriceModal from './StalePriceModal';
 
@@ -40,6 +41,11 @@ interface PivotSignal {
   retestQuality?: string;
   firstRetest?: boolean;
   retestDirection?: string; // BULLISH or BEARISH — direction of bounce after retest
+  // Block trade
+  blockTradeDetected?: boolean;
+  blockTradeVol?: number;
+  blockTradePct?: number;
+  blockTradeFlowLabel?: string;
   // OI context
   oiInterpretation?: string; // LONG_BUILDUP, SHORT_COVERING, SHORT_BUILDUP, LONG_UNWINDING
   oiChangePercent?: number;
@@ -155,6 +161,7 @@ interface TradePlan {
   optionType: 'CE' | 'PE';
   strike: number;
   strikeInterval: number;
+  hasPivots: boolean;
 }
 
 interface ExecutionState {
@@ -203,6 +210,25 @@ function fmt(v: number | null | undefined): string {
 
 // getStrikeInterval, getOTMStrike: imported from ../../utils/tradingUtils
 
+/** Classify trade type for Pivot signals */
+function classifyPivotTradeType(sig: PivotSignal): { label: string; narrative: string; color: string } {
+  const dte = sig.greekDte ?? 15;
+  const confluence = sig.pivotNearbyLevels ?? 0;
+  // htfStrength is 0-1 range, trendConfidence is 0-100 range — normalize to percentage
+  const htfRaw = sig.htfStrength ?? 0;
+  const htfPct = htfRaw <= 1 ? htfRaw * 100 : htfRaw;
+  const trendConf = sig.trendConfidence ?? 0;
+  const htfStrengthPct = htfPct > 0 ? htfPct : trendConf;
+  const mlConf = sig.mlConfidence ?? 0;
+
+  if (dte < 3) return { label: 'QUICK SCALP', narrative: `DTE ${dte}d — take T1 at pivot level, don't hold.`, color: 'text-red-400' };
+  if (confluence >= 3 && htfStrengthPct > 70 && dte > 10)
+    return { label: 'SWING', narrative: `${confluence}-level confluence + HTF aligned (${htfStrengthPct.toFixed(0)}%). High conviction — hold through T1, trail to T2.`, color: 'text-cyan-400' };
+  if (mlConf > 0.70)
+    return { label: 'MOMENTUM', narrative: `ML ${(mlConf * 100).toFixed(0)}% confidence backs pivot setup. Strong execution bias.`, color: 'text-green-400' };
+  return { label: 'STANDARD', narrative: `Pivot confluence setup. Follow lot-split exit plan.`, color: 'text-blue-400' };
+}
+
 /** Format trigger timestamp in IST */
 function formatTriggerTime(sig: PivotSignal): string {
   if (!sig.triggerTime) return '--';
@@ -248,6 +274,7 @@ function extractTradePlan(sig: PivotSignal): TradePlan {
     optionType,
     strike,
     strikeInterval: interval,
+    hasPivots: true,
   };
 }
 
@@ -438,44 +465,6 @@ function getLtfPct(sig: PivotSignal): number {
   // ltfAlignmentScore typically ranges 0-110; normalize to 0-100
   return Math.min(100, Math.round(((sig.ltfAlignmentScore ?? 0) / 110) * 100));
 }
-
-/* ═══════════════════════════════════════════════════════════════
-   R:R VISUAL BAR
-   ═══════════════════════════════════════════════════════════════ */
-
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
-  const rr = isFinite(rawRr) ? rawRr : 0;
-  const totalParts = 1 + Math.max(rr, 0);
-  const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
-  const rewardPct = 100 - riskPct;
-  return (
-    <div>
-      <div className="flex h-[6px] rounded-full overflow-hidden">
-        <div className="bg-red-500/80 rounded-l-full" style={{ width: `${riskPct}%` }} />
-        <div className="bg-green-500/80 rounded-r-full" style={{ width: `${rewardPct}%` }} />
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-[11px] text-slate-500">Risk</span>
-        <span className={`font-mono text-xs font-bold ${
-          rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-green-400/80' : rr >= 1 ? 'text-yellow-400' : 'text-red-400'
-        }`}>R:R 1:{rr.toFixed(1)}</span>
-        <span className="text-[11px] text-slate-500">Reward</span>
-      </div>
-    </div>
-  );
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   METRICS CHIP
-   ═══════════════════════════════════════════════════════════════ */
-
-const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
-    ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
-    <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
-  </div>
-);
 
 /* ═══════════════════════════════════════════════════════════════
    EXECUTION OVERLAY
@@ -691,7 +680,14 @@ const PivotCard: React.FC<{
     premium = sig.optionLtp!;
     const displayStrike = sig.optionStrike ?? plan.strike;
     const displayOptionType = sig.optionType ?? plan.optionType;
-    displayInstrumentName = `${symbol} ${displayStrike} ${displayOptionType}`;
+    const expiryMonth = (() => {
+      if (!sig.optionExpiry) return '';
+      const parts = sig.optionExpiry.split('-');
+      if (parts.length < 2) return '';
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
+    })();
+    displayInstrumentName = `${symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike} ${displayOptionType}`;
     lotSize = sig.optionLotSize ?? 1;
     multiplier = sig.optionMultiplier ?? 1;
   } else if (hasFutures) {
@@ -1156,97 +1152,122 @@ const PivotCard: React.FC<{
           )}
         </>)}
 
-        {/* ── SL / Entry / Targets — Single line ── */}
-        <div className="mt-3 flex items-center gap-0 py-2 border-t border-slate-700/40 overflow-x-auto custom-scrollbar">
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="text-[10px] text-slate-500">SL</span>
-            <span className="font-mono text-xs font-semibold text-red-400">{fmt(plan.sl)}</span>
-          </div>
-          <span className="text-slate-700 mx-1.5">|</span>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="text-[10px] text-slate-500">Entry</span>
-            <span className="font-mono text-xs font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-          <span className="text-slate-700 mx-1.5">|</span>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="text-[10px] text-slate-500">T1</span>
-            <span className="font-mono text-xs font-semibold text-green-400">{fmt(plan.t1)}</span>
-          </div>
-          <span className="text-slate-700 mx-1.5">|</span>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="text-[10px] text-slate-500">T2</span>
-            <span className="font-mono text-xs font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-          </div>
-          {plan.t3 !== null && (
-            <>
-              <span className="text-slate-700 mx-1.5">|</span>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
-                <span className="text-[10px] text-slate-500">T3</span>
-                <span className="font-mono text-xs font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-              </div>
-            </>
-          )}
-          {plan.t4 !== null && (
-            <>
-              <span className="text-slate-700 mx-1.5">|</span>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
-                <span className="text-[10px] text-slate-500">T4</span>
-                <span className="font-mono text-xs font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-              </div>
-            </>
-          )}
+        {/* ── CROSS-INSTRUMENT LEVELS + R:R ── */}
+        <div className="mt-4">
+          <CrossInstrumentLevels
+            plan={plan}
+            signal={sig}
+            instrumentMode={instrumentMode}
+            sizing={sizing}
+          />
         </div>
 
-        {/* ── R:R BAR ── */}
-        <div className="mt-3">
-          <RiskRewardBar rr={plan.rr} />
-        </div>
-
-        {/* ── GREEK METADATA (only when greekEnriched) ── */}
-        {sig.greekEnriched && (
-          <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-              Greek
-            </span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B4'} {(sig.greekDelta ?? 0).toFixed(2)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B3'} {(sig.greekGamma ?? 0).toFixed(3)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(sig.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
-              {'\u03B8'} {(sig.greekTheta ?? 0).toFixed(1)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              IV {((sig.greekIV ?? 0) * 100).toFixed(0)}%
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(sig.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
-              DTE {sig.greekDte ?? 0}
-            </span>
-            {sig.optionRR != null && sig.optionRR > 0 && (
-              <>
+        {/* ── TRANSLATED GREEKS ── */}
+        {sig.greekEnriched && (() => {
+          const dte = sig.greekDte ?? 0;
+          const delta = Math.abs(sig.greekDelta ?? 0);
+          const iv = (sig.greekIV ?? 0) * 100;
+          const thetaLabel = dte >= 10 ? 'SAFE' : dte >= 5 ? 'WATCH' : 'DANGER';
+          const thetaColor = dte >= 10 ? 'text-green-400' : dte >= 5 ? 'text-yellow-400' : 'text-red-400';
+          const deltaLabel = delta >= 0.3 && delta <= 0.5 ? 'MID' : delta > 0.5 ? 'HIGH' : 'LOW';
+          const deltaColor = delta >= 0.3 && delta <= 0.7 ? 'text-green-400' : 'text-yellow-400';
+          const ivLabel = iv > 60 ? 'EXTREME' : iv > 40 ? 'ELEVATED' : iv > 20 ? 'NORMAL' : 'LOW';
+          const ivColor = iv > 60 ? 'text-red-400' : iv > 40 ? 'text-yellow-400' : 'text-green-400';
+          return (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 flex-wrap text-[10px] font-mono">
+                <span className="text-slate-400">{'\u03B4'}{(sig.greekDelta ?? 0).toFixed(2)}</span>
                 <span className="text-slate-600">|</span>
-                <span className="text-[9px] font-mono text-emerald-400">
-                  R:R {sig.optionRR.toFixed(1)}
-                </span>
-              </>
-            )}
-            {sig.greekThetaImpaired && (
-              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                {'\u03B8'}-IMPAIRED
-              </span>
-            )}
-          </div>
-        )}
+                <span className="text-slate-400">{'\u03B3'}{(sig.greekGamma ?? 0).toFixed(4)}</span>
+                <span className="text-slate-600">|</span>
+                <span className={`${(sig.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(sig.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">DTE {dte}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-semibold">
+                <span className={thetaColor}>{'\u03B8'} {thetaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={deltaColor}>{'\u03B4'} {deltaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={ivColor}>IV {ivLabel}</span>
+                {sig.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
+              </div>
+            </div>
+          );
+        })()}
 
-        {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="ATR" value={fmt(plan.atr)} />
+        {/* ── 4-COLUMN METRICS GRID ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { val: `${(sig.volumeSurge ?? 0).toFixed(1)}x`, label: 'Vol Surge',
+                color: (sig.volumeSurge ?? 0) >= 3 ? 'text-green-300' : (sig.volumeSurge ?? 0) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: sig.oiChangePercent != null ? `${sig.oiChangePercent > 0 ? '+' : ''}${sig.oiChangePercent.toFixed(0)}%` : 'DM', label: 'OI Change',
+                color: Math.abs(sig.oiChangePercent ?? 0) >= 100 ? 'text-green-300' : Math.abs(sig.oiChangePercent ?? 0) >= 50 ? 'text-amber-300' : 'text-slate-300' },
+              { val: sig.oiBuildupPct != null ? `${sig.oiBuildupPct > 0 ? '+' : ''}${sig.oiBuildupPct.toFixed(1)}%` : 'DM', label: 'OI Buildup%',
+                color: (sig.oiBuildupPct ?? 0) > 5 ? 'text-green-300' : (sig.oiBuildupPct ?? 0) > 0 ? 'text-amber-300' : 'text-red-300' },
+              { val: plan.atr > 0 ? plan.atr.toFixed(2) : 'DM', label: 'ATR', color: 'text-slate-300' },
+            ].map(({ val, label, color }) => (
+              <div key={label}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
         </div>
+
+        {/* ── BLOCK TRADE LABEL ── */}
+        {sig.blockTradeDetected && (() => {
+          const pct = sig.blockTradePct ?? 0;
+          const flowLabel = sig.blockTradeFlowLabel ?? (pct >= 40 ? 'DOMINANT_INSTITUTIONAL' : pct >= 20 ? 'HEAVY_INSTITUTIONAL' : pct >= 10 ? 'MODEST_INSTITUTIONAL' : 'NONE');
+          const isModest = flowLabel === 'MODEST_INSTITUTIONAL';
+          const isHeavy = flowLabel === 'HEAVY_INSTITUTIONAL';
+          const isDominant = flowLabel === 'DOMINANT_INSTITUTIONAL';
+          const hasFlow = isModest || isHeavy || isDominant;
+          const bgColor = isDominant ? 'bg-purple-500/25 border-purple-400/50' : isHeavy ? 'bg-purple-500/20 border-purple-400/40' : isModest ? 'bg-purple-500/15 border-purple-400/30' : 'bg-purple-500/10 border-purple-400/20';
+          const textColor = isDominant ? 'text-purple-200' : isHeavy ? 'text-purple-300' : 'text-purple-300/80';
+          const flowText = isDominant ? 'Dominant Institutional Flow' : isHeavy ? 'Heavy Institutional Activity' : isModest ? 'Modest Institutional Presence' : 'Block Trade Detected';
+          return (
+            <div className={`mt-1.5 px-2 py-1 rounded-md border ${bgColor} flex items-center gap-2`}>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${textColor}`}>
+                {flowText}
+              </span>
+              <span className={`text-[10px] font-semibold ${hasFlow ? 'text-purple-200' : 'text-purple-400/70'}`}>
+                {Math.round(pct)}%
+              </span>
+              <span className="text-[10px] text-purple-400/60">
+                {((sig.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
+              </span>
+            </div>
+          );
+        })()}
+
+        {/* ── TRADE TYPE INSIGHT ── */}
+        {(() => {
+          const tradeType = classifyPivotTradeType(sig);
+          return (
+            <div className="border-t border-slate-700/30 mt-3 pt-2">
+              <div className={`text-xs font-bold ${tradeType.color} mb-0.5`}>{tradeType.label}</div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">{tradeType.narrative}</p>
+            </div>
+          );
+        })()}
+
+        {/* ── DTE NARRATIVE ── */}
+        {sig.greekEnriched && (() => {
+          const dte = sig.greekDte ?? 0;
+          const dteLine = dte <= 2 ? `DTE ${dte}d — expiry imminent, theta danger` :
+            dte <= 5 ? `DTE ${dte}d — theta watch, scalp or quick swing only` :
+            dte <= 10 ? `DTE ${dte}d — theta manageable for swing hold` :
+            `DTE ${dte}d — ample time, theta not a concern`;
+          return (
+            <div className="mt-2 rounded-lg bg-slate-900/40 border border-slate-700/30 p-2 space-y-0.5">
+              <div className={`text-[10px] font-mono ${dte <= 2 ? 'text-red-400' : dte <= 5 ? 'text-amber-400' : 'text-slate-400'}`}>{dteLine}</div>
+            </div>
+          );
+        })()}
 
         {/* ── INSUFFICIENT FUNDS LABEL ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
@@ -1730,7 +1751,8 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
       const ltpData = await marketDataApi.getLtp(ltpScripCode);
       if (ltpData?.ltp != null && ltpData.ltp > 0) {
         const currentLtp = ltpData.ltp;
-        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4);
+        const isLongTrade = hasRealOption || sig.direction === 'BULLISH';
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4, isLongTrade);
 
         if (staleCheck) {
           setStalePriceCheck({

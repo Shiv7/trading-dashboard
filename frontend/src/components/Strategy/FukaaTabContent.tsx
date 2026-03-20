@@ -10,6 +10,7 @@ import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, is
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
+import CrossInstrumentLevels from './CrossInstrumentLevels';
 
 type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -65,7 +66,21 @@ interface FukaaTrigger {
   blockTradeDetected?: boolean;
   blockTradeVol?: number;
   blockTradePct?: number;
+  blockTradeFlowLabel?: string;
+  fukaaCompositeScore?: number;
   oiBuildupPct?: number;
+  // Gap Quality Score (GQS) — gap-fill trap detection
+  gapQualityScore?: number;
+  gqsGapAtrRatio?: number;
+  gqsCandleScore?: number;
+  gqsBlockFactor?: number;
+  gqsDivergenceScore?: number;
+  gqsRecoveryScore?: number;
+  gqsCandleOpposesGap?: boolean;
+  gqsGapRecoveryPct?: number;
+  effectiveKii?: number;
+  gapPct?: number;
+  excessGapPct?: number;
   // Option enrichment from backend (real LTP, strike, lot size)
   optionAvailable?: boolean;
   optionFailureReason?: string;
@@ -124,6 +139,7 @@ interface TradePlan {
   t3: number | null;
   t4: number | null;
   rr: number;
+  hasPivots: boolean;
   atr: number;
   optionType: 'CE' | 'PE';
   strike: number;
@@ -179,6 +195,38 @@ function computeConfidence(sig: FukaaTrigger): number {
   return Math.min(97, Math.max(55, Math.round(conf)));
 }
 
+/** Compute KAA score from available FUKAA signal fields */
+function computeKaaScore(sig: FukaaTrigger): { total: number; volume: number; oi: number; block: number; rr: number; greek: number; vix: number } {
+  const volumeScore = Math.min(100, (((sig.surgeT ?? 0) + (sig.surgeTMinus1 ?? 0)) / 2) * 25);
+  const oiRaw = Math.abs(sig.oiChangePct ?? sig.oiChangeRatio ?? 0);
+  const oiScore = Math.min(100, oiRaw * 0.4 + Math.max(0, sig.oiBuildupPct ?? 0) * 2);
+  const blockScore = Math.min(100, (sig.blockTradePct ?? 0) * 2.5);
+  const rrScore = Math.min(100, (sig.riskReward ?? 0) * 33.3);
+  const dte = sig.greekDte ?? 15;
+  const delta = Math.abs(sig.greekDelta ?? 0.5);
+  const greekScore = (dte >= 10 ? 50 : dte * 5) + (delta >= 0.3 && delta <= 0.7 ? 50 : 15);
+  const vixScore = 50; // VIX data not available in FUKAA signal yet
+  const total = Math.round(volumeScore * 0.25 + oiScore * 0.20 + blockScore * 0.20 + rrScore * 0.15 + greekScore * 0.10 + vixScore * 0.10);
+  return { total, volume: Math.round(volumeScore * 0.25), oi: Math.round(oiScore * 0.20), block: Math.round(blockScore * 0.20), rr: Math.round(rrScore * 0.15), greek: Math.round(greekScore * 0.10), vix: Math.round(vixScore * 0.10) };
+}
+
+/** Classify FUKAA trade type based on signal characteristics */
+function classifyFukaaTradeType(sig: FukaaTrigger): { label: string; narrative: string; color: string } {
+  const dte = sig.greekDte ?? 15;
+  const surgeT = sig.surgeT ?? 0;
+  const surgeTm1 = sig.surgeTMinus1 ?? 0;
+  const blockPct = sig.blockTradePct ?? 0;
+  const thetaImpaired = sig.greekThetaImpaired === true;
+
+  if (thetaImpaired || dte < 3)
+    return { label: 'QUICK SCALP', narrative: `Low DTE (${dte}d) — exit at T1. Theta decay too aggressive for holds.`, color: 'text-red-400' };
+  if (surgeT > 3 && blockPct > 20 && dte > 10)
+    return { label: 'MOMENTUM', narrative: `Sustained institutional flow (${surgeT.toFixed(1)}x + ${Math.round(blockPct)}% block). Ride T1→T2, trail to T4.`, color: 'text-green-400' };
+  if (surgeT > 3 && surgeTm1 > 2 && dte > 7)
+    return { label: 'SWING', narrative: `2-candle sustained volume (${surgeTm1.toFixed(1)}x → ${surgeT.toFixed(1)}x). DTE ${dte}d supports patient hold through T2.`, color: 'text-cyan-400' };
+  return { label: 'STANDARD', narrative: `Volume-confirmed signal. Follow lot-split exit plan: partial exits T1 → T4.`, color: 'text-blue-400' };
+}
+
 /** Format trigger timestamp in IST */
 function formatTriggerTime(sig: FukaaTrigger): string {
   if (!sig.triggerTime) return '--';
@@ -223,6 +271,7 @@ function extractTradePlan(sig: FukaaTrigger): TradePlan {
       t3: sig.target3 ?? null,
       t4: sig.target4 ?? null,
       rr: sig.riskReward ?? 0,
+      hasPivots: sig.pivotSource === true,
       atr,
       optionType,
       strike,
@@ -245,6 +294,7 @@ function extractTradePlan(sig: FukaaTrigger): TradePlan {
     entry: sig.triggerPrice,
     sl, t1, t2, t3, t4,
     rr,
+    hasPivots: false,
     atr,
     optionType,
     strike,
@@ -304,43 +354,6 @@ function computeStrength(sig: FukaaTrigger, plan: TradePlan): number {
 /* ═══════════════════════════════════════════════════════════════
    R:R VISUAL BAR
    ═══════════════════════════════════════════════════════════════ */
-
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
-  const rr = isFinite(rawRr) ? rawRr : 0;
-  const totalParts = 1 + Math.max(rr, 0);
-  const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
-  const rewardPct = 100 - riskPct;
-
-  return (
-    <div>
-      <div className="flex h-[6px] rounded-full overflow-hidden">
-        <div className="bg-red-500/80 rounded-l-full" style={{ width: `${riskPct}%` }} />
-        <div className="bg-green-500/80 rounded-r-full" style={{ width: `${rewardPct}%` }} />
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-[11px] text-slate-500">Risk</span>
-        <span className={`font-mono text-xs font-bold ${
-          rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-green-400/80' : rr >= 1 ? 'text-yellow-400' : 'text-red-400'
-        }`}>
-          R:R 1:{rr.toFixed(1)}
-        </span>
-        <span className="text-[11px] text-slate-500">Reward</span>
-      </div>
-    </div>
-  );
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   METRICS CHIP
-   ═══════════════════════════════════════════════════════════════ */
-
-const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
-    ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
-    <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
-  </div>
-);
 
 /* ═══════════════════════════════════════════════════════════════
    EXECUTION OVERLAY
@@ -636,7 +649,7 @@ const FukaaCard: React.FC<{
       const monthIdx = parseInt(parts[1], 10) - 1;
       return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
     })();
-    displayInstrumentName = `${trigger.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike}${displayOptionType}`;
+    displayInstrumentName = `${trigger.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike} ${displayOptionType}`;
     lotSize = trigger.optionLotSize ?? 1;
     multiplier = trigger.optionMultiplier ?? 1;
   } else if (hasFutures) {
@@ -656,7 +669,7 @@ const FukaaCard: React.FC<{
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${trigger.symbol} ${plan.strike}${plan.optionType}`;
+    displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
     lotSize = 1;
     isEstimatedPremium = true;
   }
@@ -700,7 +713,9 @@ const FukaaCard: React.FC<{
   const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
   const oiStyle = getOILabelStyle(trigger.oiLabel);
   const absOi = Math.abs(oiVal);
-  const oiAccent = absOi >= 200 ? 'bg-emerald-500/20 text-emerald-300 font-bold' : absOi >= 100 ? 'bg-orange-500/15 text-orange-300' : absOi >= 30 ? 'bg-slate-500/15 text-slate-300' : 'bg-red-500/15 text-red-300';
+  // KAA score and trade type classification
+  const kaa = computeKaaScore(trigger);
+  const tradeType = classifyFukaaTradeType(trigger);
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
@@ -731,6 +746,30 @@ const FukaaCard: React.FC<{
               {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               {isLong ? 'Bullish' : 'Bearish'}
             </span>
+          </div>
+        </div>
+
+        {/* ── KAA SCORE ── */}
+        <div className="mt-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500 font-medium w-8">KAA</span>
+            <div className="flex-1 h-[6px] rounded-full bg-slate-700/60 overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${kaa.total >= 80 ? 'bg-cyan-400' : kaa.total >= 60 ? 'bg-green-400' : kaa.total >= 40 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${Math.min(kaa.total, 100)}%` }} />
+            </div>
+            <span className={`text-sm font-bold font-mono ${kaa.total >= 80 ? 'text-cyan-400' : kaa.total >= 60 ? 'text-green-400' : kaa.total >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+              {kaa.total}
+            </span>
+            <span className={`text-[9px] font-semibold ${kaa.total >= 80 ? 'text-cyan-400' : kaa.total >= 60 ? 'text-green-400' : kaa.total >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+              {kaa.total >= 80 ? 'DOMINANT' : kaa.total >= 60 ? 'STRONG' : kaa.total >= 40 ? 'MODERATE' : 'WEAK'}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 mt-1.5 text-[9px] font-mono">
+            <span className="text-slate-500">Vol(sust) <span className="text-slate-300">{kaa.volume}/25</span></span>
+            <span className="text-slate-500">OI+Bldp <span className="text-slate-300">{kaa.oi}/20</span></span>
+            <span className="text-slate-500">Block <span className="text-slate-300">{kaa.block}/20</span></span>
+            <span className="text-slate-500">R:R <span className="text-slate-300">{kaa.rr}/15</span></span>
+            <span className="text-slate-500">Greeks <span className="text-slate-300">{kaa.greek}/10</span></span>
+            <span className="text-slate-500">VIX <span className="text-slate-300">{kaa.vix}/10</span></span>
           </div>
         </div>
 
@@ -776,106 +815,86 @@ const FukaaCard: React.FC<{
           </div>
         </div>
 
-        {/* ── CENTER CORE: SL / Entry / Targets Grid ── */}
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
-          {/* Row 1: SL | Entry */}
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
-            <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
-            <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-
-          {/* Row 2: T1 | T2 */}
-          {plan.t1 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
-              <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-            </div>
-          )}
-          {plan.t2 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T2</span>
-              <span className="font-mono text-sm font-semibold text-green-400/80">{fmt(plan.t2)}</span>
-            </div>
-          )}
-
-          {/* Row 3: T3 | T4 */}
-          {plan.t3 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T3</span>
-              <span className="font-mono text-sm font-semibold text-green-400/60">{fmt(plan.t3)}</span>
-            </div>
-          )}
-          {plan.t4 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T4</span>
-              <span className="font-mono text-sm font-semibold text-green-400/40">{fmt(plan.t4)}</span>
-            </div>
-          )}
+        {/* ── CROSS-INSTRUMENT LEVELS + R:R ── */}
+        <div className="mt-4">
+          <CrossInstrumentLevels
+            plan={plan}
+            signal={trigger}
+            instrumentMode={instrumentMode}
+            sizing={sizing}
+          />
         </div>
 
-        {/* ── R:R BAR ── */}
-        <div className="mt-3">
-          <RiskRewardBar rr={plan.rr} />
-        </div>
-
-        {/* ── GREEK METADATA (only when greekEnriched) ── */}
-        {trigger.greekEnriched && (
-          <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-              Greek
-            </span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B4'} {(trigger.greekDelta ?? 0).toFixed(2)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B3'} {(trigger.greekGamma ?? 0).toFixed(3)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
-              {'\u03B8'} {(trigger.greekTheta ?? 0).toFixed(1)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              IV {((trigger.greekIV ?? 0) * 100).toFixed(0)}%
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(trigger.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
-              DTE {trigger.greekDte ?? 0}
-            </span>
-            {trigger.optionRR != null && trigger.optionRR > 0 && (
-              <>
+        {/* ── TRANSLATED GREEKS ── */}
+        {trigger.greekEnriched && (() => {
+          const dte = trigger.greekDte ?? 0;
+          const delta = Math.abs(trigger.greekDelta ?? 0);
+          const iv = (trigger.greekIV ?? 0) * 100;
+          const thetaLabel = dte >= 10 ? 'SAFE' : dte >= 5 ? 'WATCH' : 'DANGER';
+          const thetaColor = dte >= 10 ? 'text-green-400' : dte >= 5 ? 'text-yellow-400' : 'text-red-400';
+          const deltaLabel = delta >= 0.3 && delta <= 0.5 ? 'MID' : delta > 0.5 ? 'HIGH' : 'LOW';
+          const deltaColor = delta >= 0.3 && delta <= 0.7 ? 'text-green-400' : 'text-yellow-400';
+          const ivLabel = iv > 60 ? 'EXTREME' : iv > 40 ? 'ELEVATED' : iv > 20 ? 'NORMAL' : 'LOW';
+          const ivColor = iv > 60 ? 'text-red-400' : iv > 40 ? 'text-yellow-400' : 'text-green-400';
+          return (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 flex-wrap text-[10px] font-mono">
+                <span className="text-slate-400">{'\u03B4'}{(trigger.greekDelta ?? 0).toFixed(2)}</span>
                 <span className="text-slate-600">|</span>
-                <span className="text-[9px] font-mono text-emerald-400">
-                  R:R {trigger.optionRR.toFixed(1)}
-                </span>
-              </>
-            )}
-            {trigger.greekThetaImpaired && (
-              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                {'\u03B8'}-IMPAIRED
-              </span>
-            )}
-          </div>
-        )}
+                <span className="text-slate-400">{'\u03B3'}{(trigger.greekGamma ?? 0).toFixed(4)}</span>
+                <span className="text-slate-600">|</span>
+                <span className={`${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(trigger.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">DTE {dte}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-semibold">
+                <span className={thetaColor}>{'\u03B8'} {thetaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={deltaColor}>{'\u03B4'} {deltaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={ivColor}>IV {ivLabel}</span>
+                {trigger.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
+              </div>
+            </div>
+          );
+        })()}
 
-        {/* ── METRICS ROW ── */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="Vol" value={`${surgeVal}x`} bold accent="bg-amber-500/15 text-amber-300" />
-          <MetricsChip label="OIChange%" value={`${oiChange}%`} accent={oiAccent} />
-          {trigger.oiBuildupPct != null && trigger.oiBuildupPct !== 0 && (
-            <MetricsChip
-              label="OIBuildUp%"
-              value={`${trigger.oiBuildupPct > 0 ? '+' : ''}${trigger.oiBuildupPct.toFixed(1)}%`}
-              accent={trigger.oiBuildupPct > 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}
-            />
-          )}
+        {/* ── 4-COLUMN METRICS GRID ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { val: `${surgeVal}x`, label: 'Vol Surge',
+                color: parseFloat(surgeVal) >= 3 ? 'text-green-300' : parseFloat(surgeVal) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: `${oiChange}%`, label: 'OI Change',
+                color: absOi >= 100 ? 'text-green-300' : absOi >= 50 ? 'text-amber-300' : 'text-slate-300' },
+              { val: trigger.oiBuildupPct != null ? `${trigger.oiBuildupPct > 0 ? '+' : ''}${trigger.oiBuildupPct.toFixed(1)}%` : 'DM',
+                label: 'OI Buildup%',
+                color: (trigger.oiBuildupPct ?? 0) > 5 ? 'text-green-300' : (trigger.oiBuildupPct ?? 0) > 0 ? 'text-amber-300' : 'text-red-300' },
+              { val: fmt(plan.atr), label: 'ATR', color: 'text-slate-300' },
+            ].map(({ val, label, color }) => (
+              <div key={label}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
         </div>
+
+        {/* ── DTE / VIX NARRATIVE ── */}
+        {trigger.greekEnriched && (() => {
+          const dte = trigger.greekDte ?? 0;
+          const dteLine = dte <= 2 ? `DTE ${dte}d — expiry imminent, theta danger` :
+            dte <= 5 ? `DTE ${dte}d — theta watch, scalp or quick swing only` :
+            dte <= 10 ? `DTE ${dte}d — theta manageable for swing hold` :
+            `DTE ${dte}d — ample time, theta not a concern`;
+          return (
+            <div className="mt-2 rounded-lg bg-slate-900/40 border border-slate-700/30 p-2 space-y-0.5">
+              <div className={`text-[10px] font-mono ${dte <= 2 ? 'text-red-400' : dte <= 5 ? 'text-amber-400' : 'text-slate-400'}`}>{dteLine}</div>
+            </div>
+          );
+        })()}
 
         {/* ── OI LABEL ── */}
         {oiStyle.text && (
@@ -887,16 +906,36 @@ const FukaaCard: React.FC<{
         )}
 
         {/* ── BLOCK TRADE LABEL ── */}
-        {trigger.blockTradeDetected && (
-          <div className="mt-1.5 px-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-300">
-              Block Trade Detected
-            </span>
-            <span className="ml-1.5 text-[10px] text-purple-400/70">
-              {Math.round(trigger.blockTradePct ?? 0)}% vol stripped, {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
-            </span>
-          </div>
-        )}
+        {trigger.blockTradeDetected && (() => {
+          const pct = trigger.blockTradePct ?? 0;
+          const flowLabel = trigger.blockTradeFlowLabel ?? (pct >= 40 ? 'DOMINANT_INSTITUTIONAL' : pct >= 20 ? 'HEAVY_INSTITUTIONAL' : pct >= 10 ? 'MODEST_INSTITUTIONAL' : 'NONE');
+          const isModest = flowLabel === 'MODEST_INSTITUTIONAL';
+          const isHeavy = flowLabel === 'HEAVY_INSTITUTIONAL';
+          const isDominant = flowLabel === 'DOMINANT_INSTITUTIONAL';
+          const hasFlow = isModest || isHeavy || isDominant;
+          const bgColor = isDominant ? 'bg-purple-500/25 border-purple-400/50' : isHeavy ? 'bg-purple-500/20 border-purple-400/40' : isModest ? 'bg-purple-500/15 border-purple-400/30' : 'bg-purple-500/10 border-purple-400/20';
+          const textColor = isDominant ? 'text-purple-200' : isHeavy ? 'text-purple-300' : 'text-purple-300/80';
+          const flowText = isDominant ? 'Dominant Institutional Flow' : isHeavy ? 'Heavy Institutional Activity' : isModest ? 'Modest Institutional Presence' : 'Block Trade Detected';
+          return (
+            <div className={`mt-1.5 px-2 py-1 rounded-md border ${bgColor} flex items-center gap-2`}>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${textColor}`}>
+                {flowText}
+              </span>
+              <span className={`text-[10px] font-semibold ${hasFlow ? 'text-purple-200' : 'text-purple-400/70'}`}>
+                {Math.round(pct)}%
+              </span>
+              <span className="text-[10px] text-purple-400/60">
+                {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
+              </span>
+            </div>
+          );
+        })()}
+
+        {/* ── TRADE TYPE INSIGHT ── */}
+        <div className="border-t border-slate-700/30 mt-3 pt-2">
+          <div className={`text-xs font-bold ${tradeType.color} mb-0.5`}>{tradeType.label}</div>
+          <p className="text-[11px] text-slate-400 leading-relaxed">{tradeType.narrative}</p>
+        </div>
 
         {/* ── INSUFFICIENT FUNDS LABEL (clickable → Add Funds) ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
@@ -948,11 +987,38 @@ const FukaaCard: React.FC<{
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={Number(premium.toFixed(2))}</span>
           {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
-          {trigger.blockTradeDetected && <span className="px-1 rounded bg-purple-500/30 text-purple-300 whitespace-nowrap">BLK {Math.round(trigger.blockTradePct ?? 0)}%</span>}
+          {trigger.blockTradeDetected && (() => {
+            const pct = trigger.blockTradePct ?? 0;
+            const label = pct >= 40 ? 'DOM' : pct >= 20 ? 'HVY' : pct >= 10 ? 'MOD' : 'BLK';
+            const bg = pct >= 40 ? 'bg-purple-500/40 text-purple-200' : pct >= 20 ? 'bg-purple-500/30 text-purple-300' : 'bg-purple-500/20 text-purple-300';
+            return <span className={`px-1 rounded ${bg} whitespace-nowrap`}>{label} {Math.round(pct)}%</span>;
+          })()}
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">alloc={sizing.allocPct}%</span>
+          <span className={`px-1 rounded whitespace-nowrap ${(trigger.gapQualityScore ?? 1) < 0.10 ? 'bg-red-500/40 text-red-300 font-bold' : (trigger.gapQualityScore ?? 1) < 0.50 ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-600/50 text-slate-300'}`}>
+            GQS={trigger.gapQualityScore?.toFixed(3) ?? '1.000'}
+          </span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">eKII={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
         </div>
+
+        {/* ── GQS DETAIL (shown when penalized) ── */}
+        {trigger.gapQualityScore != null && trigger.gapQualityScore < 0.50 && (
+          <div className="mt-1 flex gap-1 text-[9px] font-mono overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
+            <span className="px-1 rounded bg-red-500/20 text-red-300 whitespace-nowrap">
+              Gap/ATR={trigger.gqsGapAtrRatio?.toFixed(1) ?? 'DM'}x
+            </span>
+            <span className={`px-1 rounded whitespace-nowrap ${trigger.gqsCandleOpposesGap ? 'bg-red-500/20 text-red-300' : 'bg-green-500/20 text-green-300'}`}>
+              {trigger.gqsCandleOpposesGap ? 'Recovery candle' : 'Continuation'}
+            </span>
+            <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">
+              GapRecov={trigger.gqsGapRecoveryPct?.toFixed(0) ?? 'DM'}%
+            </span>
+            <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">
+              ATR={trigger.gqsGapAtrRatio?.toFixed(1)} Cdl={trigger.gqsCandleScore?.toFixed(2)} Blk={trigger.gqsBlockFactor?.toFixed(2)} Div={trigger.gqsDivergenceScore?.toFixed(2)} Rec={trigger.gqsRecoveryScore?.toFixed(2)}
+            </span>
+          </div>
+        )}
 
         {/* ── BUY BUTTON ── */}
         {instrumentMode === 'NONE' ? (
@@ -1434,7 +1500,8 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       const ltpData = await marketDataApi.getLtp(ltpScripCode);
       if (ltpData?.ltp != null && ltpData.ltp > 0) {
         const currentLtp = ltpData.ltp;
-        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4);
+        const isLongTrade = hasRealOption || sig.direction === 'BULLISH';
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4, isLongTrade);
 
         if (staleCheck) {
           // Show modal — store pending trade details

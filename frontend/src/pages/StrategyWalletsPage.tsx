@@ -715,6 +715,9 @@ export default function StrategyWalletsPage() {
 
   // Fund top-up modal
   const [fundModalStrategy, setFundModalStrategy] = useState<string | null>(null)
+  const [cbResetLoading, setCbResetLoading] = useState<string | null>(null)
+  const [unlockConfirmStrategy, setUnlockConfirmStrategy] = useState<string | null>(null)
+  const [unlockInput, setUnlockInput] = useState('')
 
   // Dropdown toggles
   const [showFilter, setShowFilter] = useState(false)
@@ -898,6 +901,45 @@ export default function StrategyWalletsPage() {
                   </span>
                 </div>
 
+                {/* Cumulative Lockdown Banner (RED — permanent) */}
+                {s.cumulativeLockdown && (
+                  <div className="mb-2 p-2 rounded-lg bg-red-900/40 border border-red-500/50 text-[10px] sm:text-xs">
+                    <div className="font-bold text-red-400 mb-1">CUMULATIVE LOCKDOWN</div>
+                    <div className="text-red-300/80 mb-1">Drawdown exceeded 30% of initial capital</div>
+                    {s.cumulativeLockdownAt && <div className="text-red-300/60 mb-1.5">Since: {s.cumulativeLockdownAt}</div>}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setUnlockConfirmStrategy(s.strategy); setUnlockInput('') }}
+                      className="w-full text-center py-1 px-2 rounded bg-red-800/60 hover:bg-red-700/60 text-red-300 border border-red-600/40 transition-all"
+                    >
+                      Unlock & Resume
+                    </button>
+                  </div>
+                )}
+
+                {/* Daily Circuit Breaker Banner (AMBER — auto-resets) */}
+                {s.circuitBreakerTripped && !s.cumulativeLockdown && (
+                  <div className="mb-2 p-2 rounded-lg bg-amber-900/30 border border-amber-500/40 text-[10px] sm:text-xs">
+                    <div className="font-bold text-amber-400 mb-1">DAILY LOSS LIMIT REACHED</div>
+                    <div className="text-amber-300/70 mb-1.5">{s.circuitBreakerReason || 'Trading paused until reset'}</div>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (!confirm('Daily loss limit was hit. Resuming allows new trades for the rest of today. Continue?')) return
+                        setCbResetLoading(s.strategy)
+                        try {
+                          await strategyWalletsApi.resetCircuitBreaker(s.strategy)
+                          loadData()
+                        } catch (err) { console.error('CB reset failed', err) }
+                        finally { setCbResetLoading(null) }
+                      }}
+                      disabled={cbResetLoading === s.strategy}
+                      className="w-full text-center py-1 px-2 rounded bg-amber-800/50 hover:bg-amber-700/50 text-amber-300 border border-amber-600/30 transition-all disabled:opacity-50"
+                    >
+                      {cbResetLoading === s.strategy ? 'Resetting...' : 'Resume Trading'}
+                    </button>
+                  </div>
+                )}
+
                 {/* Capital */}
                 <div className="text-base sm:text-2xl font-bold font-mono tabular-nums text-white mb-0.5 sm:mb-1 truncate">
                   {formatINR(s.currentCapital)}
@@ -915,6 +957,10 @@ export default function StrategyWalletsPage() {
                   <span>{s.totalTrades}t</span>
                   <span className="text-emerald-500">{s.wins}W</span>
                   <span className="text-red-500">{s.losses}L</span>
+                </div>
+                {/* Available Capital */}
+                <div className="mt-1 text-[10px] sm:text-xs text-slate-500 font-mono tabular-nums">
+                  Avail.cap <span className="text-slate-400">{formatINR(s.availableMargin ?? 0)}</span>
                 </div>
 
                 {/* MCX Capital */}
@@ -957,10 +1003,60 @@ export default function StrategyWalletsPage() {
           />
         )}
 
+        {/* Cumulative Unlock Confirmation Modal */}
+        {unlockConfirmStrategy && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setUnlockConfirmStrategy(null)}>
+            <div className="bg-slate-800 border border-red-500/50 rounded-xl p-6 max-w-md mx-4" onClick={e => e.stopPropagation()}>
+              <h3 className="text-red-400 font-bold text-lg mb-3">Unlock Cumulative Lockdown</h3>
+              <p className="text-slate-300 text-sm mb-2">
+                This wallet has lost more than 30% of its initial capital. Unlocking resumes all trading.
+              </p>
+              <p className="text-slate-400 text-xs mb-4">Type <span className="font-mono text-white">UNLOCK</span> to confirm:</p>
+              <input
+                type="text"
+                value={unlockInput}
+                onChange={e => setUnlockInput(e.target.value)}
+                placeholder="Type UNLOCK"
+                className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-white font-mono text-sm mb-4 focus:outline-none focus:border-red-500"
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setUnlockConfirmStrategy(null)}
+                  className="flex-1 py-2 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (unlockInput !== 'UNLOCK') return
+                    try {
+                      await strategyWalletsApi.unlockCumulativeLockdown(unlockConfirmStrategy)
+                      setUnlockConfirmStrategy(null)
+                      loadData()
+                    } catch (err) { console.error('Unlock failed', err) }
+                  }}
+                  disabled={unlockInput !== 'UNLOCK'}
+                  className="flex-1 py-2 rounded bg-red-700 hover:bg-red-600 text-white text-sm font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Unlock & Resume
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Active Trades ── */}
         {(() => {
+          const today = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })
           const activePositions = positions.filter(p => p.quantity > 0)
-          const exitedPositions = positions.filter(p => p.quantity <= 0)
+          const exitedPositions = positions.filter(p =>
+            p.quantity <= 0 ||
+            (p.quantity > 0 && p.exitHistory && p.exitHistory.length > 0 &&
+              p.exitHistory.some(ev =>
+                new Date(ev.timestamp).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) === today
+              ))
+          )
 
           const filterPos = (list: Position[], filter: { active: Set<SectionFilterTag> }) => {
             let filtered = list.filter(p => matchesSectionFilters(
@@ -1031,7 +1127,7 @@ export default function StrategyWalletsPage() {
                     {filteredExited.length > 0 ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                         {filteredExited.map(pos => (
-                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} exited />
                         ))}
                       </div>
                     ) : (

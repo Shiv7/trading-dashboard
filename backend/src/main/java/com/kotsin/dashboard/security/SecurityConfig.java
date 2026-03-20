@@ -48,6 +48,7 @@ public class SecurityConfig {
                 .requestMatchers("/technical-indicators/**").permitAll()
                 .requestMatchers("/api/strategy-state/**").permitAll()
                 .requestMatchers("/api/strategy-wallets/**").permitAll()
+                .requestMatchers("/api/wallet/**").permitAll()
                 .requestMatchers("/api/strategy-trades/**").permitAll()
                 .requestMatchers("/api/orders/**").permitAll()
                 .requestMatchers("/api/positions/**").permitAll()

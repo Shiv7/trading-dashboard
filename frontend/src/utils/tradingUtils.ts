@@ -222,6 +222,25 @@ export const MCX_MULTIPLIER_MAP: Record<string, number> = {
   ALUMINIUM: 5000, ALUMINI: 1000, MENTHAOIL: 360, COTTON: 10,
 };
 
+/**
+ * Lot allocation across targets using largest-remainder method.
+ * Default split: 40% T1, 30% T2, 20% T3, 10% T4 (matches FUDKII).
+ */
+export function computeLotSplit(lotAllocation: string | undefined, totalLots: number): number[] {
+  const pcts = (lotAllocation || '40,30,20,10').split(',').map(Number);
+  if (totalLots <= 0) return [0, 0, 0, 0];
+  const raw = pcts.map(p => (p / 100) * totalLots);
+  const floored = raw.map(Math.floor);
+  let remaining = totalLots - floored.reduce((a, b) => a + b, 0);
+  const remainders = raw.map((r, i) => ({ i, rem: r - floored[i] })).sort((a, b) => b.rem - a.rem);
+  for (const r of remainders) {
+    if (remaining <= 0) break;
+    floored[r.i]++;
+    remaining--;
+  }
+  return floored;
+}
+
 /** Extract month abbreviation (e.g., "MAR") from ISO date string (e.g., "2026-03-27") */
 export function getExpiryMonth(expiryStr?: string): string {
   if (!expiryStr) return '';
@@ -285,10 +304,14 @@ export function checkStalePriceAdjustment(
   t1: number | null,
   t2: number | null,
   t3: number | null,
-  t4: number | null
+  t4: number | null,
+  isLong: boolean = true
 ): StalePriceResult | null {
-  // If LTP < SL -> warning
-  if (currentLtp < sl) {
+  // Direction-aware SL breach check:
+  // LONG: SL is below entry, breach = LTP drops below SL
+  // SHORT: SL is above entry, breach = LTP rises above SL
+  const slBreached = isLong ? currentLtp < sl : currentLtp > sl;
+  if (slBreached) {
     return {
       type: 'below-sl',
       currentLtp,
@@ -304,23 +327,23 @@ export function checkStalePriceAdjustment(
   // Build ordered levels array
   const levels = [t1, t2, t3, t4];
 
-  // Count how many targets LTP has crossed
+  // Direction-aware target crossing:
+  // LONG: target crossed when LTP > level (price moved up past target)
+  // SHORT: target crossed when LTP < level (price moved down past target)
   let crossed = 0;
   for (const level of levels) {
-    if (level != null && currentLtp > level) {
+    if (level != null && (isLong ? currentLtp > level : currentLtp < level)) {
       crossed++;
     } else {
       break; // Stop at first non-crossed target
     }
   }
 
-  if (crossed === 0) return null; // Normal case: SL < LTP < T1
+  if (crossed === 0) return null; // Normal case: LTP between SL and T1
 
-  // Shift targets up by `crossed` levels
+  // Shift targets by `crossed` levels
   // Original: SL, T1, T2, T3, T4
-  // All levels in order:
   const allLevels = [sl, t1, t2, t3, t4];
-  // After shifting by `crossed`: new SL = allLevels[crossed], new T1 = allLevels[crossed+1], etc.
   const newSl = allLevels[crossed] ?? allLevels[crossed - 1] ?? sl;
   const newT1 = (crossed + 1 < allLevels.length) ? allLevels[crossed + 1] : null;
   const newT2 = (crossed + 2 < allLevels.length) ? allLevels[crossed + 2] : null;

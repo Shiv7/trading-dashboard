@@ -7,13 +7,15 @@ import { getStrategyBadgeClass } from '../../utils/strategyColors'
 interface PositionCardProps {
   position: Position
   onUpdate?: () => void
+  exited?: boolean  // true when rendered in "Exited Today" — show realizedPnl instead of unrealized
 }
 
-export default function PositionCard({ position, onUpdate }: PositionCardProps) {
+export default function PositionCard({ position, onUpdate, exited }: PositionCardProps) {
   const [expanded, setExpanded] = useState(false)
   const isLong = position.side === 'LONG'
   const isOpen = position.quantity > 0
-  const displayPnl = isOpen ? position.unrealizedPnl : position.realizedPnl
+  // Exited context: show realized PnL from exits; Active context: show unrealized PnL
+  const displayPnl = exited ? (position.realizedPnl || 0) : (isOpen ? position.unrealizedPnl : position.realizedPnl)
   const pnlColor = displayPnl >= 0 ? 'num-positive' : 'num-negative'
   const charges = position.totalCharges ?? 0
   const isStrategyTrade = !!(position.equitySl || position.optionSl)
@@ -285,7 +287,10 @@ export default function PositionCard({ position, onUpdate }: PositionCardProps) 
                 <span className="text-slate-500"> exited</span>
                 <span className="text-slate-600"> @</span>
                 <span className="text-slate-300">{ev.price.toFixed(2)}/-</span>
-                <span className="text-slate-600"> ({fmtTimeShort(ev.timestamp)})</span>
+                {ev.pnl != null && (
+                  <span className={ev.pnl >= 0 ? 'text-green-400' : 'text-red-400'}> ({ev.pnl >= 0 ? '+' : ''}{formatCurrency(ev.pnl)})</span>
+                )}
+                <span className="text-slate-600"> {fmtTimeShort(ev.timestamp)}</span>
               </span>
             ))}
           </div>

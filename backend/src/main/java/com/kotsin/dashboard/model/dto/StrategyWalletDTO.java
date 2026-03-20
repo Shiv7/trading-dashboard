@@ -38,6 +38,9 @@ public class StrategyWalletDTO {
         private double avgWin;
         private double avgLoss;
         private String circuitBreakerReason;
+        private boolean cumulativeLockdown;
+        private String cumulativeLockdownReason;
+        private String cumulativeLockdownAt;
         private double unrealizedPnl;
         private int dayTradeCount;
         private int dayWinCount;

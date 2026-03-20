@@ -13,7 +13,7 @@ type ResultFilter = 'ALL' | 'WIN' | 'LOSS'
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
 // Known strategies in display order
-const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB', 'MCX_BBT1']
+const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB', 'MCX-BBT+1']
 
 // ── Period helpers for analytics tabs ──
 type AnalyticsPeriod = 'TODAY' | '1W' | '1M' | 'QTR' | '1Y' | 'ALL' | 'DATE'
@@ -28,29 +28,45 @@ function getQuarterStart(d: Date): Date {
   return new Date(d.getFullYear(), qMonth, 1)
 }
 
+// PnL analytics reset date — ignore all trade_outcomes before this date.
+// Change this when strategies/wallets are reset. Later: per-strategy reset dates.
+const PNL_RESET_DATE_IST = '2026-03-19' // YYYY-MM-DD in IST
+
+function getPnlResetTimestamp(): number {
+  const [y, m, d] = PNL_RESET_DATE_IST.split('-').map(Number)
+  const istOffset = 5.5 * 60 * 60 * 1000
+  return new Date(Date.UTC(y, m - 1, d) - istOffset).getTime()
+}
+
 function analyticsPeriodToRange(key: AnalyticsPeriod, customDate?: string): { from?: number; to?: number } {
   const now = new Date()
   const istOffset = 5.5 * 60 * 60 * 1000
   const istNow = new Date(now.getTime() + istOffset)
   const todayIST = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()) - istOffset)
+  const resetTs = getPnlResetTimestamp()
+
+  // Clamp: never go before the reset date
+  const clamp = (ts: number) => Math.max(ts, resetTs)
+
   switch (key) {
-    case 'TODAY': return { from: todayIST.getTime() }
-    case '1W': return { from: todayIST.getTime() - 7 * 86400000 }
-    case '1M': return { from: todayIST.getTime() - 30 * 86400000 }
+    case 'TODAY': return { from: clamp(todayIST.getTime()) }
+    case '1W': return { from: clamp(todayIST.getTime() - 7 * 86400000) }
+    case '1M': return { from: clamp(todayIST.getTime() - 30 * 86400000) }
     case 'QTR': {
       const qs = getQuarterStart(istNow)
       const utcQs = new Date(Date.UTC(qs.getFullYear(), qs.getMonth(), qs.getDate()) - istOffset)
-      return { from: utcQs.getTime() }
+      return { from: clamp(utcQs.getTime()) }
     }
-    case '1Y': return { from: todayIST.getTime() - 365 * 86400000 }
+    case '1Y': return { from: clamp(todayIST.getTime() - 365 * 86400000) }
     case 'DATE': {
-      if (!customDate) return { from: todayIST.getTime() }
+      if (!customDate) return { from: clamp(todayIST.getTime()) }
       const [y, m, d] = customDate.split('-').map(Number)
       const dayStart = new Date(Date.UTC(y, m - 1, d) - istOffset)
+      if (dayStart.getTime() < resetTs) return { from: resetTs, to: dayStart.getTime() + 86400000 }
       return { from: dayStart.getTime(), to: dayStart.getTime() + 86400000 }
     }
     case 'ALL':
-    default: return {}
+    default: return { from: resetTs }
   }
 }
 
@@ -220,10 +236,14 @@ export default function PnLDashboardPage() {
                 <span className="ml-1.5 text-[10px] opacity-70">{trades.length}</span>
               </button>
               {STRATEGY_KEYS.map(key => {
-                const sum = summaries.find(s => s.strategy === key)
                 const c = getStrategyColors(key)
                 const isActive = activeStrategy === key
-                const count = trades.filter(t => t.strategy === key).length
+                const stratTrades = trades.filter(t => t.strategy === key)
+                const closedStrat = stratTrades.filter(t => t.exitTime)
+                const count = stratTrades.length
+                const stratPnl = closedStrat.reduce((s, t) => s + t.pnl, 0)
+                const stratWinRate = closedStrat.length > 0
+                  ? (closedStrat.filter(t => t.pnl > 0).length / closedStrat.length) * 100 : 0
                 return (
                   <button key={key} onClick={() => setActiveStrategy(key)}
                     className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all border ${
@@ -234,9 +254,9 @@ export default function PnLDashboardPage() {
                       <span>{key}</span>
                       <span className="text-[10px] opacity-70">{count}</span>
                     </div>
-                    {sum && (
-                      <div className={`text-[10px] mt-0.5 ${sum.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {fmtINR(sum.totalPnl)} ({fmt(sum.winRate, 0)}%)
+                    {closedStrat.length > 0 && (
+                      <div className={`text-[10px] mt-0.5 ${stratPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {fmtINR(stratPnl)} ({fmt(stratWinRate, 0)}%)
                       </div>
                     )}
                   </button>

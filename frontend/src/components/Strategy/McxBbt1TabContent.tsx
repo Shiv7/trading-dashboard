@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Volume2, Check, Zap, AlertTriangle, Loader2
+  Check, Zap, AlertTriangle, Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyTradesApi, strategyWalletsApi, marketDataApi, greeksApi } from '../../services/api';
@@ -10,6 +10,7 @@ import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, ch
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
+import CrossInstrumentLevels from './CrossInstrumentLevels';
 
 type SortField = 'timestamp' | 'score' | 'rr' | 'surge';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -31,6 +32,10 @@ interface McxBbt1Trigger {
   bbLower: number;
   stopLoss: number;
   target1: number;
+  target2?: number | null;
+  target3?: number | null;
+  target4?: number | null;
+  pivotSource?: boolean;
   riskReward: number;
   surgeT: number;
   oiChangeRatio: number;
@@ -93,6 +98,7 @@ interface TradePlan {
   t3: number | null;
   t4: number | null;
   rr: number;
+  hasPivots: boolean;
   atr: number;
   optionType: 'CE' | 'PE';
   strike: number;
@@ -141,14 +147,20 @@ function extractTradePlan(sig: McxBbt1Trigger): TradePlan {
   const bw = (sig.bbUpper || 0) - (sig.bbLower || 0);
   const atr = bw > 0 ? bw / 2.5 : sig.triggerPrice * 0.004;
 
+  const entry = sig.triggerPrice;
+  const sl = sig.stopLoss;
+  const risk = Math.abs(entry - sl);
+  const isLongDir = sig.direction === 'BULLISH';
+
   return {
-    entry: sig.triggerPrice,
-    sl: sig.stopLoss,
+    entry,
+    sl,
     t1: sig.target1 ?? null,
-    t2: null,
-    t3: null,
-    t4: null,
+    t2: sig.target2 ?? (risk > 0 ? (isLongDir ? entry + risk * 3 : entry - risk * 3) : null),
+    t3: sig.target3 ?? (risk > 0 ? (isLongDir ? entry + risk * 4 : entry - risk * 4) : null),
+    t4: sig.target4 ?? (risk > 0 ? (isLongDir ? entry + risk * 5 : entry - risk * 5) : null),
     rr: sig.riskReward ?? 0,
+    hasPivots: sig.pivotSource === true,
     atr,
     optionType,
     strike,
@@ -156,52 +168,7 @@ function extractTradePlan(sig: McxBbt1Trigger): TradePlan {
   };
 }
 
-function formatVolume(vol: number): string {
-  if (vol >= 1_000_000) return (vol / 1_000_000).toFixed(1) + 'M';
-  if (vol >= 1_000) return (vol / 1_000).toFixed(1) + 'K';
-  return vol.toString();
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   R:R VISUAL BAR
-   ═══════════════════════════════════════════════════════════════ */
-
-const RiskRewardBar: React.FC<{ rr: number }> = ({ rr: rawRr }) => {
-  const rr = isFinite(rawRr) ? rawRr : 0;
-  const totalParts = 1 + Math.max(rr, 0);
-  const riskPct = totalParts > 0 ? (1 / totalParts) * 100 : 50;
-  const rewardPct = 100 - riskPct;
-
-  return (
-    <div>
-      <div className="flex h-[6px] rounded-full overflow-hidden">
-        <div className="bg-red-500/80 rounded-l-full" style={{ width: `${riskPct}%` }} />
-        <div className="bg-green-500/80 rounded-r-full" style={{ width: `${rewardPct}%` }} />
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-[11px] text-slate-500">Risk</span>
-        <span className={`font-mono text-xs font-bold ${
-          rr >= 2 ? 'text-green-400' : rr >= 1.5 ? 'text-green-400/80' : rr >= 1 ? 'text-yellow-400' : 'text-red-400'
-        }`}>
-          R:R 1:{rr.toFixed(1)}
-        </span>
-        <span className="text-[11px] text-slate-500">Reward</span>
-      </div>
-    </div>
-  );
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   METRICS CHIP
-   ═══════════════════════════════════════════════════════════════ */
-
-const MetricsChip: React.FC<{ label: string; value: string; accent?: string; bold?: boolean }> = ({ label, value, accent, bold }) => (
-  <div className={`flex-shrink-0 flex items-center gap-1 px-1.5 sm:px-2.5 py-1 rounded-lg text-[11px] sm:text-xs font-mono
-    ${accent || 'bg-slate-700/50 text-slate-300'}`}>
-    <span className="text-slate-500 text-[9px] sm:text-[10px]">{label}</span>
-    <span className={bold ? 'font-bold text-white' : 'font-medium'}>{value}</span>
-  </div>
-);
+/* RiskRewardBar removed — now handled by CrossInstrumentLevels */
 
 /* ═══════════════════════════════════════════════════════════════
    EXECUTION OVERLAY
@@ -406,6 +373,33 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 );
 
 /* ═══════════════════════════════════════════════════════════════
+   BB SCORE + TRADE TYPE HELPERS
+   ═══════════════════════════════════════════════════════════════ */
+
+function computeBbScore(sig: McxBbt1Trigger): { total: number; bbBreak: number; volume: number; oi: number; momentum: number } {
+  const bbUpper = sig.bbUpper ?? 0;
+  const bbLower = sig.bbLower ?? 0;
+  const price = sig.triggerPrice ?? 0;
+  const isLong = sig.direction === 'BULLISH';
+  const band = isLong ? bbUpper : bbLower;
+  const breakDist = band > 0 ? Math.abs(price - band) / band * 100 : 0;
+  const bbBreakScore = Math.min(100, breakDist * 50); // 2% break = 100
+  const volumeScore = Math.min(100, (sig.surgeT ?? 0) * 50);
+  const oiScore = Math.min(100, Math.abs(sig.oiChangeRatio ?? 0) * 0.4);
+  const momentumScore = sig.triggerScore ?? 50;
+  const total = Math.round(bbBreakScore * 0.30 + volumeScore * 0.25 + oiScore * 0.20 + momentumScore * 0.15 + 50 * 0.10);
+  return { total, bbBreak: Math.round(bbBreakScore * 0.30), volume: Math.round(volumeScore * 0.25), oi: Math.round(oiScore * 0.20), momentum: Math.round(momentumScore * 0.15) };
+}
+
+function classifyMcxBbTradeType(sig: McxBbt1Trigger): { label: string; narrative: string; color: string } {
+  const dte = sig.greekDte ?? 15;
+  const surgeT = sig.surgeT ?? 0;
+  if (dte < 5) return { label: 'GAMMA SCALP', narrative: `DTE ${dte}d + BB breakout. Take T1, tight trail. Don't hold overnight.`, color: 'text-orange-400' };
+  if (surgeT > 3) return { label: 'MOMENTUM', narrative: `Strong volume ${surgeT.toFixed(1)}x on BB breakout. Trail to T2.`, color: 'text-green-400' };
+  return { label: 'STANDARD', narrative: `BB breakout confirmed. Follow exit plan.`, color: 'text-blue-400' };
+}
+
+/* ═══════════════════════════════════════════════════════════════
    MCX-BBT+1 TRADING CARD — Same layout as FUKAA
    ═══════════════════════════════════════════════════════════════ */
 
@@ -468,7 +462,7 @@ const McxBbt1Card: React.FC<{
       const monthIdx = parseInt(parts[1], 10) - 1;
       return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][monthIdx] ?? '';
     })();
-    displayInstrumentName = `${trigger.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike}${displayOptionType}`;
+    displayInstrumentName = `${trigger.symbol}${expiryMonth ? ' ' + expiryMonth : ''} ${displayStrike} ${displayOptionType}`;
     lotSize = trigger.optionLotSize ?? 1;
     multiplier = trigger.optionMultiplier ?? 1;
   } else if (hasFutures) {
@@ -488,7 +482,7 @@ const McxBbt1Card: React.FC<{
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${trigger.symbol} ${plan.strike}${plan.optionType}`;
+    displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
     lotSize = 1;
     isEstimatedPremium = true;
   }
@@ -526,13 +520,6 @@ const McxBbt1Card: React.FC<{
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
-  // Metrics
-  const surgeVal = (trigger.surgeT ?? 0).toFixed(1);
-  const oiVal = Math.round((trigger.oiChangeRatio ?? 0) * 10) / 10;
-  const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
-  const absOi = Math.abs(oiVal);
-  const oiAccent = absOi >= 200 ? 'bg-cyan-500/20 text-cyan-300 font-bold' : absOi >= 100 ? 'bg-cyan-500/15 text-cyan-300' : absOi >= 30 ? 'bg-slate-500/15 text-slate-300' : 'bg-red-500/15 text-red-300';
-
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
       overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
@@ -558,105 +545,130 @@ const McxBbt1Card: React.FC<{
           </div>
         </div>
 
-        {/* -- VOLUME SURGE STRIP (simplified: single surgeT value) -- */}
-        <div className="mt-3 bg-slate-900/50 rounded-lg p-2.5">
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2">
-            <Volume2 className="w-3 h-3" />
-            Volume Surge
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="text-center flex-1">
-              <div className="text-slate-500 text-xs">Trigger Candle</div>
-              <div className="font-mono text-white font-semibold">{formatVolume(trigger.volumeT ?? 0)}</div>
-              <div className={`font-mono text-sm ${
-                (trigger.surgeT ?? 0) >= 10 ? 'text-amber-300 font-bold' :
-                (trigger.surgeT ?? 0) >= 5 ? 'text-teal-400 font-semibold' :
-                (trigger.surgeT ?? 0) >= 2 ? 'text-teal-400' : 'text-slate-400'
-              }`}>
-                {(trigger.surgeT ?? 0).toFixed(1)}x
+        {/* ── BB SCORE ── */}
+        {(() => {
+          const bb = computeBbScore(trigger);
+          return (
+            <div className="mt-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-500 font-medium w-6">BB</span>
+                <div className="flex-1 h-[6px] rounded-full bg-slate-700/60 overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${bb.total >= 76 ? 'bg-cyan-400' : bb.total >= 56 ? 'bg-green-400' : bb.total >= 31 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${Math.min(bb.total, 100)}%` }} />
+                </div>
+                <span className={`text-sm font-bold font-mono ${bb.total >= 76 ? 'text-cyan-400' : bb.total >= 56 ? 'text-green-400' : bb.total >= 31 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {bb.total}
+                </span>
+                <span className={`text-[9px] font-semibold ${bb.total >= 76 ? 'text-cyan-400' : bb.total >= 56 ? 'text-green-400' : bb.total >= 31 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {bb.total >= 76 ? 'BREAKOUT' : bb.total >= 56 ? 'STRONG' : bb.total >= 31 ? 'MODERATE' : 'WEAK'}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-x-2 mt-1.5 text-[9px] font-mono">
+                <span className="text-slate-500">Break <span className="text-slate-300">{bb.bbBreak}/30</span></span>
+                <span className="text-slate-500">Vol <span className="text-slate-300">{bb.volume}/25</span></span>
+                <span className="text-slate-500">OI <span className="text-slate-300">{bb.oi}/20</span></span>
+                <span className="text-slate-500">Mom <span className="text-slate-300">{bb.momentum}/15</span></span>
               </div>
             </div>
+          );
+        })()}
+
+        {/* ── T+1 CONFIRMATION ── (MCX_BBT1 only) */}
+        <div className="mt-2 bg-green-500/10 border border-green-500/20 rounded-lg p-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-bold text-green-400">T+1 CONFIRMED</span>
+            <span className="text-[10px] text-green-400/70">Breakout candle held on next candle</span>
           </div>
         </div>
 
-        {/* -- CENTER CORE: SL / Entry / Targets Grid -- */}
-        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2">
-          {/* Row 1: SL | Entry */}
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">SL</span>
-            <span className="font-mono text-sm font-semibold text-red-400">{fmt(plan.sl)}</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">Entry</span>
-            <span className="font-mono text-sm font-semibold text-white">{fmt(plan.entry)}</span>
-          </div>
-
-          {/* Row 2: T1 */}
-          {plan.t1 !== null && (
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider mb-0.5">T1</span>
-              <span className="font-mono text-sm font-semibold text-green-400">{fmt(plan.t1)}</span>
-            </div>
-          )}
+        {/* ── BB STATE + SESSION ── */}
+        <div className="mt-2 flex items-center gap-2 flex-wrap text-[10px]">
+          <span className="font-mono text-slate-400">
+            {isLong ? `Close > Upper by ${((trigger.triggerPrice - (trigger.bbUpper ?? 0)) / (trigger.bbUpper || 1) * 100).toFixed(1)}%` :
+              `Close < Lower by ${(((trigger.bbLower ?? 0) - trigger.triggerPrice) / (trigger.bbLower || 1) * 100).toFixed(1)}%`}
+          </span>
+          <span className="text-slate-700">|</span>
+          {(() => {
+            const now = new Date();
+            const istH = (now.getUTCHours() + 5 + Math.floor((now.getUTCMinutes() + 30) / 60)) % 24;
+            const session = istH < 17 ? 'Morning' : istH < 21 ? 'Evening' : 'Night';
+            const sessionColor = istH < 17 ? 'text-slate-400' : istH < 21 ? 'text-amber-400' : 'text-green-400';
+            return <span className={`font-semibold ${sessionColor}`}>MCX {session}</span>;
+          })()}
         </div>
 
-        {/* -- R:R BAR -- */}
-        <div className="mt-3">
-          <RiskRewardBar rr={plan.rr} />
+        {/* ── 4-COLUMN METRICS GRID ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {[
+              { val: `${(trigger.surgeT ?? 0).toFixed(1)}x`, label: 'Vol Surge', color: (trigger.surgeT ?? 0) >= 3 ? 'text-green-300' : (trigger.surgeT ?? 0) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: `${(trigger.oiChangeRatio ?? 0) > 0 ? '+' : ''}${(trigger.oiChangeRatio ?? 0).toFixed(0)}%`, label: 'OI Change', color: Math.abs(trigger.oiChangeRatio ?? 0) >= 100 ? 'text-green-300' : 'text-slate-300' },
+              { val: trigger.volumeT > 0 ? `${(trigger.volumeT / 1000).toFixed(0)}K` : 'DM', label: 'Volume', color: 'text-slate-300' },
+              { val: plan.atr > 0 ? plan.atr.toFixed(2) : 'DM', label: 'ATR', color: 'text-slate-300' },
+            ].map(({ val, label, color }) => (
+              <div key={label}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* ── GREEK METADATA (only when greekEnriched) ── */}
-        {trigger.greekEnriched && (
-          <div className="mt-2 flex items-center gap-1 flex-wrap">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-              Greek
-            </span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B4'} {(trigger.greekDelta ?? 0).toFixed(2)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              {'\u03B3'} {(trigger.greekGamma ?? 0).toFixed(3)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>
-              {'\u03B8'} {(trigger.greekTheta ?? 0).toFixed(1)}
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="text-[9px] font-mono text-slate-400">
-              IV {((trigger.greekIV ?? 0) * 100).toFixed(0)}%
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className={`text-[9px] font-mono ${(trigger.greekDte ?? 0) <= 2 ? 'text-red-400 font-bold' : 'text-slate-400'}`}>
-              DTE {trigger.greekDte ?? 0}
-            </span>
-            {trigger.optionRR != null && trigger.optionRR > 0 && (
-              <>
+        {/* ── CROSS-INSTRUMENT LEVELS + R:R ── */}
+        <div className="mt-4">
+          <CrossInstrumentLevels
+            plan={plan}
+            signal={trigger}
+            instrumentMode={instrumentMode}
+            sizing={sizing}
+          />
+        </div>
+
+        {/* ── TRANSLATED GREEKS ── */}
+        {trigger.greekEnriched && (() => {
+          const dte = trigger.greekDte ?? 0;
+          const delta = Math.abs(trigger.greekDelta ?? 0);
+          const iv = (trigger.greekIV ?? 0) * 100;
+          const thetaLabel = dte >= 10 ? 'SAFE' : dte >= 5 ? 'WATCH' : 'DANGER';
+          const thetaColor = dte >= 10 ? 'text-green-400' : dte >= 5 ? 'text-yellow-400' : 'text-red-400';
+          const deltaLabel = delta >= 0.3 && delta <= 0.5 ? 'MID' : delta > 0.5 ? 'HIGH' : 'LOW';
+          const deltaColor = delta >= 0.3 && delta <= 0.7 ? 'text-green-400' : 'text-yellow-400';
+          const ivLabel = iv > 60 ? 'EXTREME' : iv > 40 ? 'ELEVATED' : iv > 20 ? 'NORMAL' : 'LOW';
+          const ivColor = iv > 60 ? 'text-red-400' : iv > 40 ? 'text-yellow-400' : 'text-green-400';
+          return (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 flex-wrap text-[10px] font-mono">
+                <span className="text-slate-400">{'\u03B4'}{(trigger.greekDelta ?? 0).toFixed(2)}</span>
                 <span className="text-slate-600">|</span>
-                <span className="text-[9px] font-mono text-emerald-400">
-                  R:R {trigger.optionRR.toFixed(1)}
-                </span>
-              </>
-            )}
-            {trigger.greekThetaImpaired && (
-              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                {'\u03B8'}-IMPAIRED
-              </span>
-            )}
-          </div>
-        )}
+                <span className="text-slate-400">{'\u03B3'}{(trigger.greekGamma ?? 0).toFixed(4)}</span>
+                <span className="text-slate-600">|</span>
+                <span className={`${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(trigger.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">DTE {dte}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-semibold">
+                <span className={thetaColor}>{'\u03B8'} {thetaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={deltaColor}>{'\u03B4'} {deltaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={ivColor}>IV {ivLabel}</span>
+                {trigger.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
+              </div>
+            </div>
+          );
+        })()}
 
-        {/* -- METRICS ROW -- */}
-        <div className="mt-3 flex gap-1.5 sm:gap-2 overflow-x-auto pb-1 custom-scrollbar -mx-1 px-1 min-w-0">
-          <MetricsChip label="ATR" value={fmt(plan.atr)} />
-          <MetricsChip label="Vol" value={`${surgeVal}x`} bold accent="bg-cyan-500/15 text-cyan-300" />
-          <MetricsChip label="OIChg%" value={`${oiChange}%`} accent={oiAccent} />
-          <MetricsChip label="Score" value={`${confidence}`} accent={
-            confidence >= 70 ? 'bg-cyan-500/20 text-cyan-300 font-bold' :
-            confidence >= 55 ? 'bg-yellow-500/15 text-yellow-300' :
-            'bg-slate-500/15 text-slate-300'
-          } />
-        </div>
+        {/* ── TRADE TYPE INSIGHT ── */}
+        {(() => {
+          const tradeType = classifyMcxBbTradeType(trigger);
+          return (
+            <div className="mt-2 flex items-start gap-2 text-[10px]">
+              <span className={`font-bold ${tradeType.color} whitespace-nowrap`}>{tradeType.label}</span>
+              <span className="text-slate-400">{tradeType.narrative}</span>
+            </div>
+          );
+        })()}
 
         {/* -- INSUFFICIENT FUNDS LABEL (clickable -> Add Funds) -- */}
         {sizing.insufficientFunds && !sizing.disabled && (
@@ -955,7 +967,7 @@ export const McxBbt1TabContent: React.FC<McxBbt1TabContentProps> = ({ autoRefres
     const interval = setInterval(fetchCapital, 30000);
     const onWalletUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.strategy === 'MCX_BBT1') fetchCapital();
+      if (detail?.strategy === 'MCX_BBT1' || detail?.strategy === 'MCX-BBT+1') fetchCapital();
     };
     window.addEventListener('wallet-update', onWalletUpdate);
     return () => { clearInterval(interval); window.removeEventListener('wallet-update', onWalletUpdate); };
@@ -1171,7 +1183,8 @@ export const McxBbt1TabContent: React.FC<McxBbt1TabContentProps> = ({ autoRefres
       const ltpData = await marketDataApi.getLtp(ltpScripCode);
       if (ltpData?.ltp != null && ltpData.ltp > 0) {
         const currentLtp = ltpData.ltp;
-        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4);
+        const isLongTrade = hasRealOption || sig.direction === 'BULLISH';
+        const staleCheck = checkStalePriceAdjustment(currentLtp, tradeSl, tradeT1, tradeT2, tradeT3, tradeT4, isLongTrade);
 
         if (staleCheck) {
           setStalePriceCheck({

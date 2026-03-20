@@ -21,7 +21,7 @@ import java.util.*;
  * Data Sources:
  * - Redis: Real-time positions (virtual:positions:*) from TradeExecutionModule VirtualEngineService
  * - Redis: Virtual orders (virtual:orders:*) for trade counts
- * - MongoDB: Trade history (backtest_trades collection) for historical stats
+ * - MongoDB: Trade history (trade_outcomes collection) for historical stats
  */
 @Service
 @Slf4j
@@ -84,7 +84,7 @@ public class WalletService {
                     .mapToDouble(PositionDTO::getUnrealizedPnl)
                     .sum();
 
-            // Get trade stats from MongoDB (backtest_trades collection)
+            // Get trade stats from MongoDB (trade_outcomes collection)
             TradeStats stats = getTradeStatsFromMongo();
 
             double currentCapital = INITIAL_CAPITAL + stats.totalPnl;
@@ -374,12 +374,12 @@ public class WalletService {
     }
 
     /**
-     * Get trade statistics from MongoDB (backtest_trades) as single source of truth,
+     * Get trade statistics from MongoDB (trade_outcomes) as single source of truth,
      * supplemented by Redis closed positions for realized P&L.
      *
-     * FIX BUG #1: Use MongoDB backtest_trades as the sole source for win/loss/winRate
+     * FIX BUG #1: Use MongoDB trade_outcomes as the sole source for win/loss/winRate
      *   instead of mixing Redis orders with MongoDB trades.
-     * FIX BUG #2: Count completed round-trip trades from backtest_trades (each document
+     * FIX BUG #2: Count completed round-trip trades from trade_outcomes (each document
      *   is one round-trip trade), not individual order legs from virtual:orders:*.
      */
     private TradeStats getTradeStatsFromMongo() {
@@ -418,12 +418,12 @@ public class WalletService {
             log.warn("Error getting P&L from Redis positions: {}", e.getMessage());
         }
 
-        // Use MongoDB backtest_trades as single source of truth for trade counts and win rate
+        // Use MongoDB trade_outcomes as single source of truth for trade counts and win rate
         try {
-            // Each document in backtest_trades represents one completed round-trip trade
-            long mongoTrades = mongoTemplate.getCollection("backtest_trades").countDocuments();
+            // Each document in trade_outcomes represents one completed round-trip trade
+            long mongoTrades = mongoTemplate.getCollection("trade_outcomes").countDocuments();
 
-            long mongoWins = mongoTemplate.getCollection("backtest_trades")
+            long mongoWins = mongoTemplate.getCollection("trade_outcomes")
                     .countDocuments(new Document("$or", List.of(
                         new Document("isWin", true),
                         new Document("pnl", new Document("$gt", 0))
@@ -436,7 +436,7 @@ public class WalletService {
 
             // Sum total P&L from MongoDB
             double mongoPnl = 0;
-            for (Document doc : mongoTemplate.getCollection("backtest_trades").find()) {
+            for (Document doc : mongoTemplate.getCollection("trade_outcomes").find()) {
                 Double pnl = doc.getDouble("pnl");
                 if (pnl != null) {
                     mongoPnl += pnl;
@@ -505,10 +505,11 @@ public class WalletService {
             double dayPnl = 0;
 
             // 1. Get realized P&L from trades closed today (MongoDB)
+            // trade_outcomes stores exitTime as ISODate — must compare with Date, not epoch millis
             Document closedTodayQuery = new Document("exitTime",
-                new Document("$gte", startOfDayMs));
+                new Document("$gte", new java.util.Date(startOfDayMs)));
 
-            for (Document doc : mongoTemplate.getCollection("backtest_trades").find(closedTodayQuery)) {
+            for (Document doc : mongoTemplate.getCollection("trade_outcomes").find(closedTodayQuery)) {
                 Double pnl = doc.getDouble("pnl");
                 if (pnl != null) {
                     dayPnl += pnl;

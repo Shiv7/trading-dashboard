@@ -86,6 +86,7 @@ export interface ExitEvent {
   price: number;
   timestamp: number;   // epoch ms
   source: string;      // "T1-OP", "T2-EQ", etc.
+  pnl?: number;        // net realized PnL for this exit tranche
 }
 
 // Family Score types

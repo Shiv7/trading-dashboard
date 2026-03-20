@@ -53,9 +53,9 @@ export function computeAnalytics(trades: StrategyWalletTrade[]) {
     if (dd > maxDD) maxDD = dd
   }
 
-  // By direction
-  const bullish = closed.filter(t => t.direction === 'BULLISH' || t.side === 'LONG')
-  const bearish = closed.filter(t => t.direction === 'BEARISH' || t.side === 'SHORT')
+  // By direction (use direction field; only fall back to side when direction is missing)
+  const bullish = closed.filter(t => t.direction ? t.direction === 'BULLISH' : t.side === 'LONG')
+  const bearish = closed.filter(t => t.direction ? t.direction === 'BEARISH' : t.side === 'SHORT')
   const byDirection = {
     bullish: { count: bullish.length, pnl: bullish.reduce((s, t) => s + t.pnl, 0), winRate: bullish.length > 0 ? (bullish.filter(t => t.pnl > 0).length / bullish.length) * 100 : 0 },
     bearish: { count: bearish.length, pnl: bearish.reduce((s, t) => s + t.pnl, 0), winRate: bearish.length > 0 ? (bearish.filter(t => t.pnl > 0).length / bearish.length) * 100 : 0 },

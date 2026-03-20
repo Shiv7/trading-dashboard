@@ -333,6 +333,59 @@ public class FUDKIIConsumer implements OptionSwapAware {
         data.put("blockTradeDetected", root.path("blockTradeDetected").asBoolean(false));
         if (root.has("blockTradeVol")) data.put("blockTradeVol", root.path("blockTradeVol").asLong(0));
         if (root.has("blockTradePct")) data.put("blockTradePct", root.path("blockTradePct").asDouble(0));
+        if (root.has("blockTradeFlowLabel")) data.put("blockTradeFlowLabel", root.path("blockTradeFlowLabel").asText("NONE"));
+
+        // KII quality adjustment fields (from MarketContextService in StreamingCandle)
+        if (root.has("effectiveKii")) data.put("effectiveKii", root.path("effectiveKii").asDouble(0));
+        if (root.has("rawKii")) data.put("rawKii", root.path("rawKii").asDouble(0));
+        if (root.has("gapFactor")) data.put("gapFactor", root.path("gapFactor").asDouble(1.0));
+        if (root.has("expiryFactor")) data.put("expiryFactor", root.path("expiryFactor").asDouble(1.0));
+        if (root.has("gapPct")) data.put("gapPct", root.path("gapPct").asDouble(0));
+        if (root.has("excessGapPct")) data.put("excessGapPct", root.path("excessGapPct").asDouble(0));
+        if (root.has("niftyGapPct")) data.put("niftyGapPct", root.path("niftyGapPct").asDouble(0));
+        if (root.has("alignmentScore")) data.put("alignmentScore", root.path("alignmentScore").asDouble(0));
+        if (root.has("kiiLabel")) data.put("kiiLabel", root.path("kiiLabel").asText(""));
+        if (root.has("volumeLabel")) data.put("volumeLabel", root.path("volumeLabel").asText(""));
+        if (root.has("oiChangeLabel")) data.put("oiChangeLabel", root.path("oiChangeLabel").asText(""));
+        if (root.has("oiBuildupLabel")) data.put("oiBuildupLabel", root.path("oiBuildupLabel").asText(""));
+        if (root.has("gapWarning")) data.put("gapWarning", root.path("gapWarning").asText(""));
+        if (root.has("expiryWarning")) data.put("expiryWarning", root.path("expiryWarning").asText(""));
+        if (root.has("vixContext")) data.put("vixContext", root.path("vixContext").asText(""));
+        if (root.has("indiaVix")) data.put("indiaVix", root.path("indiaVix").asDouble(0));
+        if (root.has("vixRegime")) data.put("vixRegime", root.path("vixRegime").asText(""));
+        if (root.has("vixAmplifier")) data.put("vixAmplifier", root.path("vixAmplifier").asDouble(1.0));
+        if (root.has("vixCoupling")) data.put("vixCoupling", root.path("vixCoupling").asDouble(0.8));
+        if (root.has("giftNiftyOvernightChangePct")) data.put("giftNiftyOvernightChangePct", root.path("giftNiftyOvernightChangePct").asDouble(0));
+
+        // Greek enrichment from OptionDataEnricher (Black-Scholes computed)
+        data.put("greekEnriched", root.path("greekEnriched").asBoolean(false));
+        if (root.has("greekDelta")) data.put("greekDelta", root.path("greekDelta").asDouble(0));
+        if (root.has("greekGamma")) data.put("greekGamma", root.path("greekGamma").asDouble(0));
+        if (root.has("greekTheta")) data.put("greekTheta", root.path("greekTheta").asDouble(0));
+        if (root.has("greekVega")) data.put("greekVega", root.path("greekVega").asDouble(0));
+        if (root.has("greekIV")) data.put("greekIV", root.path("greekIV").asDouble(0));
+        if (root.has("greekDte")) data.put("greekDte", root.path("greekDte").asInt(0));
+        if (root.has("greekMoneynessType")) data.put("greekMoneynessType", root.path("greekMoneynessType").asText(""));
+        if (root.has("greekThetaImpaired")) data.put("greekThetaImpaired", root.path("greekThetaImpaired").asBoolean(false));
+        if (root.has("greekSlMethod")) data.put("greekSlMethod", root.path("greekSlMethod").asText(""));
+        if (root.has("greekGammaBoost")) data.put("greekGammaBoost", root.path("greekGammaBoost").asDouble(0));
+
+        // Cross-instrumental option targets (from OptionDataEnricher)
+        if (root.has("optionSL")) data.put("optionSL", root.path("optionSL").asDouble(0));
+        if (root.has("optionT1")) data.put("optionT1", root.path("optionT1").asDouble(0));
+        if (root.has("optionT2")) data.put("optionT2", root.path("optionT2").asDouble(0));
+        if (root.has("optionT3")) data.put("optionT3", root.path("optionT3").asDouble(0));
+        if (root.has("optionT4")) data.put("optionT4", root.path("optionT4").asDouble(0));
+        if (root.has("optionRR")) data.put("optionRR", root.path("optionRR").asDouble(0));
+        if (root.has("optionRRpassed")) data.put("optionRRpassed", root.path("optionRRpassed").asBoolean(true));
+        if (root.has("optionLotAllocation")) data.put("optionLotAllocation", root.path("optionLotAllocation").asText("40,30,20,10"));
+
+        // Cross-instrumental futures targets (for MCX/commodity)
+        if (root.has("futuresSL")) data.put("futuresSL", root.path("futuresSL").asDouble(0));
+        if (root.has("futuresT1")) data.put("futuresT1", root.path("futuresT1").asDouble(0));
+        if (root.has("futuresT2")) data.put("futuresT2", root.path("futuresT2").asDouble(0));
+        if (root.has("futuresT3")) data.put("futuresT3", root.path("futuresT3").asDouble(0));
+        if (root.has("futuresT4")) data.put("futuresT4", root.path("futuresT4").asDouble(0));
 
         // Option enrichment fields (real LTP, strike, lot size from OptionDataEnricher)
         data.put("optionAvailable", root.path("optionAvailable").asBoolean(false));

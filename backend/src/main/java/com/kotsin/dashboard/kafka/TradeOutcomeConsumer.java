@@ -186,17 +186,15 @@ public class TradeOutcomeConsumer {
             rMultiple = -Math.abs(rMultiple);
         }
 
-        // Derive strategy from signalSource, then strategy, then signalType
+        // Derive strategy using StrategyNameResolver (handles MCX_BB, MCX_BBT1, PIVOT etc.)
         String signalSource = root.path("signalSource").asText("");
         String strategyField = root.path("strategy").asText("");
         String signalType = root.path("signalType").asText("");
-        String strategy = !signalSource.isEmpty() ? signalSource
+        String rawStrategy = !signalSource.isEmpty() ? signalSource
                         : !strategyField.isEmpty() ? strategyField
                         : signalType;
-        // Strip side suffix (e.g. FUDKII_LONG → FUDKII)
-        if (strategy.contains("_")) {
-            strategy = strategy.substring(0, strategy.indexOf("_"));
-        }
+        String strategy = com.kotsin.dashboard.service.StrategyNameResolver.normalize(rawStrategy);
+        strategy = com.kotsin.dashboard.service.StrategyNameResolver.displayName(strategy);
 
         return TradeDTO.builder()
                 .tradeId(root.path("tradeId").asText(root.path("signalId").asText()))
@@ -270,15 +268,12 @@ public class TradeOutcomeConsumer {
      */
     private void persistTradeOutcome(JsonNode root, TradeDTO trade) {
         try {
-            // Use explicit signalSource if available, else derive from signalType (e.g. FUDKII_LONG → FUDKII)
+            // Derive strategy using StrategyNameResolver (handles MCX_BB, MCX_BBT1, PIVOT etc.)
             String signalType = root.path("signalType").asText("");
-            String signalSource = root.path("signalSource").asText("");
-            if (signalSource.isEmpty()) {
-                signalSource = signalType;
-                if (signalType.contains("_")) {
-                    signalSource = signalType.substring(0, signalType.indexOf("_"));
-                }
-            }
+            String rawSource = root.path("signalSource").asText("");
+            if (rawSource.isEmpty()) rawSource = signalType;
+            String signalSource = com.kotsin.dashboard.service.StrategyNameResolver.normalize(rawSource);
+            signalSource = com.kotsin.dashboard.service.StrategyNameResolver.displayName(signalSource);
 
             Document doc = new Document()
                     .append("signalId", trade.getSignalId())
@@ -364,9 +359,18 @@ public class TradeOutcomeConsumer {
                 return LocalDateTime.parse(node.asText());
             } else if (node.isNumber()) {
                 return LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli(node.asLong()), 
+                    Instant.ofEpochMilli(node.asLong()),
                     ZoneId.of("Asia/Kolkata")
                 );
+            } else if (node.isArray() && node.size() >= 5) {
+                // Jackson default serialization of LocalDateTime: [year, month, day, hour, minute, ...]
+                int year = node.get(0).asInt();
+                int month = node.get(1).asInt();
+                int day = node.get(2).asInt();
+                int hour = node.get(3).asInt();
+                int minute = node.get(4).asInt();
+                int second = node.size() > 5 ? node.get(5).asInt() : 0;
+                return LocalDateTime.of(year, month, day, hour, minute, second);
             }
         } catch (Exception e) {
             // Ignore parse errors
