@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target, Briefcase, Plus, X, ChevronDown } from 'lucide-react'
 import { strategyWalletsApi, walletApi } from '../services/api'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
@@ -6,11 +6,7 @@ import type { Position } from '../types'
 import PositionCard from '../components/Wallet/PositionCard'
 import FundTopUpModal from '../components/Wallet/FundTopUpModal'
 import { STRATEGY_COLORS } from '../utils/strategyColors'
-import type { StrategyFilter } from '../utils/strategyColors'
-
 // ─── Types ───────────────────────────────────────────────
-type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH'
-type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 type SortField = 'exitTime' | 'pnl' | 'pnlPercent' | 'companyName' | 'strategy'
 
 // ─── Section Filter Types ────────────────────────────────
@@ -19,6 +15,7 @@ type SectionFilterTag =
   | 'OPTIONS' | 'FUT' | 'EQUITY'
   | 'PROFIT' | 'LOSS'
   | 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'MICROALPHA' | 'MERE' | 'QUANT'
+  | 'MCX_BB_15' | 'MCX_BB_30' | 'NSE_BB_30'
   | 'MOST_RECENT'
 
 const SECTION_FILTER_GROUPS: { label: string; tags: { key: SectionFilterTag; label: string; color: string }[] }[] = [
@@ -55,6 +52,9 @@ const SECTION_FILTER_GROUPS: { label: string; tags: { key: SectionFilterTag; lab
       { key: 'MICROALPHA', label: 'MICRO', color: 'bg-lime-500/15 text-lime-400 border-lime-500/30' },
       { key: 'MERE', label: 'MERE', color: 'bg-violet-500/15 text-violet-400 border-violet-500/30' },
       { key: 'QUANT', label: 'QUANT', color: 'bg-rose-500/15 text-rose-400 border-rose-500/30' },
+      { key: 'MCX_BB_15', label: 'MCX-BB-15', color: 'bg-lime-500/15 text-lime-400 border-lime-500/30' },
+      { key: 'MCX_BB_30', label: 'MCX-BB-30', color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+      { key: 'NSE_BB_30', label: 'NSE-BB-30', color: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
     ],
   },
   {
@@ -106,6 +106,9 @@ function getStrategyTag(strategy?: string): SectionFilterTag | null {
   if (s.includes('MICRO')) return 'MICROALPHA'
   if (s.includes('MERE')) return 'MERE'
   if (s.includes('QUANT')) return 'QUANT'
+  if (s.includes('MCX_BB_15') || s.includes('MCX-BB-15')) return 'MCX_BB_15'
+  if (s.includes('MCX_BB_30') || s.includes('MCX-BB-30')) return 'MCX_BB_30'
+  if (s.includes('NSE_BB_30') || s.includes('NSE-BB-30')) return 'NSE_BB_30'
   return null
 }
 
@@ -121,7 +124,7 @@ function matchesSectionFilters(
   const exchangeTags: SectionFilterTag[] = ['NSE', 'MCX', 'CURRENCY']
   const instrumentTags: SectionFilterTag[] = ['OPTIONS', 'FUT', 'EQUITY']
   const pnlTags: SectionFilterTag[] = ['PROFIT', 'LOSS']
-  const strategyTags: SectionFilterTag[] = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT']
+  const strategyTags: SectionFilterTag[] = ['FUKAA', 'FUDKOI', 'FUDKII', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30']
 
   const activeExchange = exchangeTags.filter(t => active.has(t))
   const activeInstrument = instrumentTags.filter(t => active.has(t))
@@ -250,108 +253,6 @@ function formatTime(iso: string | null): string {
            d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })
   } catch { return '-' }
 }
-
-// ─── Filter Dropdown ─────────────────────────────────────
-const FilterDropdown: React.FC<{
-  direction: DirectionFilter
-  exchange: ExchangeFilter
-  strategy: StrategyFilter
-  onDirectionChange: (d: DirectionFilter) => void
-  onExchangeChange: (e: ExchangeFilter) => void
-  onStrategyChange: (s: StrategyFilter) => void
-  onClose: () => void
-  onReset: () => void
-}> = ({ direction, exchange, strategy, onDirectionChange, onExchangeChange, onStrategyChange, onClose, onReset }) => (
-  <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-3 sm:p-4 min-w-[240px] sm:min-w-[280px] animate-slideDown mobile-dropdown-full">
-    {/* Direction */}
-    <div className="mb-4">
-      <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
-      <div className="flex gap-2">
-        {(['ALL', 'BULLISH', 'BEARISH'] as DirectionFilter[]).map(d => (
-          <button
-            key={d}
-            onClick={() => onDirectionChange(d)}
-            className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              direction === d
-                ? d === 'BULLISH' ? 'bg-green-500/20 text-green-400 border border-green-500/40'
-                  : d === 'BEARISH' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                  : 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
-                : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {d === 'ALL' ? 'All' : d === 'BULLISH' ? 'Bullish' : 'Bearish'}
-          </button>
-        ))}
-      </div>
-    </div>
-
-    {/* Exchange */}
-    <div className="mb-4">
-      <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Instrument</div>
-      <div className="flex gap-2">
-        {([
-          { key: 'ALL' as ExchangeFilter, label: 'All' },
-          { key: 'N' as ExchangeFilter, label: 'NSE' },
-          { key: 'M' as ExchangeFilter, label: 'MCX' },
-          { key: 'C' as ExchangeFilter, label: 'Currency' },
-        ]).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => onExchangeChange(key)}
-            className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              exchange === key
-                ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
-                : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
-
-    {/* Strategy */}
-    <div className="mb-4">
-      <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Strategy</div>
-      <div className="flex gap-2 flex-wrap">
-        {([
-          { key: 'ALL' as StrategyFilter, label: 'All' },
-          { key: 'FUDKII' as StrategyFilter, label: 'FUDKII' },
-          { key: 'FUKAA' as StrategyFilter, label: 'FUKAA' },
-          { key: 'FUDKOI' as StrategyFilter, label: 'FUDKOI' },
-          { key: 'PIVOT' as StrategyFilter, label: 'PIVOT' },
-          { key: 'MICROALPHA' as StrategyFilter, label: 'MICRO' },
-          { key: 'MERE' as StrategyFilter, label: 'MERE' },
-          { key: 'QUANT' as StrategyFilter, label: 'QUANT' },
-        ]).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => onStrategyChange(key)}
-            className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              strategy === key
-                ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
-                : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    </div>
-
-    <button
-      onClick={onClose}
-      className="w-full h-10 rounded-lg bg-[#3B82F6] text-white font-semibold text-sm hover:bg-blue-600 active:bg-blue-700 transition-colors"
-    >
-      Apply
-    </button>
-    <div className="text-center mt-2">
-      <button onClick={onReset} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
-        Reset Filters
-      </button>
-    </div>
-  </div>
-)
 
 // ─── Sort Dropdown ───────────────────────────────────────
 const SortDropdown: React.FC<{
@@ -702,10 +603,7 @@ export default function StrategyWalletsPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [selectedTrade, setSelectedTrade] = useState<StrategyWalletTrade | null>(null)
 
-  // Filters
-  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL')
-  const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL')
-  const [strategyFilter, setStrategyFilter] = useState<StrategyFilter>('ALL')
+  // Sort
   const [sortField, setSortField] = useState<SortField>('exitTime')
 
   // Section-level filters (independent per section)
@@ -720,21 +618,14 @@ export default function StrategyWalletsPage() {
   const [unlockInput, setUnlockInput] = useState('')
 
   // Dropdown toggles
-  const [showFilter, setShowFilter] = useState(false)
   const [showSort, setShowSort] = useState(false)
-  const filterRef = useRef<HTMLDivElement>(null)
   const sortRef = useRef<HTMLDivElement>(null)
-
-  const hasFilters = directionFilter !== 'ALL' || exchangeFilter !== 'ALL' || strategyFilter !== 'ALL'
 
   const loadData = useCallback(async () => {
     try {
       const [s, t, w] = await Promise.all([
         strategyWalletsApi.getSummaries(),
         strategyWalletsApi.getWeeklyTrades({
-          strategy: strategyFilter !== 'ALL' ? strategyFilter : undefined,
-          direction: directionFilter !== 'ALL' ? directionFilter : undefined,
-          exchange: exchangeFilter !== 'ALL' ? exchangeFilter : undefined,
           sortBy: sortField,
         }),
         walletApi.getWallet(),
@@ -766,7 +657,7 @@ export default function StrategyWalletsPage() {
     } finally {
       setLoading(false)
     }
-  }, [directionFilter, exchangeFilter, strategyFilter, sortField])
+  }, [sortField])
 
   useEffect(() => {
     setLoading(true)
@@ -781,18 +672,61 @@ export default function StrategyWalletsPage() {
   // Close dropdowns on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilter(false)
       if (sortRef.current && !sortRef.current.contains(e.target as Node)) setShowSort(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  const resetFilters = () => {
-    setDirectionFilter('ALL')
-    setExchangeFilter('ALL')
-    setStrategyFilter('ALL')
-  }
+  // ── Compute filtered weekly trades ──
+  const filteredWeekly = useMemo(() => {
+    const activeSet = weeklyFilter.active
+    if (activeSet.size === 0) return trades
+
+    const filtered = trades.filter(t => {
+      // Strategy filter — direct, no abstraction
+      // Strategy filter: match against active tags using normalized strategy name
+      const knownStrategyTags: SectionFilterTag[] = summaries.map(s => getStrategyTag(s.strategy)).filter(Boolean) as SectionFilterTag[]
+      const activeStrategies = knownStrategyTags.filter(tag => activeSet.has(tag))
+      if (activeStrategies.length > 0) {
+        const tag = getStrategyTag(t.strategy)
+        if (!tag || !activeStrategies.includes(tag)) return false
+      }
+      // Exchange filter
+      const exchangeTags: SectionFilterTag[] = ['NSE', 'MCX', 'CURRENCY']
+      const activeExchange = exchangeTags.filter(tag => activeSet.has(tag))
+      if (activeExchange.length > 0) {
+        const tag = getExchangeTag(t.exchange)
+        if (!tag || !activeExchange.includes(tag)) return false
+      }
+      // Instrument filter
+      const instrumentTags: SectionFilterTag[] = ['OPTIONS', 'FUT', 'EQUITY']
+      const activeInstrument = instrumentTags.filter(tag => activeSet.has(tag))
+      if (activeInstrument.length > 0) {
+        const tag = getInstrumentTag(t.instrumentType ?? undefined)
+        if (!tag || !activeInstrument.includes(tag)) return false
+      }
+      // P&L filter
+      const activePnl = (['PROFIT', 'LOSS'] as SectionFilterTag[]).filter(tag => activeSet.has(tag))
+      if (activePnl.length > 0) {
+        const isProfit = (t.pnl ?? 0) >= 0
+        if (activePnl.includes('PROFIT') && !activePnl.includes('LOSS') && !isProfit) return false
+        if (activePnl.includes('LOSS') && !activePnl.includes('PROFIT') && isProfit) return false
+      }
+      return true
+    })
+
+    // Sort by most recent if that tag is active
+    if (activeSet.has('MOST_RECENT')) {
+      filtered.sort((a, b) => {
+        const ta = a.entryTime ? new Date(a.entryTime).getTime() : 0
+        const tb = b.entryTime ? new Date(b.entryTime).getTime() : 0
+        return tb - ta
+      })
+    }
+
+    return filtered
+  }, [trades, weeklyFilter.active])
 
   return (
     <div className="min-h-screen mobile-page-bottom">
@@ -810,33 +744,10 @@ export default function StrategyWalletsPage() {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-            {/* Filter */}
-            <div className="relative" ref={filterRef}>
-              <button
-                onClick={() => { setShowFilter(!showFilter); setShowSort(false) }}
-                className={`relative p-1.5 sm:p-2 rounded-lg transition-colors ${showFilter ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
-              >
-                <Filter className="w-4 h-4" />
-                {hasFilters && <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400" />}
-              </button>
-              {showFilter && (
-                <FilterDropdown
-                  direction={directionFilter}
-                  exchange={exchangeFilter}
-                  strategy={strategyFilter}
-                  onDirectionChange={setDirectionFilter}
-                  onExchangeChange={setExchangeFilter}
-                  onStrategyChange={setStrategyFilter}
-                  onClose={() => setShowFilter(false)}
-                  onReset={resetFilters}
-                />
-              )}
-            </div>
-
             {/* Sort */}
             <div className="relative" ref={sortRef}>
               <button
-                onClick={() => { setShowSort(!showSort); setShowFilter(false) }}
+                onClick={() => setShowSort(!showSort)}
                 className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-[10px] sm:text-xs font-medium transition-colors ${showSort ? 'bg-orange-500/20 text-orange-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'}`}
               >
                 <ArrowUpDown className="w-3.5 h-3.5" />
@@ -877,9 +788,9 @@ export default function StrategyWalletsPage() {
         {/* ── Wallet Cards (horizontal scroll) ── */}
         <div className="overflow-x-auto pb-2 -mx-1.5 sm:-mx-4 px-1.5 sm:px-4 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
           <div className="flex gap-2 sm:gap-4" style={{ minWidth: 'max-content' }}>
-          {(summaries.length > 0 ? summaries : Array.from({ length: 7 }, (_, i) => ({
-            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT'][i],
-            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT'][i],
+          {(summaries.length > 0 ? summaries : Array.from({ length: 10 }, (_, i) => ({
+            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30'][i],
+            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30'][i],
             initialCapital: 1000000, currentCapital: 1000000, totalPnl: 0, totalPnlPercent: 0,
             totalTrades: 0, wins: 0, losses: 0, winRate: 0, mcxUsedMargin: 0,
           }))).map(s => {
@@ -1144,22 +1055,6 @@ export default function StrategyWalletsPage() {
         })()}
 
         {/* ── Weekly Trades Table ── */}
-        {(() => {
-          let filteredWeekly = trades.filter(t => matchesSectionFilters(
-            weeklyFilter.active,
-            t.exchange,
-            t.instrumentType ?? undefined,
-            t.strategy,
-            t.pnl,
-          ))
-          if (weeklyFilter.active.has('MOST_RECENT')) {
-            filteredWeekly = [...filteredWeekly].sort((a, b) => {
-              const ta = a.entryTime ? new Date(a.entryTime).getTime() : 0
-              const tb = b.entryTime ? new Date(b.entryTime).getTime() : 0
-              return tb - ta
-            })
-          }
-          return (
         <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1182,8 +1077,8 @@ export default function StrategyWalletsPage() {
                 <Target className="w-6 h-6 text-slate-600" />
               </div>
               <p className="text-sm text-slate-400 mb-1">{trades.length === 0 ? 'No trades this week' : 'No trades match filters'}</p>
-              {(hasFilters || weeklyFilter.active.size > 0) && (
-                <button onClick={() => { resetFilters(); weeklyFilter.clear() }} className="text-xs text-blue-400 hover:text-blue-300 mt-2">
+              {weeklyFilter.active.size > 0 && (
+                <button onClick={() => weeklyFilter.clear()} className="text-xs text-blue-400 hover:text-blue-300 mt-2">
                   Clear filters
                 </button>
               )}
@@ -1196,7 +1091,7 @@ export default function StrategyWalletsPage() {
                   const positive = t.pnl >= 0
                   const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
                   return (
-                    <div key={t.tradeId || i} className="px-3 py-3 space-y-2 cursor-pointer hover:bg-slate-700/20 transition-colors" onClick={() => setSelectedTrade(t)}>
+                    <div key={`${t.tradeId || 'trade'}-${i}`} className="px-3 py-3 space-y-2 cursor-pointer hover:bg-slate-700/20 transition-colors" onClick={() => setSelectedTrade(t)}>
                       {/* Row 1: Security name + P&L */}
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -1213,7 +1108,7 @@ export default function StrategyWalletsPage() {
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
                               {t.strategy}
                             </span>
-                            {t.variant && (
+                            {t.variant && t.variant !== t.strategy && (
                               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 text-violet-400 border border-violet-500/30">
                                 {t.variant.replace('MERE_', '').replace('_', ' ')}
                               </span>
@@ -1284,7 +1179,7 @@ export default function StrategyWalletsPage() {
                       const positive = t.pnl >= 0
                       const sc = STRATEGY_COLORS[t.strategy] || STRATEGY_COLORS['FUDKII']
                       return (
-                        <tr key={t.tradeId || i} className="hover:bg-slate-700/20 transition-colors cursor-pointer" onClick={() => setSelectedTrade(t)}>
+                        <tr key={`${t.tradeId || 'trade'}-${i}`} className="hover:bg-slate-700/20 transition-colors cursor-pointer" onClick={() => setSelectedTrade(t)}>
                           <td className="px-4 py-3">
                             <div className="font-medium text-white truncate max-w-[240px]">
                               {getTradeDisplayName(t)}
@@ -1338,7 +1233,7 @@ export default function StrategyWalletsPage() {
                               <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc.bg} ${sc.text} border ${sc.border}`}>
                                 {t.strategy}
                               </span>
-                              {t.variant && (
+                              {t.variant && t.variant !== t.strategy && (
                                 <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 text-violet-400 border border-violet-500/30">
                                   {t.variant.replace('MERE_', '').replace('_', ' ')}
                                 </span>
@@ -1357,8 +1252,6 @@ export default function StrategyWalletsPage() {
             </>
           )}
         </div>
-          )
-        })()}
       </div>
 
       {/* Trade Detail Drawer */}

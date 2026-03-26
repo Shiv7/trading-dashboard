@@ -444,7 +444,7 @@ public class PerformanceAnalyticsService {
                 .build();
     }
 
-    private static final List<String> ALL_STRATEGIES = StrategyNameResolver.ALL_STRATEGY_KEYS;
+    private static final List<String> ALL_STRATEGIES = StrategyNameResolver.ACTIVE_STRATEGY_KEYS;
 
     private Map<String, SourcePerformance> calculateBySource(List<TradeDTO> trades) {
         Map<String, List<TradeDTO>> bySource = trades.stream()

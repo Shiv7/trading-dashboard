@@ -3,7 +3,7 @@ import {
   RefreshCw, Filter, Activity, Eye, Target, BarChart2,
   Zap, CheckCircle2, Volume2, TrendingUp
 } from 'lucide-react';
-import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent, McxBbTabContent, McxBbt1TabContent } from '../components/Strategy';
+import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent, McxBb30TabContent, McxBb15TabContent, NseBb30TabContent } from '../components/Strategy';
 import {
   InstrumentStateSnapshot,
   StrategyOpportunity,
@@ -12,7 +12,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere' | 'quant' | 'mcxbb' | 'mcxbbt1';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere' | 'quant' | 'mcxbb15' | 'mcxbb30' | 'nsebb30';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -144,8 +144,9 @@ export const StrategyTransparencyPage: React.FC = () => {
               { id: 'quant' as TabType, label: 'QUANT', shortLabel: 'QUANT', icon: BarChart2, accent: 'text-sky-400' },
               { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
               { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
-              { id: 'mcxbb' as TabType, label: 'MCX-BB', shortLabel: 'MCX-BB', icon: TrendingUp, accent: 'text-emerald-400' },
-              { id: 'mcxbbt1' as TabType, label: 'MCX-BBT+1', shortLabel: 'BBT+1', icon: TrendingUp, accent: 'text-cyan-400' },
+              { id: 'mcxbb15' as TabType, label: 'MCX-BB-15', shortLabel: 'BB-15', icon: TrendingUp, accent: 'text-lime-400' },
+              { id: 'mcxbb30' as TabType, label: 'MCX-BB-30', shortLabel: 'BB-30', icon: TrendingUp, accent: 'text-emerald-400' },
+              { id: 'nsebb30' as TabType, label: 'NSE-BB-30', shortLabel: 'NSE-BB', icon: TrendingUp, accent: 'text-sky-400' },
               { id: 'overview' as TabType, label: 'Overview', shortLabel: 'Overview', icon: BarChart2 },
             ].map(tab => (
               <button
@@ -211,12 +212,16 @@ export const StrategyTransparencyPage: React.FC = () => {
           <MereTabContent autoRefresh={autoRefresh} />
         )}
 
-        {activeTab === 'mcxbb' && (
-          <McxBbTabContent autoRefresh={autoRefresh} />
+        {activeTab === 'mcxbb15' && (
+          <McxBb15TabContent autoRefresh={autoRefresh} />
         )}
 
-        {activeTab === 'mcxbbt1' && (
-          <McxBbt1TabContent autoRefresh={autoRefresh} />
+        {activeTab === 'mcxbb30' && (
+          <McxBb30TabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'nsebb30' && (
+          <NseBb30TabContent autoRefresh={autoRefresh} />
         )}
       </div>
     </div>

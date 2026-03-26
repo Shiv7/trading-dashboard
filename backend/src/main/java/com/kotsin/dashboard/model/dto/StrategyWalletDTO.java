@@ -46,6 +46,7 @@ public class StrategyWalletDTO {
         private int dayWinCount;
         private int dayLossCount;
         private int maxOpenPositions;
+        private int openPositionCount;
     }
 
     @Data

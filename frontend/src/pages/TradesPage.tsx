@@ -9,8 +9,9 @@ type StrategyTab = 'ALL' | string
 type ResultFilter = 'ALL' | 'WIN' | 'LOSS'
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
-// Known strategies in display order — new ones discovered from trades are appended dynamically
-const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB', 'MCX-BBT+1']
+// Display order for strategy tabs — strategies not in this list appear at end.
+// Actual strategy names come from backend API (StrategyNameResolver is single source of truth).
+const STRATEGY_DISPLAY_ORDER = ['FUKAA', 'FUDKOI', 'FUDKII', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30']
 
 const fmtTime = (ts: string) => {
   try {
@@ -130,15 +131,17 @@ export default function TradesPage() {
 
   // Dynamic strategy keys: known order first, then any new strategies from trades
   const STRATEGY_KEYS = useMemo(() => {
-    const fromTrades = new Set(trades.map(t => t.strategy).filter(Boolean))
-    const fromSummaries = new Set(summaries.map(s => s.strategy).filter(Boolean))
-    const all = new Set([...fromTrades, ...fromSummaries])
-    const ordered = KNOWN_STRATEGIES.filter(k => all.has(k))
-    for (const k of all) {
-      if (!ordered.includes(k) && k !== 'MANUAL') ordered.push(k)
+    const fromSummaries = summaries.map(s => s.strategy).filter(Boolean)
+    const seen = new Set<string>()
+    const ordered: string[] = []
+    for (const k of STRATEGY_DISPLAY_ORDER) {
+      if (fromSummaries.includes(k) && !seen.has(k)) { ordered.push(k); seen.add(k) }
+    }
+    for (const k of fromSummaries) {
+      if (!seen.has(k) && k !== 'MANUAL') { ordered.push(k); seen.add(k) }
     }
     return ordered
-  }, [trades, summaries])
+  }, [summaries])
 
   // Filter trades — strategy, result, exchange, hour range (all client-side)
   const filteredTrades = useMemo(() => {

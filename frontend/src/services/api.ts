@@ -4,7 +4,8 @@ import type {
   PerformanceMetrics, PatternSignal, PatternSummary, PatternStats,
   PortfolioRiskSummary, StrategyRiskProfile, DrawdownPoint, RiskAlert,
   AlertHistory, AlertStats, AlertSummary,
-  StrategyTradeRequest, StrategyTradeResponse
+  StrategyTradeRequest, StrategyTradeResponse,
+  TradeIntelligenceReport, StrategyTuningReport, SimulationResult, ConfigChange
 } from '../types'
 import type {
   TechnicalIndicatorDTO,
@@ -336,20 +337,56 @@ export const patternsApi = {
 
 // Risk Analytics API
 export const riskApi = {
+  // Existing endpoints
   getPortfolioRisk: () => fetchJson<PortfolioRiskSummary>('/risk'),
   getStrategyRisk: (key: string) => fetchJson<StrategyRiskProfile>(`/risk/strategy/${key}`),
   getDrawdownHistory: (strategy: string, period: string) =>
     fetchJson<DrawdownPoint[]>(`/risk/drawdown/${strategy}?period=${period}`),
   getAlerts: () => fetchJson<RiskAlert[]>('/risk/alerts'),
   tripCircuitBreaker: (strategy: string, reason: string) =>
-    postJson<{ success: boolean; message: string }>(
+    postJson<{ success: boolean; tripped: string[]; failed: string[]; reason: string }>(
       `/risk/circuit-breaker/trip?strategy=${strategy}&reason=${encodeURIComponent(reason)}`, {}),
   resetCircuitBreaker: (strategy: string) =>
-    postJson<{ success: boolean; message: string }>(
+    postJson<{ success: boolean; reset: string[]; failed: string[] }>(
       `/risk/circuit-breaker/reset?strategy=${strategy}`, {}),
   forceCloseAll: (strategy: string) =>
-    postJson<{ strategy: string; closedCount: number }>(
+    postJson<{ success: boolean; strategy: string; closed: number; closedDetails: unknown[]; errors: unknown[] }>(
       `/risk/force-close?strategy=${strategy}`, {}),
+
+  // Trade Intelligence (Tab 2)
+  getTradeIntelligence: (params: { from?: number; to?: number; strategy?: string; exchange?: string }) => {
+    const qs = new URLSearchParams()
+    if (params.from) qs.set('from', String(params.from))
+    if (params.to) qs.set('to', String(params.to))
+    if (params.strategy) qs.set('strategy', params.strategy)
+    if (params.exchange) qs.set('exchange', params.exchange)
+    return fetchJson<TradeIntelligenceReport>(`/risk/trade-intelligence?${qs}`)
+  },
+
+  // Strategy Tuning (Tab 3)
+  getStrategyTuning: (strategy: string, from?: number, to?: number) => {
+    const qs = new URLSearchParams({ strategy })
+    if (from) qs.set('from', String(from))
+    if (to) qs.set('to', String(to))
+    return fetchJson<StrategyTuningReport>(`/risk/strategy-tuning?${qs}`)
+  },
+
+  simulateConfig: (req: { strategy: string; changes: Record<string, string>; from?: number; to?: number }) =>
+    postJson<SimulationResult>('/risk/strategy-tuning/simulate', req),
+
+  // Config Management
+  getCurrentConfig: (service: string) =>
+    fetchJson<Record<string, string>>(`/risk/config/current?service=${service}`),
+
+  applyConfig: (req: { service: string; changes: Record<string, string>; reason: string }) =>
+    postJson<{ success: boolean; changeId: string; pendingRestart: boolean; message: string }>(
+      '/risk/config/apply', req),
+
+  getConfigHistory: (limit = 50) =>
+    fetchJson<ConfigChange[]>(`/risk/config/history?limit=${limit}`),
+
+  rollbackConfig: (changeId: string) =>
+    postJson<{ success: boolean; message: string }>(`/risk/config/rollback/${changeId}`, {}),
 }
 
 // Initial State API - for loading cached data on page refresh

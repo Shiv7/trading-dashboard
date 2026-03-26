@@ -125,6 +125,11 @@ public class MLShadowProxyController {
         return proxyGet(mlRestTemplate, faUrl + "/api/ml/shadow/daily-report");
     }
 
+    @GetMapping("/shadow/analytics")
+    public ResponseEntity<?> shadowAnalytics() {
+        return proxyGet(execRestTemplate, execUrl + "/api/ml/shadow/analytics");
+    }
+
     // ========== Proxy helpers ==========
 
     @SuppressWarnings("unchecked")

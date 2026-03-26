@@ -49,6 +49,7 @@ public class StrategyTradeRequest {
 
     // Option-specific
     private double delta;                // computed delta used for mapping
+    private String deltaFallbackReason;  // null = real BS delta, non-null = reason for 0.5 fallback
     private String optionType;           // CE / PE / null for futures
     private double strike;               // option strike / 0 for futures
     private String optionExpiry;         // option expiry date string (e.g. "2026-03-12")
@@ -82,4 +83,11 @@ public class StrategyTradeRequest {
     private double futuresT2;
     private double futuresT3;
     private double futuresT4;
+
+    // ========== Signal Enrichment Metrics (for post-trade regime analysis) ==========
+    private double atr;
+    private double volumeSurge;
+    private double oiChangePercent;
+    private double blockDealPercent;
+    private double riskReward;
 }

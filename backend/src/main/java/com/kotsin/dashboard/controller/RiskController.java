@@ -5,6 +5,9 @@ import com.kotsin.dashboard.service.RiskAnalyticsService;
 import com.kotsin.dashboard.service.RiskAnalyticsService.*;
 import com.kotsin.dashboard.service.StrategyNameResolver;
 import com.kotsin.dashboard.service.StrategyTradeExecutor;
+import com.kotsin.dashboard.service.TradeIntelligenceService;
+import com.kotsin.dashboard.service.StrategyTuningService;
+import com.kotsin.dashboard.service.ConfigManagementService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +15,9 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.bson.Document;
 
 import java.util.*;
 
@@ -28,7 +34,13 @@ import java.util.*;
 @CrossOrigin(origins = "*")
 public class RiskController {
 
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
     private final RiskAnalyticsService riskService;
+    private final TradeIntelligenceService tradeIntelligenceService;
+    private final StrategyTuningService strategyTuningService;
+    private final ConfigManagementService configManagementService;
     private final RestTemplate executionRestTemplate;
     private final RedisTemplate<String, String> redisTemplate;
     private final StrategyTradeExecutor strategyTradeExecutor;
@@ -39,10 +51,16 @@ public class RiskController {
 
     public RiskController(
             RiskAnalyticsService riskService,
+            TradeIntelligenceService tradeIntelligenceService,
+            StrategyTuningService strategyTuningService,
+            ConfigManagementService configManagementService,
             @Qualifier("executionRestTemplate") RestTemplate executionRestTemplate,
             RedisTemplate<String, String> redisTemplate,
             StrategyTradeExecutor strategyTradeExecutor) {
         this.riskService = riskService;
+        this.tradeIntelligenceService = tradeIntelligenceService;
+        this.strategyTuningService = strategyTuningService;
+        this.configManagementService = configManagementService;
         this.executionRestTemplate = executionRestTemplate;
         this.redisTemplate = redisTemplate;
         this.strategyTradeExecutor = strategyTradeExecutor;
@@ -134,6 +152,7 @@ public class RiskController {
                 try {
                     setCircuitBreaker(key, true, reason);
                     tripped.add(key);
+                    logAuditEvent("CB_TRIP", key, reason, null);
                 } catch (Exception e) {
                     log.error("Failed to trip circuit breaker for {}: {}", key, e.getMessage());
                     failed.add(key);
@@ -172,6 +191,7 @@ public class RiskController {
                 try {
                     setCircuitBreaker(key, false, null);
                     reset.add(key);
+                    logAuditEvent("CB_RESET", key, "Manual reset from dashboard", null);
                 } catch (Exception e) {
                     log.error("Failed to reset circuit breaker for {}: {}", key, e.getMessage());
                     failed.add(key);
@@ -265,6 +285,8 @@ public class RiskController {
             ));
         }
 
+        logAuditEvent("FORCE_CLOSE", normalized, "Manual force-close from dashboard", Map.of("closedCount", closed.size()));
+
         return ResponseEntity.ok(Map.of(
                 "success", errors.isEmpty(),
                 "strategy", normalized,
@@ -275,8 +297,191 @@ public class RiskController {
     }
 
     // ─────────────────────────────────────────────
+    //  Trade Intelligence (Tab 2)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Full trade intelligence report — exit distribution, target funnel,
+     * R-multiple histogram, time heatmap, loss clusters, correlation, etc.
+     */
+    @GetMapping("/trade-intelligence")
+    public ResponseEntity<?> getTradeIntelligence(
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(required = false) String strategy,
+            @RequestParam(required = false) String exchange) {
+        try {
+            return ResponseEntity.ok(tradeIntelligenceService.getFullIntelligence(from, to, strategy, exchange));
+        } catch (Exception e) {
+            log.error("[RISK] Trade intelligence error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  Strategy Tuning (Tab 3)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Strategy tuning report — SL analysis, target analysis,
+     * position sizing, confidence gate with recommendations.
+     */
+    @GetMapping("/strategy-tuning")
+    public ResponseEntity<?> getStrategyTuning(
+            @RequestParam(defaultValue = "ALL") String strategy,
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to) {
+        try {
+            return ResponseEntity.ok(strategyTuningService.getStrategyTuning(strategy, from, to));
+        } catch (Exception e) {
+            log.error("[RISK] Strategy tuning error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Simulate proposed config changes against historical trade data.
+     */
+    @PostMapping("/strategy-tuning/simulate")
+    public ResponseEntity<?> simulateConfigChange(@RequestBody Map<String, Object> req) {
+        try {
+            String strategy = (String) req.getOrDefault("strategy", "ALL");
+            @SuppressWarnings("unchecked")
+            Map<String, String> changes = (Map<String, String>) req.get("changes");
+            Long from = req.get("from") != null ? ((Number) req.get("from")).longValue() : null;
+            Long to = req.get("to") != null ? ((Number) req.get("to")).longValue() : null;
+            return ResponseEntity.ok(strategyTuningService.simulateConfigChange(strategy, changes, from, to));
+        } catch (Exception e) {
+            log.error("[RISK] Simulation error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  Config Management
+    // ─────────────────────────────────────────────
+
+    /**
+     * Get current config for a service (filtered to strategy-relevant keys).
+     */
+    @GetMapping("/config/current")
+    public ResponseEntity<?> getCurrentConfig(@RequestParam String service) {
+        try {
+            return ResponseEntity.ok(configManagementService.getCurrentConfig(service));
+        } catch (Exception e) {
+            log.error("[RISK] Config read error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Apply config changes to a service's application.properties.
+     */
+    @PostMapping("/config/apply")
+    public ResponseEntity<?> applyConfig(@RequestBody Map<String, Object> req) {
+        try {
+            String service = (String) req.get("service");
+            @SuppressWarnings("unchecked")
+            Map<String, String> changes = (Map<String, String>) req.get("changes");
+            String reason = (String) req.getOrDefault("reason", "Applied from Risk Command Center");
+            return ResponseEntity.ok(configManagementService.applyConfigChanges(service, changes, reason));
+        } catch (Exception e) {
+            log.error("[RISK] Config apply error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Config change history.
+     */
+    @GetMapping("/config/history")
+    public ResponseEntity<?> getConfigHistory(@RequestParam(defaultValue = "50") int limit) {
+        try {
+            return ResponseEntity.ok(configManagementService.getConfigHistory(limit));
+        } catch (Exception e) {
+            log.error("[RISK] Config history error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Rollback a config change.
+     */
+    @PostMapping("/config/rollback/{changeId}")
+    public ResponseEntity<?> rollbackConfig(@PathVariable String changeId) {
+        try {
+            return ResponseEntity.ok(configManagementService.rollbackConfig(changeId));
+        } catch (Exception e) {
+            log.error("[RISK] Config rollback error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  Audit Log
+    // ─────────────────────────────────────────────
+
+    /**
+     * Get audit log entries from MongoDB risk_audit_log collection.
+     * @param limit   Max entries to return (default 50).
+     * @param strategy Filter by strategy key (optional).
+     */
+    @GetMapping("/audit-log")
+    public ResponseEntity<?> getAuditLog(
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) String strategy) {
+        try {
+            Document query = new Document();
+            if (strategy != null && !strategy.isEmpty()) {
+                query.append("strategy", strategy);
+            }
+            List<Document> logs = mongoTemplate.getCollection("risk_audit_log")
+                .find(query)
+                .sort(new Document("timestamp", -1))
+                .limit(limit)
+                .into(new ArrayList<>());
+
+            // Convert ObjectId to string for JSON serialization
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Document doc : logs) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("id", doc.getObjectId("_id").toHexString());
+                entry.put("timestamp", doc.getDate("timestamp"));
+                entry.put("action", doc.getString("action"));
+                entry.put("strategy", doc.getString("strategy"));
+                entry.put("reason", doc.getString("reason"));
+                entry.put("details", doc.get("details"));
+                entry.put("source", doc.getString("source"));
+                result.add(entry);
+            }
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("[RISK] Audit log error: {}", e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ─────────────────────────────────────────────
     //  Helpers
     // ─────────────────────────────────────────────
+
+    /**
+     * Log an audit event to MongoDB risk_audit_log collection.
+     */
+    private void logAuditEvent(String action, String strategy, String reason, Map<String, Object> details) {
+        try {
+            Document doc = new Document()
+                .append("timestamp", new Date())
+                .append("action", action)
+                .append("strategy", strategy)
+                .append("reason", reason)
+                .append("details", details != null ? new Document(details) : null)
+                .append("source", "DASHBOARD");
+            mongoTemplate.getCollection("risk_audit_log").insertOne(doc);
+        } catch (Exception e) {
+            log.warn("[RISK_AUDIT] Failed to log: {}", e.getMessage());
+        }
+    }
 
     /**
      * Resolve strategy param to list of wallet keys.
@@ -284,7 +489,7 @@ public class RiskController {
      */
     private List<String> resolveStrategyKeys(String strategy) {
         if (strategy == null || strategy.isBlank()) {
-            return new ArrayList<>(StrategyNameResolver.ALL_STRATEGY_KEYS);
+            return new ArrayList<>(StrategyNameResolver.ACTIVE_STRATEGY_KEYS);
         }
         String normalized = StrategyNameResolver.normalize(strategy);
         return List.of(normalized);

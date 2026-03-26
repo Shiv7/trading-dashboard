@@ -1,86 +1,48 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   RefreshCw, Filter, ArrowUpDown, TrendingUp, TrendingDown,
-  Check, Zap, AlertTriangle, Loader2, BarChart2, Clock
+  Check, Zap, AlertTriangle, Loader2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyTradesApi, strategyWalletsApi, marketDataApi, greeksApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, checkStalePriceAdjustment } from '../../utils/tradingUtils';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
-import ConfluenceBadge from './ConfluenceBadge';
 
-type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'oi' | 'timestamp';
+type SortField = 'timestamp' | 'score' | 'rr' | 'surge';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
-type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
    ═══════════════════════════════════════════════════════════════ */
 
-interface FudkoiTrigger {
+interface McxBbTrigger {
   scripCode: string;
   symbol: string;
   companyName: string;
-  exchange: string;
+  exchange: string;  // always "M"
   triggered: boolean;
   direction: string;
-  reason: string;
   triggerPrice: number;
-  triggerScore: number;
-  triggerTime: string;
-  triggerTimeEpoch: number;
+  triggerScore: number;  // 0-100
   bbUpper: number;
-  bbMiddle: number;
   bbLower: number;
-  superTrend: number;
-  trend: string;
-  trendChanged: boolean;
-  pricePosition: string;
-  rank: number;
-  volumeTMinus1: number;
-  volumeT: number;
-  volumeTPlus1: number;
-  avgVolume: number;
-  surgeTMinus1: number;
-  surgeT: number;
-  surgeTPlus1: number;
-  cachedAt: number;
-  target1?: number | null;
+  stopLoss: number;
+  target1: number;
   target2?: number | null;
   target3?: number | null;
   target4?: number | null;
-  stopLoss?: number;
-  riskReward?: number;
   pivotSource?: boolean;
-  atr30m?: number;
-  oiChangeRatio?: number;
-  oiChangePct?: number;
-  oiInterpretation?: string;
-  oiLabel?: string;
-  blockTradeDetected?: boolean;
-  blockTradeVol?: number;
-  blockTradePct?: number;
-  blockTradeFlowLabel?: string;
-  oiBuildupPct?: number;
-  signalSource?: string;
-  // Gap Quality Score (GQS)
-  gapQualityScore?: number;
-  gqsGapAtrRatio?: number;
-  gqsCandleScore?: number;
-  gqsBlockFactor?: number;
-  gqsDivergenceScore?: number;
-  gqsRecoveryScore?: number;
-  gqsCandleOpposesGap?: boolean;
-  gqsGapRecoveryPct?: number;
-  effectiveKii?: number;
-  gapPct?: number;
-  // Option enrichment from backend
+  riskReward: number;
+  surgeT: number;
+  oiChangeRatio: number;
+  volumeT: number;
+  signalSource: string;
+  // Option enrichment
   optionAvailable?: boolean;
-  optionFailureReason?: string;
   optionScripCode?: string;
   optionSymbol?: string;
   optionStrike?: number;
@@ -91,7 +53,7 @@ interface FudkoiTrigger {
   optionMultiplier?: number;
   optionExchange?: string;
   optionExchangeType?: string;
-  // Futures fallback (MCX instruments without options)
+  // Futures fallback
   futuresAvailable?: boolean;
   futuresScripCode?: string;
   futuresSymbol?: string;
@@ -126,25 +88,25 @@ interface FudkoiTrigger {
   futuresT2?: number;
   futuresT3?: number;
   futuresT4?: number;
-  // ConfluentTargetEngine v2 metadata
-  confluenceGrade?: string;
-  confluenceRejectReason?: string;
-  confluenceFortressScore?: number;
-  confluenceRoomRatio?: number;
-  confluenceEntryQuality?: string;
-  confluenceSlScore?: number;
-  confluenceT1Score?: number;
-  confluenceLotAllocation?: string;
-  confluenceZoneCount?: number;
-  confluenceTimePhase?: string;
-  confluenceScore?: number;
-  hybridRank?: number;
-  confluenceSL?: number;
-  confluenceT1?: number;
-  confluenceT2?: number;
-  confluenceT3?: number;
-  confluenceT4?: number;
-  confluenceRR?: number;
+  // Rich insight fields
+  bbMiddle?: number;
+  atr30m?: number;
+  expansionRate?: number;
+  bodyOutsideRatio?: number;
+  technicalScore?: number;
+  institutionalScore?: number;
+  institutionalClass?: string;
+  combinedConviction?: number;
+  sizeClass?: string;
+  sessionType?: string;
+  sessionWeight?: number;
+  oiInterpretation?: string;
+  instFlowScore?: number;
+  instSizeScore?: number;
+  instStealthScore?: number;
+  instOiScore?: number;
+  triggerTime?: string;
+  timestamp?: number;
 }
 
 interface TradePlan {
@@ -176,7 +138,7 @@ interface ExecutionState {
   orderId?: string;
 }
 
-interface FudkoiTabContentProps {
+interface McxBb15TabContentProps {
   autoRefresh?: boolean;
 }
 
@@ -189,90 +151,35 @@ function fmt(v: number | null | undefined): string {
   return Number(v.toFixed(2)).toString();
 }
 
-function computeConfidence(sig: FudkoiTrigger): number {
-  let conf = 50;
-  const isLong = sig.direction === 'BULLISH';
-  const bbWidth = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  if (bbWidth > 0) {
-    const beyondBB = isLong
-      ? (sig.triggerPrice - (sig.bbUpper || sig.triggerPrice)) / bbWidth
-      : ((sig.bbLower || sig.triggerPrice) - sig.triggerPrice) / bbWidth;
-    conf += Math.min(25, Math.max(0, beyondBB * 200));
-  }
-  const stGap = Math.abs(sig.triggerPrice - (sig.superTrend || sig.triggerPrice)) / sig.triggerPrice;
-  conf += Math.min(15, stGap * 500);
-  if (sig.trendChanged) conf += 5;
-  // OI bonus: high OI surge signals get extra confidence — scaled for real OI% values
-  const oiVal = Math.abs(sig.oiChangeRatio ?? 0);
-  const oiBoost = Math.min(10, (oiVal / 300) * 10);
-  conf += oiBoost;
-  return Math.min(97, Math.max(55, Math.round(conf)));
-}
-
-function formatTriggerTime(sig: FudkoiTrigger): string {
-  if (!sig.triggerTime) return '--';
-  const d = new Date(sig.triggerTime);
-  if (isNaN(d.getTime())) return '--';
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
-}
-
+/** Estimate option premium for OTM strike */
 function estimateOptionPremium(plan: TradePlan): number {
   return Math.round(Math.max(plan.atr * 3, plan.entry * 0.008) * 10) / 10;
 }
 
-/** Real volume surge from backend (T candle volume / 6-candle avg); falls back to 0 if unavailable */
-function computeVolumeSurge(sig: FudkoiTrigger): number {
-  if (sig.surgeT != null && sig.surgeT > 0) return Math.round(sig.surgeT * 10) / 10;
-  return 0;
-}
-
-function extractTradePlan(sig: FudkoiTrigger): TradePlan {
+/** Extract trade plan from MCX-BB signal */
+function extractTradePlan(sig: McxBbTrigger): TradePlan {
   const isLong = sig.direction === 'BULLISH';
   const optionType: 'CE' | 'PE' = isLong ? 'CE' : 'PE';
   const { strike, interval } = getOTMStrike(sig.triggerPrice, sig.direction);
 
+  // ATR: derive from BB width
   const bw = (sig.bbUpper || 0) - (sig.bbLower || 0);
-  const atr = sig.atr30m && sig.atr30m > 0
-    ? sig.atr30m
-    : bw > 0 ? bw / 2.5 : sig.triggerPrice * 0.004;
+  const atr = bw > 0 ? bw / 2.5 : sig.triggerPrice * 0.004;
 
-  if (sig.target1 != null && sig.stopLoss != null) {
-    return {
-      entry: sig.triggerPrice,
-      sl: sig.stopLoss,
-      t1: sig.target1 ?? null,
-      t2: sig.target2 ?? null,
-      t3: sig.target3 ?? null,
-      t4: sig.target4 ?? null,
-      rr: sig.riskReward ?? 0,
-      hasPivots: sig.pivotSource === true,
-      atr,
-      optionType,
-      strike,
-      strikeInterval: interval,
-    };
-  }
-
-  const sl = sig.superTrend || (isLong
-    ? sig.triggerPrice - atr * 2
-    : sig.triggerPrice + atr * 2);
-  const risk = Math.abs(sig.triggerPrice - sl);
-  const t1 = isLong ? sig.triggerPrice + risk * 2 : sig.triggerPrice - risk * 2;
-  const t2 = isLong ? sig.triggerPrice + risk * 3 : sig.triggerPrice - risk * 3;
-  const rr = risk > 0 ? (Math.abs(t1 - sig.triggerPrice) / risk) : 0;
+  const entry = sig.triggerPrice;
+  const sl = sig.stopLoss;
+  const risk = Math.abs(entry - sl);
+  const isLongDir = sig.direction === 'BULLISH';
 
   return {
-    entry: sig.triggerPrice,
-    sl, t1, t2, t3: null, t4: null,
-    rr,
-    hasPivots: false,
+    entry,
+    sl,
+    t1: sig.target1 ?? null,
+    t2: sig.target2 ?? (risk > 0 ? (isLongDir ? entry + risk * 3 : entry - risk * 3) : null),
+    t3: sig.target3 ?? (risk > 0 ? (isLongDir ? entry + risk * 4 : entry - risk * 4) : null),
+    t4: sig.target4 ?? (risk > 0 ? (isLongDir ? entry + risk * 5 : entry - risk * 5) : null),
+    rr: sig.riskReward ?? 0,
+    hasPivots: sig.pivotSource === true,
     atr,
     optionType,
     strike,
@@ -280,77 +187,7 @@ function extractTradePlan(sig: FudkoiTrigger): TradePlan {
   };
 }
 
-
-function computeOIChange(sig: FudkoiTrigger): number {
-  if (sig.oiChangeRatio != null) return Math.round(sig.oiChangeRatio * 10) / 10;
-  return 0;
-}
-
-function computeKoiScore(sig: FudkoiTrigger): { total: number; oiMomentum: number; oiBuildup: number; volConfirm: number; acceleration: number; block: number } {
-  const oiMomentumScore = Math.min(100, Math.abs(sig.oiChangePct ?? sig.oiChangeRatio ?? 0) * 0.5);
-  const oiBuildupScore = Math.min(100, Math.max(0, sig.oiBuildupPct ?? 0) * 2);
-  const volumeConfirmation = Math.min(100, (sig.surgeT ?? 0) * 50);
-  const accelerationScore = 30; // OI velocity not yet in signal
-  const blockDealScore = Math.min(100, (sig.blockTradePct ?? 0) * 2.5);
-  const total = Math.round(oiMomentumScore * 0.35 + oiBuildupScore * 0.25 + volumeConfirmation * 0.15 + accelerationScore * 0.15 + blockDealScore * 0.10);
-  return { total, oiMomentum: Math.round(oiMomentumScore * 0.35), oiBuildup: Math.round(oiBuildupScore * 0.25), volConfirm: Math.round(volumeConfirmation * 0.15), acceleration: Math.round(accelerationScore * 0.15), block: Math.round(blockDealScore * 0.10) };
-}
-
-function classifyFudkoiTradeType(sig: FudkoiTrigger): { label: string; narrative: string; color: string } {
-  const dte = sig.greekDte ?? 15;
-  const oiPct = Math.abs(sig.oiChangePct ?? sig.oiChangeRatio ?? 0);
-  const label = sig.oiLabel ?? '';
-  const isUnwinding = label === 'LONG_UNWINDING' || label === 'SHORT_COVERING';
-  if (dte < 3) return { label: 'QUICK SCALP', narrative: `DTE ${dte}d — exit at T1. OI conviction strong but theta too aggressive.`, color: 'text-red-400' };
-  if (oiPct > 200 && !isUnwinding) return { label: 'MOMENTUM', narrative: `Extreme OI change (${oiPct.toFixed(0)}%) with fresh buildup. OI acceleration supports holding. Trail SL after T1.`, color: 'text-green-400' };
-  if (isUnwinding) return { label: 'CAUTION', narrative: `OI is unwinding — the move may be exhausting. Tight SL, quick exit at T1. Watch for reversal.`, color: 'text-amber-400' };
-  return { label: 'STANDARD', narrative: `OI conviction confirmed. Follow lot-split exit plan: partial exits T1 → T4.`, color: 'text-blue-400' };
-}
-
-function getOILabelStyle(label?: string): { text: string; color: string } {
-  switch (label) {
-    case 'LONG_BUILDUP': return { text: 'Long Buildup', color: 'text-green-400' };
-    case 'SHORT_BUILDUP': return { text: 'Short Buildup', color: 'text-green-400' };
-    case 'SHORT_COVERING': return { text: 'Short Covering', color: 'text-orange-400' };
-    case 'LONG_UNWINDING': return { text: 'Long Unwinding', color: 'text-orange-400' };
-    default: return { text: '', color: 'text-slate-500' };
-  }
-}
-
-/** OI surge threshold label per exchange */
-function getOIThresholdLabel(exchange: string): string {
-  switch (exchange) {
-    case 'M': return '>1x';
-    case 'N': return '>1.5x';
-    case 'C': return '>1x';
-    default: return '';
-  }
-}
-
-function getEpoch(sig: FudkoiTrigger): number {
-  if (sig.triggerTimeEpoch) return sig.triggerTimeEpoch;
-  if (sig.triggerTime) {
-    const d = new Date(sig.triggerTime);
-    if (!isNaN(d.getTime())) return d.getTime();
-  }
-  return sig.cachedAt || 0;
-}
-
-function computeStrength(sig: FudkoiTrigger, plan: TradePlan): number {
-  const conf = computeConfidence(sig);
-  const oi = Math.abs(sig.oiChangeRatio ?? 0);
-  const rr = plan.rr;
-  const vol = computeVolumeSurge(sig);
-  const confNorm = ((conf - 55) / 42) * 25;
-  const oiNorm = Math.min(30, (oi / 300) * 30);   // OI weighted higher for FUDKOI — scaled for uncapped real OI%
-  const rrNorm = Math.min(25, (rr / 4) * 25);
-  const volNorm = Math.min(20, ((vol - 1) / 2.5) * 20);
-  return Math.min(100, Math.round(confNorm + oiNorm + rrNorm + volNorm));
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   R:R VISUAL BAR
-   ═══════════════════════════════════════════════════════════════ */
+/* RiskRewardBar removed — now handled by CrossInstrumentLevels */
 
 /* ═══════════════════════════════════════════════════════════════
    EXECUTION OVERLAY
@@ -448,18 +285,17 @@ const ExecutionOverlay: React.FC<{
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   FILTER DROPDOWN
+   FILTER DROPDOWN — Direction only (MCX-BB is MCX-only, no exchange filter)
    ═══════════════════════════════════════════════════════════════ */
 
 const FilterDropdown: React.FC<{
   direction: DirectionFilter;
-  exchange: ExchangeFilter;
   onDirectionChange: (d: DirectionFilter) => void;
-  onExchangeChange: (e: ExchangeFilter) => void;
   onClose: () => void;
   onReset: () => void;
-}> = ({ direction, exchange, onDirectionChange, onExchangeChange, onClose, onReset }) => (
+}> = ({ direction, onDirectionChange, onClose, onReset }) => (
   <div className="absolute top-full right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-30 p-3 sm:p-4 min-w-[240px] sm:min-w-[260px] animate-slideDown mobile-dropdown-full">
+    {/* Direction */}
     <div className="mb-4">
       <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Direction</div>
       <div className="flex gap-2">
@@ -471,35 +307,11 @@ const FilterDropdown: React.FC<{
               direction === d
                 ? d === 'BULLISH' ? 'bg-green-500/20 text-green-400 border border-green-500/40'
                   : d === 'BEARISH' ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-                  : 'bg-teal-500/20 text-teal-400 border border-teal-500/40'
+                  : 'bg-lime-500/20 text-lime-400 border border-lime-500/40'
                 : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
             }`}
           >
             {d === 'ALL' ? 'All' : d === 'BULLISH' ? 'Bullish' : 'Bearish'}
-          </button>
-        ))}
-      </div>
-    </div>
-
-    <div className="mb-4">
-      <div className="text-[11px] text-slate-500 uppercase tracking-wider mb-2 font-medium">Instrument</div>
-      <div className="flex gap-2">
-        {([
-          { key: 'ALL', label: 'All' },
-          { key: 'N', label: 'NSE' },
-          { key: 'M', label: 'MCX' },
-          { key: 'C', label: 'Currency' },
-        ] as { key: ExchangeFilter; label: string }[]).map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => onExchangeChange(key)}
-            className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-              exchange === key
-                ? 'bg-teal-500/20 text-teal-400 border border-teal-500/40'
-                : 'bg-slate-700/50 text-slate-400 border border-transparent hover:bg-slate-700'
-            }`}
-          >
-            {label}
           </button>
         ))}
       </div>
@@ -525,12 +337,9 @@ const FilterDropdown: React.FC<{
 
 const SORT_OPTIONS: { key: SortField; label: string }[] = [
   { key: 'timestamp', label: 'Recent' },
-  { key: 'oi', label: 'OI Change %' },
-  { key: 'strength', label: 'Strength' },
-  { key: 'confidence', label: 'Confidence %' },
+  { key: 'score', label: 'Score' },
   { key: 'rr', label: 'R:R' },
-  { key: 'time', label: 'Latest Trigger' },
-  { key: 'volume', label: 'Volume Surge' },
+  { key: 'surge', label: 'Volume Surge' },
 ];
 
 const SortDropdown: React.FC<{
@@ -545,12 +354,12 @@ const SortDropdown: React.FC<{
         onClick={() => { onSelect(key); onClose(); }}
         className={`w-full text-left px-4 py-2.5 text-sm transition-colors ${
           current === key
-            ? 'text-teal-400 bg-teal-500/10'
+            ? 'text-lime-400 bg-lime-500/10'
             : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'
         }`}
       >
         {label}
-        {current === key && <Check className="w-3.5 h-3.5 inline ml-2 text-teal-400" />}
+        {current === key && <Check className="w-3.5 h-3.5 inline ml-2 text-lime-400" />}
       </button>
     ))}
   </div>
@@ -563,13 +372,13 @@ const SortDropdown: React.FC<{
 const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ hasFilters, onReset }) => (
   <div className="flex flex-col items-center justify-center py-20 text-center px-6">
     <div className="w-16 h-16 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-4">
-      <BarChart2 className="w-7 h-7 text-slate-600" />
+      <Zap className="w-7 h-7 text-slate-600" />
     </div>
-    <h3 className="text-white font-medium text-lg mb-1">No FUDKOI Signals</h3>
+    <h3 className="text-white font-medium text-lg mb-1">No Signals Match</h3>
     <p className="text-slate-500 text-sm mb-5 max-w-xs">
       {hasFilters
-        ? 'No FUDKOI signals match your current filters. Try adjusting your criteria.'
-        : 'Waiting for FUDKII signals with high OI Change% (MCX >100%, NSE >150%, Currency >100%)...'}
+        ? 'No MCX-BB-15-30 signals match your current filters. Try adjusting your criteria.'
+        : 'Waiting for MCX Bollinger Band breakout signals...'}
     </p>
     {hasFilters && (
       <button
@@ -583,15 +392,42 @@ const EmptyState: React.FC<{ hasFilters: boolean; onReset: () => void }> = ({ ha
 );
 
 /* ═══════════════════════════════════════════════════════════════
-   FUDKOI TRADING CARD
+   BB SCORE + TRADE TYPE HELPERS
    ═══════════════════════════════════════════════════════════════ */
 
-const FudkoiCard: React.FC<{
-  trigger: FudkoiTrigger;
+function computeBbScore(sig: McxBbTrigger): { total: number; bbBreak: number; volume: number; oi: number; momentum: number } {
+  const bbUpper = sig.bbUpper ?? 0;
+  const bbLower = sig.bbLower ?? 0;
+  const price = sig.triggerPrice ?? 0;
+  const isLong = sig.direction === 'BULLISH';
+  const band = isLong ? bbUpper : bbLower;
+  const breakDist = band > 0 ? Math.abs(price - band) / band * 100 : 0;
+  const bbBreakScore = Math.min(100, breakDist * 50); // 2% break = 100
+  const volumeScore = Math.min(100, (sig.surgeT ?? 0) * 50);
+  const oiScore = Math.min(100, Math.abs(sig.oiChangeRatio ?? 0) * 0.4);
+  const momentumScore = sig.triggerScore ?? 50;
+  const total = Math.round(bbBreakScore * 0.30 + volumeScore * 0.25 + oiScore * 0.20 + momentumScore * 0.15 + 50 * 0.10);
+  return { total, bbBreak: Math.round(bbBreakScore * 0.30), volume: Math.round(volumeScore * 0.25), oi: Math.round(oiScore * 0.20), momentum: Math.round(momentumScore * 0.15) };
+}
+
+function classifyMcxBbTradeType(sig: McxBbTrigger): { label: string; narrative: string; color: string } {
+  const dte = sig.greekDte ?? 15;
+  const surgeT = sig.surgeT ?? 0;
+  if (dte < 5) return { label: 'GAMMA SCALP', narrative: `DTE ${dte}d + BB breakout. Take T1, tight trail. Don't hold overnight.`, color: 'text-orange-400' };
+  if (surgeT > 3) return { label: 'MOMENTUM', narrative: `Strong volume ${surgeT.toFixed(1)}x on BB breakout. Trail to T2.`, color: 'text-green-400' };
+  return { label: 'STANDARD', narrative: `BB breakout confirmed. Follow exit plan.`, color: 'text-blue-400' };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MCX-BB-15 TRADING CARD — Same layout as FUKAA
+   ═══════════════════════════════════════════════════════════════ */
+
+const McxBbCard: React.FC<{
+  trigger: McxBbTrigger;
   plan: TradePlan;
   walletState: SlotWalletState;
-  onBuy: (sig: FudkoiTrigger, plan: TradePlan, lots: number) => void;
-  onRequestFunds: (sig: FudkoiTrigger, plan: TradePlan, creditAmount: number, premium: number, lotSize: number, multiplier: number, confidence: number) => void;
+  onBuy: (sig: McxBbTrigger, plan: TradePlan, lots: number) => void;
+  onRequestFunds: (sig: McxBbTrigger, plan: TradePlan, creditAmount: number, premium: number, lotSize: number, multiplier: number, confidence: number) => void;
   isFunded: boolean;
 }> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded }) => {
   const [pressing, setPressing] = useState(false);
@@ -601,11 +437,13 @@ const FudkoiCard: React.FC<{
   const [ltpDriftPct, setLtpDriftPct] = useState<number | null>(null);
   const isLong = trigger.direction === 'BULLISH';
 
-  const signalAgeMs = trigger.triggerTimeEpoch ? Date.now() - trigger.triggerTimeEpoch : 0;
+  const signalAgeMs = trigger.timestamp ? Date.now() - trigger.timestamp :
+    trigger.triggerTime ? Date.now() - new Date(trigger.triggerTime).getTime() : 0;
   const isWithin30mWindow = signalAgeMs <= 30 * 60 * 1000;
   const isBeyond30mBoundary = !isWithin30mWindow;
   const isStale = ltpDriftPct !== null && ltpDriftPct > 10;
 
+  // Colors
   const dirColor = isLong ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30';
   const buyBg = isLong ? 'bg-[#18C964]' : 'bg-[#FF4D6D]';
   const buyBgActive = isLong ? 'active:bg-[#15a854]' : 'active:bg-[#e6445f]';
@@ -615,13 +453,16 @@ const FudkoiCard: React.FC<{
     : 'border-red-500/20 hover:border-red-500/40';
 
   const displayName = trigger.symbol || trigger.companyName || trigger.scripCode;
-  const confidence = computeConfidence(trigger);
 
+  // Confidence: triggerScore is already 0-100
+  const confidence = Math.round(trigger.triggerScore);
+
+  // Option: prefer real data from backend; check futures fallback for MCX
   const hasRealOption = trigger.optionAvailable === true && trigger.optionLtp != null && trigger.optionLtp > 0;
   const hasFutures = trigger.futuresAvailable === true && trigger.futuresLtp != null && trigger.futuresLtp > 0;
   const noDerivatives = trigger.optionAvailable === false && !hasFutures;
-  const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(trigger.symbol);
 
+  // Determine instrument mode: OPTION, FUTURES, or NONE
   let instrumentMode: 'OPTION' | 'FUTURES' | 'NONE' = 'NONE';
   let premium = 0;
   let displayInstrumentName = '';
@@ -657,12 +498,8 @@ const FudkoiCard: React.FC<{
     displayInstrumentName = `${trigger.futuresSymbol ?? trigger.symbol}${futExpiryMonth ? ' ' + futExpiryMonth : ''} FUT`;
     lotSize = trigger.futuresLotSize ?? 1;
     multiplier = trigger.futuresMultiplier ?? 1;
-  } else if (isCurrencyPair && noDerivatives) {
-    instrumentMode = 'FUTURES';
-    premium = trigger.triggerPrice;
-    displayInstrumentName = `${trigger.symbol}`;
-    lotSize = 1;
   } else if (!noDerivatives) {
+    // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
     displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
@@ -683,7 +520,7 @@ const FudkoiCard: React.FC<{
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0, slotsUsed: 0, maxSlots: 0, exchangeFull: false }
     : computeSlotSizing(confidence, walletState, premium, lotSize, multiplier,
-        (trigger.exchange || 'N').substring(0, 1).toUpperCase(), trigger.riskReward ?? 2.0, 60);
+        'M', trigger.riskReward ?? 2.0, 60);
 
   // Periodic LTP drift check (every 30s) for stale badge
   const scripForDrift = trigger.optionScripCode || '';
@@ -703,71 +540,171 @@ const FudkoiCard: React.FC<{
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
-  const koi = computeKoiScore(trigger);
-  const tradeType = classifyFudkoiTradeType(trigger);
-
-  const volMultiplier = computeVolumeSurge(trigger).toFixed(1);
-  const oiVal = computeOIChange(trigger);
-  const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
-  const oiStyle = getOILabelStyle(trigger.oiLabel);
-  const absOi = Math.abs(oiVal);
-  const exchangeLabel = trigger.exchange === 'M' ? 'MCX' : trigger.exchange === 'N' ? 'NSE' : trigger.exchange === 'C' ? 'CUR' : trigger.exchange;
-
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
       overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
       <div className="p-3 sm:p-4">
 
-        {/* TOP SECTION */}
+        {/* -- TOP SECTION -- */}
         <div className="flex items-start justify-between mb-1">
           <div>
-            <h3 className="text-lg font-semibold text-white leading-tight">{displayName}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-white leading-tight">{displayName}</h3>
+              {/* Timestamp + age */}
+              {(() => {
+                const ts = trigger.timestamp || (trigger.triggerTime ? new Date(trigger.triggerTime).getTime() : 0);
+                if (!ts) return null;
+                const d = new Date(ts);
+                const hh = d.getHours().toString().padStart(2, '0');
+                const mm = d.getMinutes().toString().padStart(2, '0');
+                const ageMin = Math.floor((Date.now() - ts) / 60000);
+                const ageStr = ageMin < 1 ? 'just now' : ageMin < 60 ? `${ageMin}m ago` : `${Math.floor(ageMin / 60)}h ${ageMin % 60}m ago`;
+                const ageColor = ageMin <= 5 ? 'text-green-400' : ageMin <= 30 ? 'text-amber-400' : 'text-red-400';
+                return (
+                  <span className="flex items-center gap-1.5 text-[10px]">
+                    <span className="text-slate-500 font-mono">{hh}:{mm}</span>
+                    <span className={`font-semibold ${ageColor}`}>{ageStr}</span>
+                  </span>
+                );
+              })()}
+            </div>
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-slate-500">
-                Confidence <span className="font-mono text-slate-400">{confidence}%</span>
-              </span>
-              <span className="text-slate-700">|</span>
-              <span className="text-xs text-slate-500 font-mono">
-                {formatTriggerTime(trigger)}
-              </span>
+              {/* Sizing tier badge */}
+              {(() => {
+                const sc = trigger.sizeClass || 'MINIMUM';
+                const scColors: Record<string, string> = {
+                  FULL: 'bg-green-500/20 text-green-400 border-green-500/30',
+                  STANDARD: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+                  REDUCED: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+                  MINIMUM: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
+                };
+                return <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${scColors[sc] || scColors.MINIMUM}`}>{sc}</span>;
+              })()}
+              <span className="text-[10px] text-slate-500 font-mono">{trigger.exchange === 'M' ? 'MCX' : trigger.exchange === 'N' ? 'NSE' : trigger.exchange}</span>
+              {/* Session badge with weight */}
+              {trigger.sessionType && (
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                  (trigger.sessionWeight ?? 1) >= 1.25 ? 'bg-green-500/15 text-green-400' :
+                  (trigger.sessionWeight ?? 1) >= 1.1 ? 'bg-amber-500/15 text-amber-400' :
+                  'bg-slate-600/30 text-slate-400'
+                }`}>
+                  {trigger.sessionType.replace(/_/g, ' ')} {(trigger.sessionWeight ?? 1) > 1 ? `${trigger.sessionWeight}x` : ''}
+                </span>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
-            {isNseNoTradeWindow(trigger.exchange, trigger.triggerTime) && (
-              <span className="p-1 rounded-full bg-amber-500/15 border border-amber-500/30" title="NSE no-trade window (3:15–3:30 PM)">
-                <Clock className="w-3.5 h-3.5 text-amber-400" />
-              </span>
-            )}
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold bg-teal-500/15 text-teal-400 border border-teal-500/30`}>
-              {exchangeLabel}
-            </span>
+          <div className="flex flex-col items-end gap-1">
             <span className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${dirColor}`}>
               {isLong ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
               {isLong ? 'Bullish' : 'Bearish'}
             </span>
+            {/* OI interpretation badge */}
+            {trigger.oiInterpretation && (
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                trigger.oiInterpretation === 'LONG_BUILDUP' ? 'bg-green-500/15 text-green-400' :
+                trigger.oiInterpretation === 'SHORT_BUILDUP' ? 'bg-red-500/15 text-red-400' :
+                trigger.oiInterpretation === 'LONG_UNWINDING' ? 'bg-orange-500/15 text-orange-400' :
+                trigger.oiInterpretation === 'SHORT_COVERING' ? 'bg-cyan-500/15 text-cyan-400' :
+                'bg-slate-600/30 text-slate-400'
+              }`}>{trigger.oiInterpretation.replace(/_/g, ' ')}</span>
+            )}
           </div>
         </div>
 
-        {/* ── KOI SCORE ── */}
-        <div className="mt-2">
+        {/* ── DUAL SCORE BARS: Technical + Institutional ── */}
+        <div className="mt-2.5 space-y-1.5">
+          {/* Technical Score */}
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-slate-500 font-medium w-8">KOI</span>
-            <div className="flex-1 h-[6px] rounded-full bg-slate-700/60 overflow-hidden">
-              <div className={`h-full rounded-full transition-all ${koi.total >= 76 ? 'bg-cyan-400' : koi.total >= 51 ? 'bg-green-400' : koi.total >= 26 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${Math.min(koi.total, 100)}%` }} />
+            <span className="text-[10px] text-slate-500 font-medium w-12">Technical</span>
+            <div className="flex-1 h-[5px] rounded-full bg-slate-700/60 overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${(trigger.technicalScore ?? 0) >= 70 ? 'bg-cyan-400' : (trigger.technicalScore ?? 0) >= 50 ? 'bg-green-400' : (trigger.technicalScore ?? 0) >= 30 ? 'bg-amber-400' : 'bg-red-400'}`}
+                style={{ width: `${Math.min(trigger.technicalScore ?? 0, 100)}%` }} />
             </div>
-            <span className={`text-sm font-bold font-mono ${koi.total >= 76 ? 'text-cyan-400' : koi.total >= 51 ? 'text-green-400' : koi.total >= 26 ? 'text-amber-400' : 'text-red-400'}`}>
-              {koi.total}
-            </span>
-            <span className={`text-[9px] font-semibold ${koi.total >= 76 ? 'text-cyan-400' : koi.total >= 51 ? 'text-green-400' : koi.total >= 26 ? 'text-amber-400' : 'text-red-400'}`}>
-              {koi.total >= 76 ? 'EXTREME' : koi.total >= 51 ? 'STRONG' : koi.total >= 26 ? 'MODERATE' : 'WEAK'}
+            <span className={`text-xs font-bold font-mono w-7 text-right ${(trigger.technicalScore ?? 0) >= 70 ? 'text-cyan-400' : (trigger.technicalScore ?? 0) >= 50 ? 'text-green-400' : (trigger.technicalScore ?? 0) >= 30 ? 'text-amber-400' : 'text-red-400'}`}>
+              {trigger.technicalScore ?? 0}
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 mt-1.5 text-[9px] font-mono">
-            <span className="text-slate-500">OI Shift <span className="text-slate-300">{koi.oiMomentum}/35</span></span>
-            <span className="text-slate-500">Buildup <span className="text-slate-300">{koi.oiBuildup}/25</span></span>
-            <span className="text-slate-500">Vol <span className="text-slate-300">{koi.volConfirm}/15</span></span>
-            <span className="text-slate-500">Accel <span className="text-slate-300">{koi.acceleration}/15</span></span>
-            <span className="text-slate-500">Block <span className="text-slate-300">{koi.block}/10</span></span>
+          {/* Institutional Score */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 font-medium w-12">Inst.</span>
+            <div className="flex-1 h-[5px] rounded-full bg-slate-700/60 overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${(trigger.institutionalScore ?? 0) >= 50 ? 'bg-violet-400' : (trigger.institutionalScore ?? 0) >= 25 ? 'bg-blue-400' : 'bg-slate-500'}`}
+                style={{ width: `${Math.min(trigger.institutionalScore ?? 0, 100)}%` }} />
+            </div>
+            <span className={`text-xs font-bold font-mono w-7 text-right ${(trigger.institutionalScore ?? 0) >= 50 ? 'text-violet-400' : (trigger.institutionalScore ?? 0) >= 25 ? 'text-blue-400' : 'text-slate-400'}`}>
+              {trigger.institutionalScore ?? 0}
+            </span>
+          </div>
+          {/* Institutional 4-component mini breakdown */}
+          {(trigger.institutionalScore ?? 0) > 0 && (
+            <div className="flex items-center gap-1.5 ml-14 text-[8px] font-mono">
+              <span className="text-violet-400/70">Flow <span className="text-violet-300">{trigger.instFlowScore ?? 0}/30</span></span>
+              <span className="text-slate-700">|</span>
+              <span className="text-violet-400/70">Size <span className="text-violet-300">{trigger.instSizeScore ?? 0}/30</span></span>
+              <span className="text-slate-700">|</span>
+              <span className="text-violet-400/70">Stealth <span className="text-violet-300">{trigger.instStealthScore ?? 0}/20</span></span>
+              <span className="text-slate-700">|</span>
+              <span className="text-violet-400/70">OI <span className="text-violet-300">{trigger.instOiScore ?? 0}/20</span></span>
+            </div>
+          )}
+          {/* Combined conviction */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 font-medium w-12">Final</span>
+            <div className="flex-1 h-[6px] rounded-full bg-slate-700/60 overflow-hidden">
+              <div className={`h-full rounded-full transition-all ${confidence >= 75 ? 'bg-emerald-400' : confidence >= 55 ? 'bg-green-400' : confidence >= 35 ? 'bg-amber-400' : 'bg-red-400'}`}
+                style={{ width: `${Math.min(confidence, 100)}%` }} />
+            </div>
+            <span className={`text-sm font-bold font-mono w-7 text-right ${confidence >= 75 ? 'text-lime-400' : confidence >= 55 ? 'text-green-400' : confidence >= 35 ? 'text-amber-400' : 'text-red-400'}`}>
+              {confidence}
+            </span>
+          </div>
+        </div>
+
+        {/* ── BB BREAKOUT DETAILS ── */}
+        <div className="mt-2.5 flex items-center gap-2 flex-wrap text-[10px]">
+          <span className="font-mono text-slate-400">
+            {isLong ? `Close > Upper by ${((trigger.triggerPrice - (trigger.bbUpper ?? 0)) / (trigger.bbUpper || 1) * 100).toFixed(1)}%` :
+              `Close < Lower by ${(((trigger.bbLower ?? 0) - trigger.triggerPrice) / (trigger.bbLower || 1) * 100).toFixed(1)}%`}
+          </span>
+          {(trigger.bodyOutsideRatio ?? 0) > 0 && (
+            <>
+              <span className="text-slate-700">|</span>
+              <span className={`font-mono ${(trigger.bodyOutsideRatio ?? 0) >= 0.8 ? 'text-green-400' : 'text-slate-400'}`}>
+                Body {((trigger.bodyOutsideRatio ?? 0) * 100).toFixed(0)}% outside
+              </span>
+            </>
+          )}
+          {(trigger.expansionRate ?? 0) > 0 && (
+            <>
+              <span className="text-slate-700">|</span>
+              <span className={`font-mono ${(trigger.expansionRate ?? 0) >= 0.05 ? 'text-cyan-400' : 'text-slate-400'}`}>
+                Expand {((trigger.expansionRate ?? 0) * 100).toFixed(1)}%
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* ── 5-COLUMN METRICS GRID ── */}
+        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
+          <div className="grid grid-cols-5 gap-1.5 text-center">
+            {[
+              { val: `${(trigger.surgeT ?? 0).toFixed(1)}x`, label: 'Vol Surge',
+                color: (trigger.surgeT ?? 0) >= 3 ? 'text-green-300' : (trigger.surgeT ?? 0) >= 2 ? 'text-amber-300' : 'text-slate-300' },
+              { val: `${(trigger.oiChangeRatio ?? 0) > 0 ? '+' : ''}${(trigger.oiChangeRatio ?? 0).toFixed(0)}%`, label: 'OI Chg',
+                color: Math.abs(trigger.oiChangeRatio ?? 0) >= 100 ? 'text-green-300' : Math.abs(trigger.oiChangeRatio ?? 0) >= 50 ? 'text-amber-300' : 'text-slate-300' },
+              { val: trigger.volumeT > 0 ? (trigger.volumeT >= 100000 ? `${(trigger.volumeT / 100000).toFixed(1)}L` : `${(trigger.volumeT / 1000).toFixed(0)}K`) : 'DM', label: 'Volume',
+                color: 'text-slate-300' },
+              { val: (trigger.atr30m ?? 0) > 0 ? trigger.atr30m!.toFixed(1) : (plan.atr > 0 ? plan.atr.toFixed(1) : 'DM'), label: 'ATR',
+                color: 'text-slate-300' },
+              { val: `${((trigger.bbUpper ?? 0) > 0 && (trigger.bbLower ?? 0) > 0 ? (((trigger.bbUpper! - trigger.bbLower!) / ((trigger.bbMiddle ?? trigger.triggerPrice) || 1)) * 100).toFixed(1) : 'DM')}${typeof ((trigger.bbUpper ?? 0) > 0 && (trigger.bbLower ?? 0) > 0 ? 1 : '') === 'number' ? '%' : ''}`,
+                label: 'BB Width',
+                color: (() => { const w = (trigger.bbUpper ?? 0) > 0 && (trigger.bbLower ?? 0) > 0 ? ((trigger.bbUpper! - trigger.bbLower!) / ((trigger.bbMiddle ?? trigger.triggerPrice) || 1)) * 100 : 0; return w > 0 && w < 2 ? 'text-cyan-300' : w < 4 ? 'text-green-300' : 'text-slate-300'; })() },
+            ].map(({ val, label, color }) => (
+              <div key={label}>
+                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
+                <div className="text-[8px] text-slate-500 mt-0.5">{label}</div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -781,226 +718,110 @@ const FudkoiCard: React.FC<{
           />
         </div>
 
-        {/* ── CONFLUENCE QUALITY ── */}
-        {trigger.confluenceGrade && (
-          <ConfluenceBadge
-            grade={trigger.confluenceGrade}
-            rejectReason={trigger.confluenceRejectReason}
-            fortressScore={trigger.confluenceFortressScore}
-            roomRatio={trigger.confluenceRoomRatio}
-            entryQuality={trigger.confluenceEntryQuality}
-            slScore={trigger.confluenceSlScore}
-            t1Score={trigger.confluenceT1Score}
-            lotAllocation={trigger.confluenceLotAllocation}
-            zoneCount={trigger.confluenceZoneCount}
-            timePhase={trigger.confluenceTimePhase}
-            confluenceScore={trigger.confluenceScore}
-            hybridRank={trigger.hybridRank}
-            conflSL={trigger.confluenceSL}
-            conflT1={trigger.confluenceT1}
-            conflT2={trigger.confluenceT2}
-            conflT3={trigger.confluenceT3}
-            conflT4={trigger.confluenceT4}
-            conflRR={trigger.confluenceRR}
-          />
-        )}
-
-        {/* OI CHANGE HERO STRIP */}
-        <div className="mt-3 bg-teal-500/10 border border-teal-500/20 rounded-lg p-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-xs text-teal-400">
-              <BarChart2 className="w-3.5 h-3.5" />
-              <span className="font-semibold">OI Change</span>
-              <span className="text-teal-500/70 text-[10px]">(threshold {getOIThresholdLabel(trigger.exchange)})</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className={`font-mono text-lg font-bold ${oiVal > 5 ? 'text-teal-300' : 'text-teal-400'}`}>
-                {oiChange}%
-              </span>
-            </div>
-          </div>
-          {oiStyle.text && (
-            <div className="mt-1">
-              <span className={`text-[10px] font-semibold uppercase tracking-wider ${oiStyle.color}`}>
-                {oiStyle.text}
-              </span>
-            </div>
-          )}
-          {/* OI Interpretation Narrative */}
-          <div className="mt-2 text-[10px] leading-relaxed space-y-1">
-            {(() => {
-              const buildup = trigger.oiBuildupPct ?? 0;
-              const label = trigger.oiLabel ?? '';
-              const surgeT = trigger.surgeT ?? 0;
-              const lines: string[] = [];
-              // OI interpretation
-              if (label === 'LONG_BUILDUP') lines.push('Fresh longs being created. Buyers adding with rising price \u2014 bullish conviction.');
-              else if (label === 'SHORT_BUILDUP') lines.push('Fresh shorts being created. Sellers aggressively building \u2014 bearish conviction.');
-              else if (label === 'SHORT_COVERING') lines.push('Shorts exiting. Price rising as shorts close \u2014 could be temporary.');
-              else if (label === 'LONG_UNWINDING') lines.push('Longs exiting. Profit-booking or stop-outs. Bearish but momentum may fade.');
-              // Buildup context
-              if (Math.abs(buildup) > 5) lines.push(`OI ${buildup > 0 ? 'growing' : 'shrinking'} ${Math.abs(buildup).toFixed(1)}% \u2014 ${buildup > 0 ? 'accumulation pattern' : 'distribution pattern'}.`);
-              // Volume confirmation
-              if (surgeT >= 2) lines.push(`Volume ${surgeT.toFixed(1)}x confirms OI move is real, not thin-market noise.`);
-              else if (surgeT > 0 && surgeT < 1.5) lines.push('Low volume relative to OI change \u2014 possible rollover or synthetic position.');
-              return lines.map((line, i) => <div key={i} className="text-teal-400/70">{line}</div>);
-            })()}
-          </div>
-        </div>
-
-
-        {/* ── TRANSLATED GREEKS (only when greekEnriched) ── */}
+        {/* ── TRANSLATED GREEKS ── */}
         {trigger.greekEnriched && (() => {
-          const theta = trigger.greekTheta ?? 0;
+          const dte = trigger.greekDte ?? 0;
           const delta = Math.abs(trigger.greekDelta ?? 0);
           const iv = (trigger.greekIV ?? 0) * 100;
-          const dte = trigger.greekDte ?? 0;
-          const thetaTag = theta > -2 ? { label: 'SAFE', color: 'text-green-400', bg: 'bg-green-500/15' } : theta > -5 ? { label: 'WATCH', color: 'text-amber-400', bg: 'bg-amber-500/15' } : { label: 'DANGER', color: 'text-red-400', bg: 'bg-red-500/15' };
-          const deltaTag = delta < 0.3 ? { label: 'LOW', color: 'text-slate-400' } : delta < 0.6 ? { label: 'MID', color: 'text-blue-400' } : { label: 'HIGH', color: 'text-green-400' };
-          const ivLabel = iv > 50 ? 'Expensive' : iv > 30 ? 'Fair' : 'Cheap';
-          const ivColor = iv > 50 ? 'text-red-400' : iv > 30 ? 'text-amber-400' : 'text-green-400';
+          const thetaLabel = dte >= 10 ? 'SAFE' : dte >= 5 ? 'WATCH' : 'DANGER';
+          const thetaColor = dte >= 10 ? 'text-green-400' : dte >= 5 ? 'text-yellow-400' : 'text-red-400';
+          const deltaLabel = delta >= 0.3 && delta <= 0.5 ? 'MID' : delta > 0.5 ? 'HIGH' : 'LOW';
+          const deltaColor = delta >= 0.3 && delta <= 0.7 ? 'text-green-400' : 'text-yellow-400';
+          const ivLabel = iv > 60 ? 'EXTREME' : iv > 40 ? 'ELEVATED' : iv > 20 ? 'NORMAL' : 'LOW';
+          const ivColor = iv > 60 ? 'text-red-400' : iv > 40 ? 'text-yellow-400' : 'text-green-400';
           return (
-            <div className="mt-2 rounded-lg bg-violet-500/10 border border-violet-500/20 p-2">
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-slate-500">{'\u03B8'}</span>
-                  <span className={`text-[10px] font-bold ${thetaTag.color}`}>{theta.toFixed(1)}</span>
-                  <span className={`px-1 py-0.5 rounded text-[8px] font-bold ${thetaTag.bg} ${thetaTag.color}`}>{thetaTag.label}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-slate-500">{'\u03B4'}</span>
-                  <span className={`text-[10px] font-bold ${deltaTag.color}`}>{(trigger.greekDelta ?? 0).toFixed(2)}</span>
-                  <span className={`text-[9px] ${deltaTag.color}`}>{deltaTag.label}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-slate-500">{'\u03B3'}</span>
-                  <span className="text-[10px] font-bold text-slate-300">{(trigger.greekGamma ?? 0).toFixed(4)}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-slate-500">{'\u03BD'}</span>
-                  <span className="text-[10px] font-bold text-slate-300">{(trigger.greekVega ?? 0).toFixed(2)}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-slate-500">IV</span>
-                  <span className={`text-[10px] font-bold ${ivColor}`}>{iv.toFixed(0)}%</span>
-                  <span className={`text-[9px] ${ivColor}`}>{ivLabel}</span>
-                </div>
-                {trigger.optionRR != null && trigger.optionRR > 0 && (
-                  <div className="flex items-center gap-1">
-                    <span className="text-[9px] text-slate-500">R:R</span>
-                    <span className="text-[10px] font-bold text-emerald-400">{trigger.optionRR.toFixed(1)}</span>
-                  </div>
-                )}
-                {trigger.greekThetaImpaired && (
-                  <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">
-                    {'\u03B8'}-IMPAIRED
-                  </span>
-                )}
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center gap-1 flex-wrap text-[10px] font-mono">
+                <span className="text-slate-400">{'\u03B4'}{(trigger.greekDelta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">{'\u03B3'}{(trigger.greekGamma ?? 0).toFixed(4)}</span>
+                <span className="text-slate-600">|</span>
+                <span className={`${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(trigger.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">DTE {dte}</span>
               </div>
-              {/* DTE Narrative */}
-              {dte > 0 && (
-                <div className="mt-1.5 text-[10px] text-slate-400 leading-relaxed">
-                  {dte <= 2
-                    ? <span className="text-red-400 font-semibold">DTE {dte}d - Expiry imminent. Theta decay accelerating. Exit at T1, do not hold overnight.</span>
-                    : dte <= 5
-                    ? <span className="text-amber-400">DTE {dte}d - Mid-expiry zone. Theta noticeable on premium. Partial exit at T1, trail remainder.</span>
-                    : <span>DTE {dte}d - Comfortable time buffer. Full lot-split exit plan viable (T1 through T4).</span>
-                  }
-                </div>
+              <div className="flex items-center gap-2 text-[10px] font-semibold">
+                <span className={thetaColor}>{'\u03B8'} {thetaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={deltaColor}>{'\u03B4'} {deltaLabel}</span>
+                <span className="text-slate-700">|</span>
+                <span className={ivColor}>IV {ivLabel}</span>
+                {trigger.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── TRADE NARRATIVE ── */}
+        {(() => {
+          const tradeType = classifyMcxBbTradeType(trigger);
+          const instClass = trigger.institutionalClass || 'UNKNOWN';
+          const instLabel = instClass === 'INSTITUTIONAL' ? 'Institutional flow detected' :
+            instClass === 'MIXED' ? 'Mixed retail + institutional' : 'Retail-dominated flow';
+          const instColor = instClass === 'INSTITUTIONAL' ? 'text-violet-400' :
+            instClass === 'MIXED' ? 'text-blue-400' : 'text-slate-500';
+          const sessionNarrative = (() => {
+            const st = trigger.sessionType || '';
+            const w = trigger.sessionWeight ?? 1;
+            if (st === 'US_OVERLAP') return 'COMEX/NYMEX peak — real price discovery window';
+            if (st === 'EUROPE_OVERLAP') return 'LME overlap — London institutional flow';
+            if (st === 'FII_OPEN') return 'FII heavy — overnight allocation orders executing';
+            if (st === 'CLOSING_RUSH') return 'FII+DII EOD rebalancing — high conviction window';
+            if (st === 'EUROPE_FLOW') return 'Europe morning — fresh FII allocation orders';
+            if (st === 'DOMESTIC_OPEN') return 'Domestic institutional open — hedger orders';
+            if (w >= 1.2) return 'High-activity institutional session';
+            return '';
+          })();
+          return (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-start gap-2 text-[10px]">
+                <span className={`font-bold ${tradeType.color} whitespace-nowrap`}>{tradeType.label}</span>
+                <span className="text-slate-400">{tradeType.narrative}</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className={`font-semibold ${instColor}`}>{instLabel}</span>
+                {instClass === 'INSTITUTIONAL' && <span className="text-violet-400/60">({trigger.institutionalScore}/100)</span>}
+              </div>
+              {sessionNarrative && (
+                <div className="text-[10px] text-slate-500 italic">{sessionNarrative}</div>
               )}
             </div>
           );
         })()}
 
-        {/* METRICS GRID */}
-        <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
-          <div className="grid grid-cols-4 gap-2 text-center">
-            {[
-              { val: `${volMultiplier}x`, label: 'Vol Surge', color: parseFloat(volMultiplier) >= 3 ? 'text-green-300' : parseFloat(volMultiplier) >= 2 ? 'text-amber-300' : 'text-slate-300' },
-              { val: `${oiChange}%`, label: 'OI Change', color: absOi >= 100 ? 'text-green-300' : absOi >= 50 ? 'text-amber-300' : 'text-slate-300' },
-              { val: trigger.oiBuildupPct != null ? `${trigger.oiBuildupPct > 0 ? '+' : ''}${trigger.oiBuildupPct.toFixed(1)}%` : 'DM', label: 'OI Buildup%', color: (trigger.oiBuildupPct ?? 0) > 5 ? 'text-green-300' : (trigger.oiBuildupPct ?? 0) > 0 ? 'text-amber-300' : 'text-red-300' },
-              { val: fmt(plan.atr), label: 'ATR', color: 'text-slate-300' },
-            ].map(({ val, label, color }) => (
-              <div key={label}>
-                <div className={`text-sm font-bold font-mono ${color}`}>{val}</div>
-                <div className="text-[9px] text-slate-500 mt-0.5">{label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* OI LABEL */}
-        {oiStyle.text && (
-          <div className="mt-1.5 px-1">
-            <span className={`text-[10px] font-semibold uppercase tracking-wider ${oiStyle.color}`}>
-              {oiStyle.text}
-            </span>
-          </div>
-        )}
-
-        {/* BLOCK TRADE LABEL */}
-        {trigger.blockTradeDetected && (() => {
-          const pct = trigger.blockTradePct ?? 0;
-          const flowLabel = trigger.blockTradeFlowLabel ?? (pct >= 40 ? 'DOMINANT_INSTITUTIONAL' : pct >= 20 ? 'HEAVY_INSTITUTIONAL' : pct >= 10 ? 'MODEST_INSTITUTIONAL' : 'NONE');
-          const isModest = flowLabel === 'MODEST_INSTITUTIONAL';
-          const isHeavy = flowLabel === 'HEAVY_INSTITUTIONAL';
-          const isDominant = flowLabel === 'DOMINANT_INSTITUTIONAL';
-          const hasFlow = isModest || isHeavy || isDominant;
-          const bgColor = isDominant ? 'bg-purple-500/25 border-purple-400/50' : isHeavy ? 'bg-purple-500/20 border-purple-400/40' : isModest ? 'bg-purple-500/15 border-purple-400/30' : 'bg-purple-500/10 border-purple-400/20';
-          const textColor = isDominant ? 'text-purple-200' : isHeavy ? 'text-purple-300' : 'text-purple-300/80';
-          const flowText = isDominant ? 'Dominant Institutional Flow' : isHeavy ? 'Heavy Institutional Activity' : isModest ? 'Modest Institutional Presence' : 'Block Trade Detected';
-          return (
-            <div className={`mt-1.5 px-2 py-1 rounded-md border ${bgColor} flex items-center gap-2`}>
-              <span className={`text-[10px] font-bold uppercase tracking-wider ${textColor}`}>
-                {flowText}
-              </span>
-              <span className={`text-[10px] font-semibold ${hasFlow ? 'text-purple-200' : 'text-purple-400/70'}`}>
-                {Math.round(pct)}%
-              </span>
-              <span className="text-[10px] text-purple-400/60">
-                {((trigger.blockTradeVol ?? 0) / 1000).toFixed(0)}K shares
-              </span>
-            </div>
-          );
-        })()}
-
-        {/* ── TRADE TYPE INSIGHT ── */}
-        <div className="border-t border-slate-700/30 mt-3 pt-2">
-          <div className={`text-xs font-bold ${tradeType.color} mb-0.5`}>{tradeType.label}</div>
-          <p className="text-[11px] text-slate-400 leading-relaxed">{tradeType.narrative}</p>
-        </div>
-
-        {/* INSUFFICIENT FUNDS LABEL (clickable → Add Funds) */}
+        {/* -- INSUFFICIENT FUNDS LABEL (clickable -> Add Funds) -- */}
         {sizing.insufficientFunds && !sizing.disabled && (
           <button
             onClick={() => onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence)}
             className="mt-3 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 transition-colors cursor-pointer text-left"
           >
             <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-            <span className="text-[11px] text-orange-400">Insufficient Funds &#8212; forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
+            <span className="text-[11px] text-orange-400">Insufficient Funds — forced 1 lot (need +&#8377;{sizing.creditAmount.toLocaleString('en-IN')})</span>
             <span className="ml-auto text-[10px] text-orange-300 font-semibold whitespace-nowrap">Add Funds →</span>
           </button>
         )}
 
-        {/* FUNDED TRADE BADGE */}
+        {/* -- FUNDED TRADE BADGE -- */}
         {isFunded && (
-          <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
-            <span className="text-emerald-400 font-bold text-sm">₹</span>
-            <span className="text-[10px] text-emerald-400">Trade executed with added funds</span>
+          <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-lime-500/10 border border-lime-500/25">
+            <span className="text-lime-400 font-bold text-sm">₹</span>
+            <span className="text-[10px] text-lime-400">Trade executed with added funds</span>
           </div>
         )}
 
-        {/* FUTURES FALLBACK REASON */}
-        {instrumentMode === 'FUTURES' && trigger.optionFailureReason && (
+        {/* -- FUTURES FALLBACK REASON -- */}
+        {instrumentMode === 'FUTURES' && trigger.optionAvailable === false && (
           <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/25">
             <Zap className="w-3 h-3 text-blue-400/80 flex-shrink-0" />
             <span className="text-[10px] text-blue-400/80">
-              FUT: {trigger.optionFailureReason}
+              FUT: Options not available, using futures contract
             </span>
           </div>
         )}
 
-        {/* ESTIMATED DATA WARNING */}
+        {/* -- ESTIMATED DATA WARNING -- */}
         {isEstimatedPremium && instrumentMode !== 'NONE' && (
           <div className="mt-2 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/25">
             <AlertTriangle className="w-3 h-3 text-yellow-400/80 flex-shrink-0" />
@@ -1015,44 +836,17 @@ const FudkoiCard: React.FC<{
           <span className={`px-1 rounded whitespace-nowrap ${instrumentMode === 'NONE' ? 'bg-red-500/30 text-red-300' : instrumentMode === 'FUTURES' ? 'bg-blue-500/30 text-blue-300' : 'bg-green-500/30 text-green-300'}`}>
             {instrumentMode}
           </span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">conf={confidence}%</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">score={confidence}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lots={sizing.lots}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={fmt(premium)}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={Number(premium.toFixed(2))}</span>
           {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
-          {trigger.blockTradeDetected && (() => {
-  const pct = trigger.blockTradePct ?? 0;
-  const label = pct >= 40 ? 'DOM' : pct >= 20 ? 'HVY' : pct >= 10 ? 'MOD' : 'BLK';
-  const bg = pct >= 40 ? 'bg-purple-500/40 text-purple-200' : pct >= 20 ? 'bg-purple-500/30 text-purple-300' : 'bg-purple-500/20 text-purple-300';
-  return <span className={`px-1 rounded ${bg} whitespace-nowrap`}>{label} {Math.round(pct)}%</span>;
-})()}
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">alloc={sizing.allocPct}%</span>
-          <span className={`px-1 rounded whitespace-nowrap ${(trigger.gapQualityScore ?? 1) < 0.10 ? 'bg-red-500/40 text-red-300 font-bold' : (trigger.gapQualityScore ?? 1) < 0.50 ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-600/50 text-slate-300'}`}>
-            GQS={trigger.gapQualityScore?.toFixed(3) ?? '1.000'}
-          </span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
         </div>
 
-        {/* GQS DETAIL (shown when penalized) */}
-        {trigger.gapQualityScore != null && trigger.gapQualityScore < 0.50 && (
-          <div className="mt-1 flex gap-1 text-[9px] font-mono overflow-x-auto pb-0.5 custom-scrollbar -mx-1 px-1">
-            <span className="px-1 rounded bg-red-500/20 text-red-300 whitespace-nowrap">
-              Gap/ATR={trigger.gqsGapAtrRatio?.toFixed(1) ?? 'DM'}x
-            </span>
-            <span className={`px-1 rounded whitespace-nowrap ${trigger.gqsCandleOpposesGap ? 'bg-red-500/20 text-red-300' : 'bg-green-500/20 text-green-300'}`}>
-              {trigger.gqsCandleOpposesGap ? 'Recovery candle' : 'Continuation'}
-            </span>
-            <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">
-              GapRecov={trigger.gqsGapRecoveryPct?.toFixed(0) ?? 'DM'}%
-            </span>
-            <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">
-              ATR={trigger.gqsGapAtrRatio?.toFixed(1)} Cdl={trigger.gqsCandleScore?.toFixed(2)} Blk={trigger.gqsBlockFactor?.toFixed(2)} Div={trigger.gqsDivergenceScore?.toFixed(2)} Rec={trigger.gqsRecoveryScore?.toFixed(2)}
-            </span>
-          </div>
-        )}
-
-        {/* BUY BUTTON */}
+        {/* -- BUY BUTTON -- */}
         {instrumentMode === 'NONE' ? (
           <button
             disabled
@@ -1065,7 +859,7 @@ const FudkoiCard: React.FC<{
             disabled
             className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
           >
-            Confidence {confidence}% &lt; 60% &#8212; No Trade
+            Score {confidence} &lt; 60 — No Trade
           </button>
         ) : (
           <div className="relative mt-4">
@@ -1194,16 +988,15 @@ const FudkoiCard: React.FC<{
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   MAIN: FUDKOI TAB CONTENT
+   MAIN: MCX-BB-15 TAB CONTENT
    ═══════════════════════════════════════════════════════════════ */
 
-export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh = true }) => {
+export const McxBb15TabContent: React.FC<McxBb15TabContentProps> = ({ autoRefresh = true }) => {
   const navigate = useNavigate();
-  const [triggers, setTriggers] = useState<FudkoiTrigger[]>([]);
+  const [triggers, setTriggers] = useState<McxBbTrigger[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sortField, setSortField] = useState<SortField>('oi');
+  const [sortField, setSortField] = useState<SortField>('timestamp');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
-  const [exchangeFilter, setExchangeFilter] = useState<ExchangeFilter>('ALL');
   const [showFilter, setShowFilter] = useState(false);
   const [showSort, setShowSort] = useState(false);
   const [execution, setExecution] = useState<ExecutionState>({
@@ -1216,7 +1009,7 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
     openPositionCount: 0, positionsByExchange: { N: 0, M: 0, C: 0 },
   });
   const [fundModal, setFundModal] = useState<{
-    strategyKey: string; creditAmount: number; sig: FudkoiTrigger; plan: TradePlan;
+    strategyKey: string; creditAmount: number; sig: McxBbTrigger; plan: TradePlan;
     premium: number; lotSize: number; multiplier: number; confidence: number;
   } | null>(null);
   const [fundedScripCodes, setFundedScripCodes] = useState<Set<string>>(new Set());
@@ -1228,42 +1021,43 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
     pendingBuy: () => void;
   } | null>(null);
 
-  const fetchFudkoi = useCallback(async () => {
+  const fetchTriggers = useCallback(async () => {
     try {
-      const data = await fetchJson<FudkoiTrigger[]>('/strategy-state/fudkoi/history/list');
+      const data = await fetchJson<McxBbTrigger[]>('/strategy-state/mcxbb15/triggers');
       if (Array.isArray(data)) {
         setTriggers(data);
       }
     } catch (err) {
-      console.error('Error fetching FUDKOI triggers:', err);
+      console.error('Error fetching MCX-BB-15 triggers:', err);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchFudkoi(); // Initial full history load
+    fetchTriggers(); // Initial load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchFudkoi, 60000); // 60s fallback safety net
+      interval = setInterval(fetchTriggers, 60000); // 60s fallback safety net
     }
     // WebSocket push: prepend new triggered signals in real-time
     const onWsSignal = (e: Event) => {
       const sig = (e as CustomEvent).detail;
       if (sig && sig.scripCode) {
         setTriggers(prev => {
-          if (prev.some(s => s.scripCode === sig.scripCode && s.triggerTimeEpoch === sig.triggerTimeEpoch)) return prev;
+          if (prev.some(s => s.scripCode === sig.scripCode)) return prev;
           return [sig, ...prev];
         });
       }
     };
-    window.addEventListener('fudkoi-signal', onWsSignal);
+    window.addEventListener('mcxbb-signal', onWsSignal);
     return () => {
       if (interval) clearInterval(interval);
-      window.removeEventListener('fudkoi-signal', onWsSignal);
+      window.removeEventListener('mcxbb-signal', onWsSignal);
     };
-  }, [autoRefresh, fetchFudkoi]);
+  }, [autoRefresh, fetchTriggers]);
 
+  // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
@@ -1276,10 +1070,11 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
     return () => document.removeEventListener('click', handler);
   }, []);
 
+  // Fetch wallet state for slot-based sizing
   useEffect(() => {
     const fetchCapital = async () => {
       try {
-        const data = await strategyWalletsApi.getCapital('FUDKOI');
+        const data = await strategyWalletsApi.getCapital('MCX_BB_15');
         if (data?.currentCapital != null) setWalletState({
           availableMargin: data.availableMargin ?? data.currentCapital,
           usedMargin: data.usedMargin ?? 0,
@@ -1293,57 +1088,50 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
     const interval = setInterval(fetchCapital, 30000);
     const onWalletUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.strategy === 'FUDKOI') fetchCapital();
+      if (detail?.strategy === 'MCX_BB_15' || detail?.strategy === 'MCX-BB-15') fetchCapital();
     };
     window.addEventListener('wallet-update', onWalletUpdate);
     return () => { clearInterval(interval); window.removeEventListener('wallet-update', onWalletUpdate); };
   }, []);
 
-  const hasActiveFilter = directionFilter !== 'ALL' || exchangeFilter !== 'ALL';
+  /* -- FILTER -- */
+  const hasActiveFilter = directionFilter !== 'ALL';
 
-  let filtered = triggers.filter(t => t.triggered !== false);
+  let filtered = triggers.filter(t => t.triggered);
   if (directionFilter !== 'ALL') {
     filtered = filtered.filter(s => s.direction === directionFilter);
   }
-  if (exchangeFilter !== 'ALL') {
-    filtered = filtered.filter(s => s.exchange === exchangeFilter);
-  }
 
+  /* -- ENRICH WITH TRADE PLANS -- */
   const enriched = filtered.map(sig => ({ sig, plan: extractTradePlan(sig) }));
 
+  /* -- SORT -- */
   const sorted = [...enriched].sort((a, b) => {
     switch (sortField) {
-      case 'oi':
-        return (b.sig.oiChangeRatio ?? 0) - (a.sig.oiChangeRatio ?? 0) || getEpoch(b.sig) - getEpoch(a.sig);
-      case 'strength':
-        return computeStrength(b.sig, b.plan) - computeStrength(a.sig, a.plan) || getEpoch(b.sig) - getEpoch(a.sig);
-      case 'confidence':
-        return computeConfidence(b.sig) - computeConfidence(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
+      case 'score':
+        return b.sig.triggerScore - a.sig.triggerScore;
       case 'rr':
-        return b.plan.rr - a.plan.rr || getEpoch(b.sig) - getEpoch(a.sig);
-      case 'time':
-        return getEpoch(b.sig) - getEpoch(a.sig);
-      case 'volume':
-        return computeVolumeSurge(b.sig) - computeVolumeSurge(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
+        return b.plan.rr - a.plan.rr;
+      case 'surge':
+        return (b.sig.surgeT ?? 0) - (a.sig.surgeT ?? 0);
       case 'timestamp':
-        return getEpoch(b.sig) - getEpoch(a.sig);
       default:
-        return 0;
+        return 0; // preserve server order (most recent first)
     }
   });
 
-  const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'OI Change %';
+  const sortLabel = SORT_OPTIONS.find(o => o.key === sortField)?.label || 'Recent';
 
-  /* ── EXECUTE TRADE (inner) — builds request and sends to backend ── */
+  /* -- EXECUTE TRADE (inner) -- builds request and sends to backend -- */
   const executeTrade = useCallback(async (
-    sig: FudkoiTrigger, plan: TradePlan, lots: number,
+    sig: McxBbTrigger, plan: TradePlan, lots: number,
     overrideEntry?: number, overrideSl?: number,
     overrideT1?: number | null, overrideT2?: number | null,
     overrideT3?: number | null, overrideT4?: number | null
   ) => {
     const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
     const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
-    const isCurrencyPair = /^(USD|EUR|GBP|JPY)INR$/i.test(sig.symbol);
+    const isLong = sig.direction === 'BULLISH';
 
     let premium = 0;
     let instrumentSymbol = '';
@@ -1351,11 +1139,13 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
     let lotSize = 1;
     let multiplier = 1;
     let tradingScripCode = sig.scripCode;
-    let strike = sig.optionStrike ?? plan.strike;
-    let optionType: 'CE' | 'PE' = (sig.optionType ?? plan.optionType) as 'CE' | 'PE';
+    let strike = plan.strike;
+    let optionType: 'CE' | 'PE' = plan.optionType;
 
     if (hasRealOption) {
       premium = sig.optionLtp!;
+      strike = sig.optionStrike ?? plan.strike;
+      optionType = (sig.optionType ?? plan.optionType) as 'CE' | 'PE';
       instrumentSymbol = `${sig.symbol} ${strike} ${optionType}`;
       lotSize = sig.optionLotSize ?? 1;
       multiplier = sig.optionMultiplier ?? 1;
@@ -1375,12 +1165,6 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
       multiplier = sig.futuresMultiplier ?? 1;
       tradingScripCode = sig.futuresScripCode ?? sig.scripCode;
       instrumentType = 'FUTURES';
-    } else if (isCurrencyPair) {
-      premium = sig.triggerPrice;
-      instrumentSymbol = `${sig.symbol}`;
-      tradingScripCode = sig.scripCode;
-      lotSize = 1;
-      instrumentType = 'FUTURES';
     } else {
       premium = estimateOptionPremium(plan);
       instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType ?? ''}`;
@@ -1397,9 +1181,7 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
       optionType,
       lots,
       filledPrice: entryPrice,
-      riskPercent: plan.sl && sig.triggerPrice
-        ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
-        : 0.8,
+      riskPercent: 0.8,
       status: 'sending',
     });
 
@@ -1431,13 +1213,15 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
       if (overrideT3 !== undefined) tradeT3 = overrideT3 ?? 0;
       if (overrideT4 !== undefined) tradeT4 = overrideT4 ?? 0;
 
+      const confidence = Math.round(sig.triggerScore);
+
       const req: StrategyTradeRequest = {
         scripCode: tradingScripCode,
         instrumentSymbol,
         instrumentType,
         underlyingScripCode: sig.scripCode,
         underlyingSymbol: sig.symbol || sig.scripCode,
-        side: instrumentType === 'OPTION' ? 'BUY' : (sig.direction === 'BULLISH' ? 'BUY' : 'SELL'),
+        side: instrumentType === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL'),
         quantity: lots * lotSize,
         lots,
         lotSize,
@@ -1455,12 +1239,12 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
         equityT3: plan.t3 ?? 0,
         equityT4: plan.t4 ?? 0,
         delta,
-        optionType: hasRealOption ? (sig.optionType as 'CE' | 'PE') : undefined,
-        strike: sig.optionStrike ?? plan.strike,
-        strategy: 'FUDKOI',
-        exchange: sig.exchange || 'N',
-        direction: sig.direction as 'BULLISH' | 'BEARISH',
-        confidence: computeConfidence(sig),
+        optionType: instrumentType === 'OPTION' ? optionType : undefined,
+        strike,
+        strategy: 'MCX_BB_15',
+        exchange: sig.exchange,
+        direction: isLong ? 'BULLISH' : 'BEARISH',
+        confidence,
         executionMode: 'MANUAL',
       };
 
@@ -1468,10 +1252,12 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
 
       setExecution(prev => ({
         ...prev,
-        status: result?.success ? 'filled' : 'error',
+        status: 'filled',
         filledPrice: result?.entryPrice ?? entryPrice,
         orderId: result?.tradeId,
-        errorMessage: result.error,
+        riskPercent: plan.sl && sig.triggerPrice
+          ? Math.round(Math.abs(sig.triggerPrice - plan.sl) / sig.triggerPrice * 100 * 10) / 10
+          : 0.8,
       }));
     } catch (err) {
       setExecution(prev => ({
@@ -1482,8 +1268,8 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
     }
   }, []);
 
-  /* ── BUY HANDLER — stale price check then dispatch ── */
-  const handleBuy = useCallback(async (sig: FudkoiTrigger, plan: TradePlan, lots: number) => {
+  /* -- BUY HANDLER -- stale price check then dispatch -- */
+  const handleBuy = useCallback(async (sig: McxBbTrigger, plan: TradePlan, lots: number) => {
     const hasRealOption = sig.optionAvailable === true && sig.optionLtp != null && sig.optionLtp > 0;
     const hasFutures = sig.futuresAvailable === true && sig.futuresLtp != null && sig.futuresLtp > 0;
     const ltpScripCode = hasRealOption ? (sig.optionScripCode ?? sig.scripCode)
@@ -1552,7 +1338,6 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
 
   const resetFilters = useCallback(() => {
     setDirectionFilter('ALL');
-    setExchangeFilter('ALL');
     setShowFilter(false);
   }, []);
 
@@ -1562,38 +1347,43 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
 
   return (
     <div className="relative">
-      {/* STICKY HEADER */}
+      {/* -- STICKY HEADER (56px) -- */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
         <div className="flex items-center justify-between h-14 px-2 sm:px-4">
-          <h1 className="text-lg font-semibold text-teal-400 tracking-tight">FUDKOI</h1>
-
+          {/* Left: Title */}
           <div className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-lime-400" />
+            <h1 className="text-lg font-semibold text-lime-400 tracking-tight">MCX-BB-15</h1>
+          </div>
+
+          {/* Right: Filter + Sort icons */}
+          <div className="flex items-center gap-2">
+            {/* Filter */}
             <div className="relative" data-dropdown>
               <button
                 onClick={(e) => { e.stopPropagation(); setShowFilter(!showFilter); setShowSort(false); }}
                 className={`relative p-2 rounded-lg transition-colors ${
                   hasActiveFilter
-                    ? 'bg-teal-500/15 text-teal-400'
+                    ? 'bg-lime-500/15 text-lime-400'
                     : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
               >
                 <Filter className="w-5 h-5" />
                 {hasActiveFilter && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-teal-400" />
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-400" />
                 )}
               </button>
               {showFilter && (
                 <FilterDropdown
                   direction={directionFilter}
-                  exchange={exchangeFilter}
                   onDirectionChange={setDirectionFilter}
-                  onExchangeChange={setExchangeFilter}
                   onClose={() => setShowFilter(false)}
                   onReset={resetFilters}
                 />
               )}
             </div>
 
+            {/* Sort */}
             <div className="relative" data-dropdown>
               <button
                 onClick={(e) => { e.stopPropagation(); setShowSort(!showSort); setShowFilter(false); }}
@@ -1608,6 +1398,7 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
           </div>
         </div>
 
+        {/* Sort chip below header */}
         <div className="px-2 sm:px-4 pb-2">
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-800/80 text-[12px] text-slate-400 border border-slate-700/50">
             Sorted by {sortLabel}
@@ -1615,30 +1406,33 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
         </div>
       </div>
 
-      {/* CONTENT */}
+      {/* -- CONTENT -- */}
       <div className="pt-4 pb-8">
+        {/* Loading */}
         {loading && triggers.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20">
-            <RefreshCw className="w-8 h-8 text-teal-400 animate-spin mb-4" />
-            <span className="text-slate-500 text-sm">Loading FUDKOI signals...</span>
+            <RefreshCw className="w-8 h-8 text-lime-400 animate-spin mb-4" />
+            <span className="text-slate-500 text-sm">Loading MCX-BB-15-30 signals...</span>
           </div>
         )}
 
+        {/* Empty */}
         {!loading && sorted.length === 0 && (
           <EmptyState hasFilters={hasActiveFilter} onReset={resetFilters} />
         )}
 
+        {/* Cards Grid: 1 col mobile, 3 col desktop */}
         {sorted.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 xl:gap-6 xl:px-4">
             {sorted.map(({ sig, plan }) => (
-              <FudkoiCard
-                key={`${sig.scripCode}-${getEpoch(sig)}`}
+              <McxBbCard
+                key={sig.scripCode}
                 trigger={sig}
                 plan={plan}
                 walletState={walletState}
                 onBuy={handleBuy}
                 onRequestFunds={(s, p, credit, prem, lotSz, mult, conf) => {
-                  setFundModal({ strategyKey: 'FUDKOI', creditAmount: credit, sig: s, plan: p, premium: prem, lotSize: lotSz, multiplier: mult, confidence: conf });
+                  setFundModal({ strategyKey: 'MCX_BB_15', creditAmount: credit, sig: s, plan: p, premium: prem, lotSize: lotSz, multiplier: mult, confidence: conf });
                 }}
                 isFunded={fundedScripCodes.has(sig.scripCode)}
               />
@@ -1647,6 +1441,7 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
         )}
       </div>
 
+      {/* -- EXECUTION OVERLAY -- */}
       <ExecutionOverlay
         state={execution}
         onClose={() => setExecution(s => ({ ...s, visible: false }))}
@@ -1656,7 +1451,7 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
         }}
       />
 
-      {/* ── FUND TOP-UP MODAL ── */}
+      {/* -- FUND TOP-UP MODAL -- */}
       {fundModal && (
         <FundTopUpModal
           strategyKey={fundModal.strategyKey}
@@ -1675,7 +1470,7 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
                 positionsByExchange: data?.positionsByExchange ?? { N: 0, M: 0, C: 0 },
               };
               setWalletState(newWallet);
-              const newSizing = computeSlotSizing(ctx.confidence, newWallet, ctx.premium, ctx.lotSize, ctx.multiplier, 'N', 2.0, 60);
+              const newSizing = computeSlotSizing(ctx.confidence, newWallet, ctx.premium, ctx.lotSize, ctx.multiplier, 'M', 2.0, 60);
               if (!newSizing.disabled && newSizing.lots > 0) {
                 setFundedScripCodes(prev => new Set(prev).add(ctx.sig.scripCode));
                 handleBuy(ctx.sig, ctx.plan, newSizing.lots);
@@ -1713,4 +1508,4 @@ export const FudkoiTabContent: React.FC<FudkoiTabContentProps> = ({ autoRefresh 
   );
 };
 
-export default FudkoiTabContent;
+export default McxBb15TabContent;

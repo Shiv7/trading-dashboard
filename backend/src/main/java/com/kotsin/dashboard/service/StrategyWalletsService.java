@@ -30,7 +30,7 @@ public class StrategyWalletsService {
     private static final double INITIAL_CAPITAL = 1_000_000.0; // 10 Lakh
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
-    private static final List<String> STRATEGY_KEYS = StrategyNameResolver.ALL_STRATEGY_KEYS;
+    private static final List<String> STRATEGY_KEYS = StrategyNameResolver.ACTIVE_STRATEGY_KEYS;
     private static final Map<String, String> DISPLAY_NAMES = StrategyNameResolver.DISPLAY_NAMES;
 
     // ─────────────────────────────────────────────
@@ -145,28 +145,32 @@ public class StrategyWalletsService {
             }
         }
 
-        // Add unrealized P&L + MCX capital usage from active Redis positions
+        // Add unrealized P&L + MCX capital usage + open position count from active Redis positions
         try {
             List<Map<String, Object>> activePositions = getActivePositions();
             Map<String, Double> unrealizedByStrategy = new HashMap<>();
             Map<String, Double> mcxMarginByStrategy = new HashMap<>();
+            Map<String, Integer> openCountByStrategy = new HashMap<>();
             for (Map<String, Object> pos : activePositions) {
                 String strategy = (String) pos.get("strategy");
                 String norm = StrategyNameResolver.normalize(strategy);
                 if (!StrategyNameResolver.ALL_STRATEGY_KEYS.contains(norm)) continue;
+                // Use display name as key so lookups match s.getStrategy()
+                String displayKey = DISPLAY_NAMES.getOrDefault(norm, norm);
                 double unrealizedPnl = pos.get("unrealizedPnl") != null
                         ? ((Number) pos.get("unrealizedPnl")).doubleValue() : 0;
-                unrealizedByStrategy.merge(norm, unrealizedPnl, Double::sum);
+                unrealizedByStrategy.merge(displayKey, unrealizedPnl, Double::sum);
+                openCountByStrategy.merge(displayKey, 1, Integer::sum);
 
                 // MCX capital: sum avgEntry * qtyOpen for exchange "M"
                 String exchange = pos.get("exchange") != null ? pos.get("exchange").toString().trim() : "";
                 if (exchange.equalsIgnoreCase("M")) {
                     double avgEntry = pos.get("avgEntry") != null ? ((Number) pos.get("avgEntry")).doubleValue() : 0;
                     int qtyOpen = pos.get("qtyOpen") != null ? ((Number) pos.get("qtyOpen")).intValue() : 0;
-                    mcxMarginByStrategy.merge(norm, avgEntry * qtyOpen, Double::sum);
+                    mcxMarginByStrategy.merge(displayKey, avgEntry * qtyOpen, Double::sum);
                 }
             }
-            // Update summaries with live unrealized P&L + MCX margin from positions
+            // Update summaries with live unrealized P&L + MCX margin + open count from positions
             for (StrategyWalletDTO.StrategySummary s : result) {
                 Double positionUnrealized = unrealizedByStrategy.get(s.getStrategy());
                 double unrealFromPositions = positionUnrealized != null ? positionUnrealized : 0;
@@ -177,6 +181,7 @@ public class StrategyWalletsService {
                 s.setTotalPnlPercent(round2(s.getTotalPnl() / s.getInitialCapital() * 100));
                 Double mcxMargin = mcxMarginByStrategy.get(s.getStrategy());
                 s.setMcxUsedMargin(round2(mcxMargin != null ? mcxMargin : 0));
+                s.setOpenPositionCount(openCountByStrategy.getOrDefault(s.getStrategy(), 0));
             }
         } catch (Exception e) {
             log.error("ERR [STRATEGY-WALLETS] Error adding active position P&L: {}", e.getMessage());
@@ -489,8 +494,9 @@ public class StrategyWalletsService {
             }
             String exitReason = doc.getString("exitReason");
             String norm = StrategyNameResolver.extractFromDocument(doc);
+            String displayName = DISPLAY_NAMES.getOrDefault(norm, norm);
             String rawSrc = doc.getString("signalSource");
-            String docVariant = (rawSrc != null && !rawSrc.equalsIgnoreCase(norm)) ? rawSrc : null;
+            String docVariant = (rawSrc != null && !rawSrc.equalsIgnoreCase(norm) && !rawSrc.equalsIgnoreCase(displayName)) ? rawSrc : null;
 
             boolean stopHit = Boolean.TRUE.equals(doc.getBoolean("stopHit"));
             boolean t1 = Boolean.TRUE.equals(doc.getBoolean("target1Hit"));

@@ -60,7 +60,7 @@ public class RiskAnalyticsService {
             totalDayPnl += w.getDayPnl();
             totalUsedMargin += w.getUsedMargin();
             totalAvailableMargin += w.getAvailableMargin();
-            totalOpenPositions += w.getMaxOpenPositions();
+            totalOpenPositions += w.getOpenPositionCount();
             if (w.isCircuitBreakerTripped()) circuitBreakersTripped++;
 
             weightedHealthSum += profile.getHealthScore() * w.getCurrentCapital();
@@ -224,10 +224,16 @@ public class RiskAnalyticsService {
 
         boolean winRateDeclining = last10WinRate < (w.getWinRate() - 5);
 
-        // Health score
+        // Check if traded recently (last 3 days)
+        boolean tradedRecently = !recentTrades.isEmpty() && recentTrades.get(0).getExitTime() != null
+                && recentTrades.get(0).getExitTime().isAfter(LocalDateTime.now(IST).minusDays(3));
+
+        // Health score — 4-axis additive model
         int healthScore = computeHealthScore(
-                w.isCircuitBreakerTripped(), dailyLossPct, drawdownPct,
-                winRateDeclining, consecutiveLosses, marginUtilPct);
+                drawdownPct, dailyLossPct,
+                w.getWinRate(), avgRMultiple, w.getProfitFactor(), w.getTotalTrades(),
+                w.getDayTradeCount(), w.getOpenPositionCount(), tradedRecently,
+                w.isCircuitBreakerTripped(), consecutiveLosses, marginUtilPct, winRateDeclining);
 
         return StrategyRiskProfile.builder()
                 .strategy(w.getStrategy())
@@ -247,7 +253,7 @@ public class RiskAnalyticsService {
                 .profitFactor(round2(w.getProfitFactor()))
                 .totalTradeCount(w.getTotalTrades())
                 .dayTradeCount(w.getDayTradeCount())
-                .openPositionCount(w.getMaxOpenPositions())
+                .openPositionCount(w.getOpenPositionCount())
                 // Computed risk metrics
                 .healthScore(healthScore)
                 .healthStatus(healthStatus(healthScore))
@@ -267,32 +273,69 @@ public class RiskAnalyticsService {
     //  Health score
     // ════════════════════════════════════════════
 
-    private int computeHealthScore(boolean circuitBreaker, double dailyLossPct,
-                                   double drawdownPct, boolean winRateDeclining,
-                                   int consecutiveLosses, double marginUtilPct) {
-        double score = 100;
+    /**
+     * 4-axis health score: Capital Safety (25) + Trade Quality (25) + Activity (25) + Risk Discipline (25).
+     * Additive model — each axis earned independently. Idle strategies score low (no activity).
+     */
+    private int computeHealthScore(
+            double drawdownPct, double dailyLossPct,
+            double winRate, double avgRMultiple, double profitFactor, int totalTrades,
+            int dayTradeCount, int openPositionCount, boolean tradedRecently,
+            boolean circuitBreaker, int consecutiveLosses, double marginUtilPct, boolean winRateDeclining) {
 
-        if (circuitBreaker) score -= 50;
-
-        if (dailyLossPct > 70) {
-            score -= Math.min(45, (dailyLossPct - 70) * 1.5);
+        // ── Axis 1: Capital Safety (25 pts) ──
+        // Drawdown: 0% = 25, 15%+ = 0, linear interpolation
+        double capitalSafety = Math.max(0, 25 - (drawdownPct * 25.0 / 15.0));
+        // Deduct up to 5 for high daily loss utilization (>50% of limit)
+        if (dailyLossPct > 50) {
+            capitalSafety -= Math.min(5, (dailyLossPct - 50) / 10.0);
         }
+        capitalSafety = Math.max(0, Math.min(25, capitalSafety));
 
-        if (drawdownPct > 5) {
-            score -= (drawdownPct - 5) * 2;
+        // ── Axis 2: Trade Quality (25 pts) ──
+        double tradeQuality;
+        if (totalTrades == 0) {
+            tradeQuality = 12; // Neutral — no data yet
+        } else {
+            // Win rate: 30% = 0pts, 50% = 10pts, capped at 10
+            double wrScore = Math.min(10, Math.max(0, (winRate - 30) / 2.0));
+            // R-multiple: 0 = 0pts, 2.0 = 8pts, capped at 8
+            double rScore = Math.min(8, Math.max(0, avgRMultiple * 4.0));
+            // Profit factor: 0.5 = 0pts, 2.0 = 7pts, capped at 7
+            double pfScore = Math.min(7, Math.max(0, (profitFactor - 0.5) * 4.67));
+            tradeQuality = wrScore + rScore + pfScore;
         }
+        tradeQuality = Math.max(0, Math.min(25, tradeQuality));
 
-        if (winRateDeclining) score -= 10;
-
-        if (consecutiveLosses > 2) {
-            score -= consecutiveLosses * 5;
+        // ── Axis 3: Activity (25 pts) ──
+        double activity;
+        if (totalTrades == 0) {
+            activity = 0; // Inactive — never traded
+        } else {
+            activity = 0;
+            if (dayTradeCount > 0) activity += 10;     // Traded today
+            if (openPositionCount > 0) activity += 5;   // Has live positions
+            if (tradedRecently) activity += 10;          // Traded in last 3 days
         }
+        activity = Math.max(0, Math.min(25, activity));
 
-        if (marginUtilPct > 80) {
-            score -= (marginUtilPct - 80);
-        }
+        // ── Axis 4: Risk Discipline (25 pts) ──
+        double discipline = 0;
+        // Circuit breaker: not tripped = +10
+        if (!circuitBreaker) discipline += 10;
+        // Consecutive losses: 0-2 = +7, 3 = +3, 4 = +1, 5+ = 0
+        if (consecutiveLosses <= 2) discipline += 7;
+        else if (consecutiveLosses == 3) discipline += 3;
+        else if (consecutiveLosses == 4) discipline += 1;
+        // Margin utilization: <50% = +5, 50-80% = +3, >80% = 0
+        if (marginUtilPct < 50) discipline += 5;
+        else if (marginUtilPct < 80) discipline += 3;
+        // Win rate stable: +3
+        if (!winRateDeclining) discipline += 3;
+        discipline = Math.max(0, Math.min(25, discipline));
 
-        return (int) Math.round(Math.max(0, Math.min(100, score)));
+        double total = capitalSafety + tradeQuality + activity + discipline;
+        return (int) Math.round(Math.max(0, Math.min(100, total)));
     }
 
     private String healthStatus(int score) {

@@ -12,7 +12,15 @@ public final class StrategyNameResolver {
     private StrategyNameResolver() {}
 
     public static final List<String> ALL_STRATEGY_KEYS = List.of(
-            "FUDKII", "FUKAA", "FUDKOI", "PIVOT_CONFLUENCE", "MICROALPHA", "MERE", "QUANT", "MCX_BB", "MCX_BBT1"
+            "FUDKII", "FUKAA", "FUDKOI", "PIVOT_CONFLUENCE", "MICROALPHA", "MERE", "QUANT",
+            "MCX_BB", "MCX_BBT1", // DEPRECATED — kept for normalize() and historical data
+            "MCX_BB_15", "MCX_BB_30", "NSE_BB_30"
+    );
+
+    /** Active strategies shown on dashboard (excludes deprecated MCX_BB / MCX_BBT1) */
+    public static final List<String> ACTIVE_STRATEGY_KEYS = List.of(
+            "FUDKII", "FUKAA", "FUDKOI", "PIVOT_CONFLUENCE", "MICROALPHA", "MERE", "QUANT",
+            "MCX_BB_15", "MCX_BB_30", "NSE_BB_30"
     );
 
     public static final Map<String, String> DISPLAY_NAMES = Map.ofEntries(
@@ -25,6 +33,9 @@ public final class StrategyNameResolver {
             Map.entry("QUANT", "QUANT"),
             Map.entry("MCX_BB", "MCX-BB"),
             Map.entry("MCX_BBT1", "MCX-BBT+1"),
+            Map.entry("MCX_BB_15", "MCX-BB-15"),
+            Map.entry("MCX_BB_30", "MCX-BB-30"),
+            Map.entry("NSE_BB_30", "NSE-BB-30"),
             Map.entry("MANUAL", "MANUAL")
     );
 
@@ -47,6 +58,9 @@ public final class StrategyNameResolver {
         if (upper.contains("MERE"))   return "MERE"; // MERE_SCALP, MERE_SWING, MERE_POSITIONAL → MERE
         if (upper.contains("QUANT"))  return "QUANT";
         if (upper.contains("MCX_BBT1") || upper.contains("MCXBBT1") || upper.contains("MCX-BBT1")) return "MCX_BBT1";
+        if (upper.contains("MCX_BB_15") || upper.contains("MCXBB15") || upper.contains("MCX-BB-15")) return "MCX_BB_15";
+        if (upper.contains("MCX_BB_30") || upper.contains("MCXBB30") || upper.contains("MCX-BB-30")) return "MCX_BB_30";
+        if (upper.contains("NSE_BB_30") || upper.contains("NSEBB30") || upper.contains("NSE-BB-30")) return "NSE_BB_30";
         if (upper.contains("MCX_BB") || upper.contains("MCXBB") || upper.contains("MCX-BB")) return "MCX_BB";
 
         return "MANUAL";

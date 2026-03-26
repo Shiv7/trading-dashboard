@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * StrategyTradeExecutor - Manages virtual strategy option/futures trades.
@@ -85,7 +86,16 @@ public class StrategyTradeExecutor {
     @Value("${strategy.exit.dd.hard.min:0.50}")
     private double ddHardMin;
 
+    @Value("${optionproducer.api.base:http://localhost:8208}")
+    private String optionProducerBaseUrl;
+
+    // Stale-price tracking: scripCode → {price, timestamp}
+    private final ConcurrentHashMap<String, double[]> lastPriceSnapshot = new ConcurrentHashMap<>();
+    private static final long STALE_PRICE_THRESHOLD_MS = 30_000; // 30 seconds
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+        .connectTimeout(java.time.Duration.ofMillis(500)).build();
 
     /**
      * Open a new strategy trade.
@@ -200,6 +210,9 @@ public class StrategyTradeExecutor {
         position.put("optionType", req.getOptionType());  // CE / PE / null
         position.put("optionExpiry", req.getOptionExpiry());  // expiry date string
         position.put("delta", req.getDelta());
+        if (req.getDeltaFallbackReason() != null) {
+            position.put("deltaFallbackReason", req.getDeltaFallbackReason());
+        }
         position.put("instrumentSymbol", req.getInstrumentSymbol());
         position.put("underlyingScripCode", req.getUnderlyingScripCode());
         position.put("confidence", req.getConfidence());
@@ -262,6 +275,13 @@ public class StrategyTradeExecutor {
         targets.put("smartTargets", smartTargetsApplied);
         targets.put("targets", targetLevels);
 
+        // Persist option-level SL/targets for trade_outcomes reporting
+        targets.put("optionSl", optSl);
+        targets.put("optionT1", optT1);
+        targets.put("optionT2", optT2);
+        targets.put("optionT3", optT3);
+        targets.put("optionT4", optT4);
+
         targets.put("strategy", req.getStrategy());
         targets.put("executionMode", req.getExecutionMode() != null ? req.getExecutionMode() : "MANUAL");
         targets.put("direction", req.getDirection());
@@ -278,6 +298,12 @@ public class StrategyTradeExecutor {
         targets.put("underlyingScripCode", req.getUnderlyingScripCode());
         targets.put("equitySpot", req.getEquitySpot());
         targets.put("confidence", req.getConfidence());
+        // Signal enrichment metrics (for post-trade regime analysis)
+        targets.put("atr", req.getAtr());
+        targets.put("volumeSurge", req.getVolumeSurge());
+        targets.put("oiChangePercent", req.getOiChangePercent());
+        targets.put("blockDealPercent", req.getBlockDealPercent());
+        targets.put("riskReward", req.getRiskReward());
         targets.put("optionHighFiveMin", req.getEntryPrice());
         targets.put("optionHighFiveMinUpdatedAt", now);
         // Equity/futures levels for dual monitoring
@@ -292,10 +318,13 @@ public class StrategyTradeExecutor {
             targets.put("greekDelta", req.getGreekDelta());
             targets.put("greekGamma", req.getGreekGamma());
             targets.put("greekTheta", req.getGreekTheta());
+            targets.put("greekVega", req.getGreekVega());
             targets.put("greekIV", req.getGreekIV());
             targets.put("greekDte", req.getGreekDte());
             targets.put("greekMoneynessType", req.getGreekMoneynessType());
             targets.put("greekThetaImpaired", req.isGreekThetaImpaired());
+            targets.put("greekSlMethod", req.getGreekSlMethod());
+            targets.put("greekGammaBoost", req.getGreekGammaBoost());
             targets.put("optionRR", req.getOptionRR());
             // Cross-instrument futures SL/targets
             if (req.getFuturesSL() > 0) {
@@ -382,6 +411,12 @@ public class StrategyTradeExecutor {
                         tMap.put("entryPrice", actualLtp);
                         tMap.put("sl", optSl);
                         tMap.put("currentSl", optSl);
+                        // Update option-level SL/targets with corrected values
+                        tMap.put("optionSl", optSl);
+                        tMap.put("optionT1", optT1);
+                        tMap.put("optionT2", optT2);
+                        tMap.put("optionT3", optT3);
+                        tMap.put("optionT4", optT4);
                         @SuppressWarnings("unchecked")
                         List<Map<String, Object>> tLevels = (List<Map<String, Object>>) tMap.get("targets");
                         if (tLevels != null) {
@@ -437,7 +472,7 @@ public class StrategyTradeExecutor {
      */
     private double[] computeSmartTargets(StrategyTradeRequest req) {
         double entryPrice = req.getEntryPrice();
-        double delta = req.getDelta() > 0 ? req.getDelta() : 0.5; // Default delta
+        double delta = req.getDelta() != 0 ? Math.abs(req.getDelta()) : 0.5; // Default delta
         double equityEntry = req.getEquitySpot();
 
         if (entryPrice <= 0 || equityEntry <= 0) return null;
@@ -1568,28 +1603,81 @@ public class StrategyTradeExecutor {
     }
 
     /**
-     * Get latest price from Redis price cache.
-     * Redis is now updated on every tick (not just at candle boundary) thanks to
-     * the per-tick cachePrice() call in TickAggregator.processRecord().
+     * Get latest price from Redis price cache, with OptionProducer REST fallback.
+     * If Redis price is stale (unchanged for 30s+), fetches directly from
+     * OptionProducer's in-memory LivePriceCache via GET /api/price/{scripCode}.
      */
     private double getLtpFromRedis(String exchange, String scripCode) {
         try {
             String exch = exchange != null ? exchange : "M";
             String key = PRICE_PREFIX + exch + ":" + scripCode;
             String val = redisTemplate.opsForValue().get(key);
-            if (val != null && !val.isEmpty()) {
-                return Double.parseDouble(val);
+            if (val == null || val.isEmpty()) {
+                // Fallback: try N exchange
+                if (!"N".equals(exch)) {
+                    key = PRICE_PREFIX + "N:" + scripCode;
+                    val = redisTemplate.opsForValue().get(key);
+                }
             }
-            // Fallback: try N exchange
-            if (!"N".equals(exch)) {
-                key = PRICE_PREFIX + "N:" + scripCode;
-                val = redisTemplate.opsForValue().get(key);
-                if (val != null && !val.isEmpty()) {
-                    return Double.parseDouble(val);
+            double redisPrice = (val != null && !val.isEmpty()) ? Double.parseDouble(val) : -1;
+
+            if (redisPrice > 0) {
+                // Check staleness: if price hasn't changed in 30s, try OptionProducer
+                double[] snapshot = lastPriceSnapshot.get(scripCode);
+                long now = System.currentTimeMillis();
+                if (snapshot == null || snapshot[0] != redisPrice) {
+                    // Price changed — update snapshot
+                    lastPriceSnapshot.put(scripCode, new double[]{redisPrice, now});
+                    return redisPrice;
+                }
+                // Price same as last snapshot — check how long
+                if (now - (long) snapshot[1] < STALE_PRICE_THRESHOLD_MS) {
+                    return redisPrice; // Not stale yet
+                }
+                // Stale — try OptionProducer fallback
+                double freshPrice = getLtpFromOptionProducer(scripCode);
+                if (freshPrice > 0) {
+                    lastPriceSnapshot.put(scripCode, new double[]{freshPrice, now});
+                    // Also update Redis so other consumers benefit
+                    try {
+                        redisTemplate.opsForValue().set(
+                            PRICE_PREFIX + exch + ":" + scripCode, String.valueOf(freshPrice));
+                    } catch (Exception ignore) {}
+                    return freshPrice;
+                }
+                return redisPrice; // OptionProducer unavailable, use stale Redis
+            }
+            // No Redis price at all — try OptionProducer directly
+            return getLtpFromOptionProducer(scripCode);
+        } catch (Exception e) {
+            log.debug("{} Could not get LTP for {}: {}", LOG_PREFIX, scripCode, e.getMessage());
+        }
+        return -1;
+    }
+
+    /**
+     * Fetch live price from OptionProducer's in-memory cache via REST.
+     * Returns -1 if unavailable. Timeout: 500ms.
+     */
+    private double getLtpFromOptionProducer(String scripCode) {
+        try {
+            String url = optionProducerBaseUrl + "/api/price/" + scripCode;
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(url))
+                .timeout(java.time.Duration.ofMillis(500))
+                .GET().build();
+            java.net.http.HttpResponse<String> response = httpClient.send(request,
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 200) {
+                Map<?, ?> body = objectMapper.readValue(response.body(), Map.class);
+                Number lastRate = (Number) body.get("lastRate");
+                if (lastRate != null && lastRate.doubleValue() > 0) {
+                    log.info("{} OptionProducer fallback: {} LTP={}", LOG_PREFIX, scripCode, lastRate);
+                    return lastRate.doubleValue();
                 }
             }
         } catch (Exception e) {
-            log.debug("{} Could not get LTP for {}: {}", LOG_PREFIX, scripCode, e.getMessage());
+            log.debug("{} OptionProducer fallback failed for {}: {}", LOG_PREFIX, scripCode, e.getMessage());
         }
         return -1;
     }
@@ -1936,6 +2024,13 @@ public class StrategyTradeExecutor {
             outcome.put("optionT2", targets.get("optionT2"));
             outcome.put("optionT3", targets.get("optionT3"));
             outcome.put("optionT4", targets.get("optionT4"));
+
+            // Signal enrichment metrics
+            outcome.put("atr", targets.get("atr"));
+            outcome.put("volumeSurge", targets.get("volumeSurge"));
+            outcome.put("oiChangePercent", targets.get("oiChangePercent"));
+            outcome.put("blockDealPercent", targets.get("blockDealPercent"));
+            outcome.put("riskReward", targets.get("riskReward"));
 
             String json = objectMapper.writeValueAsString(outcome);
             kafkaTemplate.send(tradeOutcomesTopic, scripCode, json);

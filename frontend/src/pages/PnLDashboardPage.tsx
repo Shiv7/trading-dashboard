@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { strategyWalletsApi } from '../services/api'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
 import { getStrategyColors } from '../utils/strategyColors'
-import { computeAnalytics, computeAdvancedAnalytics, fmt, fmtINR } from '../utils/tradeAnalytics'
+import { computeAnalytics, computeAdvancedAnalytics, computeRegimeAnalytics, fmt, fmtINR } from '../utils/tradeAnalytics'
 import AnalyticsView from '../components/AnalyticsView'
 import DeepAnalyticsView from '../components/DeepAnalyticsView'
 import type { Trade } from '../types'
@@ -12,8 +12,8 @@ type StrategyTab = 'ALL' | string
 type ResultFilter = 'ALL' | 'WIN' | 'LOSS'
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
-// Known strategies in display order
-const KNOWN_STRATEGIES = ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB', 'MCX-BBT+1']
+// Display order for strategy tabs — strategies not in this list appear at end
+const STRATEGY_DISPLAY_ORDER = ['FUKAA', 'FUDKOI', 'FUDKII', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30']
 
 // ── Period helpers for analytics tabs ──
 type AnalyticsPeriod = 'TODAY' | '1W' | '1M' | 'QTR' | '1Y' | 'ALL' | 'DATE'
@@ -137,17 +137,21 @@ export default function PnLDashboardPage() {
     return () => clearInterval(interval)
   }, [analyticsPeriod, customDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Dynamic strategy keys ──
+  // ── Dynamic strategy keys — derived from backend API (single source of truth) ──
   const STRATEGY_KEYS = useMemo(() => {
-    const fromTrades = new Set(trades.map(t => t.strategy).filter(Boolean))
-    const fromSummaries = new Set(summaries.map(s => s.strategy).filter(Boolean))
-    const all = new Set([...fromTrades, ...fromSummaries])
-    const ordered = KNOWN_STRATEGIES.filter(k => all.has(k))
-    for (const k of all) {
-      if (!ordered.includes(k) && k !== 'MANUAL') ordered.push(k)
+    // Summaries come from StrategyNameResolver on the backend — use their names directly
+    const fromSummaries = summaries.map(s => s.strategy).filter(Boolean)
+    // Sort by display order, unknowns at end
+    const seen = new Set<string>()
+    const ordered: string[] = []
+    for (const k of STRATEGY_DISPLAY_ORDER) {
+      if (fromSummaries.includes(k) && !seen.has(k)) { ordered.push(k); seen.add(k) }
+    }
+    for (const k of fromSummaries) {
+      if (!seen.has(k) && k !== 'MANUAL') { ordered.push(k); seen.add(k) }
     }
     return ordered
-  }, [trades, summaries])
+  }, [summaries])
 
   // ── Filtered trades for analytics ──
   const filteredTrades = useMemo(() => {
@@ -162,6 +166,7 @@ export default function PnLDashboardPage() {
 
   const analytics = useMemo(() => computeAnalytics(filteredTrades), [filteredTrades])
   const advAnalytics = useMemo(() => computeAdvancedAnalytics(filteredTrades), [filteredTrades])
+  const regimeAnalytics = useMemo(() => computeRegimeAnalytics(filteredTrades), [filteredTrades])
 
   // Convert to Trade[] for PerformanceCharts compatibility
   const chartsData = useMemo((): Trade[] => {
@@ -176,6 +181,9 @@ export default function PnLDashboardPage() {
       // Pass through target/exit data for streak analysis
       target1Hit: t.target1Hit, target2Hit: t.target2Hit, target3Hit: t.target3Hit, target4Hit: t.target4Hit,
       exitReason: t.exitReason, target2: t.target2, instrumentType: t.instrumentType,
+      // Signal enrichment metrics for regime analysis
+      atr: t.atr, volumeSurge: t.volumeSurge, oiChangePercent: t.oiChangePercent,
+      blockDealPercent: t.blockDealPercent, riskReward: t.riskReward,
     } as Trade))
   }, [filteredTrades])
 
@@ -233,17 +241,15 @@ export default function PnLDashboardPage() {
                 }`}
               >
                 ALL
-                <span className="ml-1.5 text-[10px] opacity-70">{trades.length}</span>
+                <span className="ml-1.5 text-[10px] opacity-70">{summaries.reduce((s, w) => s + w.totalTrades, 0) || trades.length}</span>
               </button>
               {STRATEGY_KEYS.map(key => {
                 const c = getStrategyColors(key)
                 const isActive = activeStrategy === key
-                const stratTrades = trades.filter(t => t.strategy === key)
-                const closedStrat = stratTrades.filter(t => t.exitTime)
-                const count = stratTrades.length
-                const stratPnl = closedStrat.reduce((s, t) => s + t.pnl, 0)
-                const stratWinRate = closedStrat.length > 0
-                  ? (closedStrat.filter(t => t.pnl > 0).length / closedStrat.length) * 100 : 0
+                const walletSummary = summaries.find(s => s.strategy === key)
+                const count = walletSummary?.totalTrades ?? trades.filter(t => t.strategy === key).length
+                const stratPnl = walletSummary?.totalPnl ?? 0
+                const stratWinRate = walletSummary?.winRate ?? 0
                 return (
                   <button key={key} onClick={() => setActiveStrategy(key)}
                     className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all border ${
@@ -254,7 +260,7 @@ export default function PnLDashboardPage() {
                       <span>{key}</span>
                       <span className="text-[10px] opacity-70">{count}</span>
                     </div>
-                    {closedStrat.length > 0 && (
+                    {count > 0 && (
                       <div className={`text-[10px] mt-0.5 ${stratPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {fmtINR(stratPnl)} ({fmt(stratWinRate, 0)}%)
                       </div>
@@ -335,10 +341,16 @@ export default function PnLDashboardPage() {
             chartsData={chartsData}
             initialCapital={activeSummary?.initialCapital ?? 1000000}
             activeStrategy={activeStrategy}
+            regimeAnalytics={regimeAnalytics}
             liveDrawdown={liveDrawdown ?? undefined}
             unrealizedPnl={(activeStrategy === 'ALL'
               ? summaries.reduce((s, w) => s + (w.unrealizedPnl ?? 0), 0)
               : activeSummary?.unrealizedPnl) ?? undefined}
+            walletTotalPnl={analyticsPeriod === 'ALL'
+              ? (activeStrategy === 'ALL'
+                ? summaries.reduce((s, w) => s + (w.totalPnl ?? 0), 0)
+                : activeSummary?.totalPnl)
+              : undefined}
           />
         )
       )}

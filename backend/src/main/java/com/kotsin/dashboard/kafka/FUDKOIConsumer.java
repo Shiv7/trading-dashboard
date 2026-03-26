@@ -296,6 +296,49 @@ public class FUDKOIConsumer implements OptionSwapAware {
         if (root.has("optionExchange")) data.put("optionExchange", root.path("optionExchange").asText());
         if (root.has("optionExchangeType")) data.put("optionExchangeType", root.path("optionExchangeType").asText());
 
+        // ConfluentTargetEngine v2 metadata
+        if (root.has("confluenceGrade")) data.put("confluenceGrade", root.path("confluenceGrade").asText(""));
+        if (root.has("confluenceRejectReason")) data.put("confluenceRejectReason", root.path("confluenceRejectReason").asText(""));
+        if (root.has("confluenceFortressScore")) data.put("confluenceFortressScore", root.path("confluenceFortressScore").asDouble(0));
+        if (root.has("confluenceRoomRatio")) data.put("confluenceRoomRatio", root.path("confluenceRoomRatio").asDouble(0));
+        if (root.has("confluenceEntryQuality")) data.put("confluenceEntryQuality", root.path("confluenceEntryQuality").asText(""));
+        if (root.has("confluenceSlScore")) data.put("confluenceSlScore", root.path("confluenceSlScore").asDouble(0));
+        if (root.has("confluenceT1Score")) data.put("confluenceT1Score", root.path("confluenceT1Score").asDouble(0));
+        if (root.has("confluenceLotAllocation")) data.put("confluenceLotAllocation", root.path("confluenceLotAllocation").asText(""));
+        if (root.has("confluenceZoneCount")) data.put("confluenceZoneCount", root.path("confluenceZoneCount").asInt(0));
+        if (root.has("confluenceTimePhase")) data.put("confluenceTimePhase", root.path("confluenceTimePhase").asText(""));
+        if (root.has("confluenceTimeSlMultiplier")) data.put("confluenceTimeSlMultiplier", root.path("confluenceTimeSlMultiplier").asDouble(1.0));
+        if (root.has("confluenceT2Score")) data.put("confluenceT2Score", root.path("confluenceT2Score").asDouble(0));
+        if (root.has("confluenceT3Score")) data.put("confluenceT3Score", root.path("confluenceT3Score").asDouble(0));
+        if (root.has("confluenceT4Score")) data.put("confluenceT4Score", root.path("confluenceT4Score").asDouble(0));
+        if (root.has("confluenceSL")) data.put("confluenceSL", root.path("confluenceSL").asDouble(0));
+        if (root.has("confluenceT1")) data.put("confluenceT1", root.path("confluenceT1").asDouble(0));
+        if (root.has("confluenceT2")) data.put("confluenceT2", root.path("confluenceT2").asDouble(0));
+        if (root.has("confluenceT3")) data.put("confluenceT3", root.path("confluenceT3").asDouble(0));
+        if (root.has("confluenceT4")) data.put("confluenceT4", root.path("confluenceT4").asDouble(0));
+        if (root.has("confluenceRR")) data.put("confluenceRR", root.path("confluenceRR").asDouble(0));
+
+        // Greek enrichment fields (Black-Scholes computed by Streaming Candle)
+        if (root.has("greekEnriched")) data.put("greekEnriched", root.path("greekEnriched").asBoolean(false));
+        if (root.has("greekDelta")) data.put("greekDelta", root.path("greekDelta").asDouble(0));
+        if (root.has("greekGamma")) data.put("greekGamma", root.path("greekGamma").asDouble(0));
+        if (root.has("greekTheta")) data.put("greekTheta", root.path("greekTheta").asDouble(0));
+        if (root.has("greekVega")) data.put("greekVega", root.path("greekVega").asDouble(0));
+        if (root.has("greekIV")) data.put("greekIV", root.path("greekIV").asDouble(0));
+        if (root.has("greekDte")) data.put("greekDte", root.path("greekDte").asInt(0));
+        if (root.has("greekMoneynessType")) data.put("greekMoneynessType", root.path("greekMoneynessType").asText("UNKNOWN"));
+        if (root.has("greekThetaImpaired")) data.put("greekThetaImpaired", root.path("greekThetaImpaired").asBoolean(false));
+        if (root.has("greekSlMethod")) data.put("greekSlMethod", root.path("greekSlMethod").asText());
+        if (root.has("greekGammaBoost")) data.put("greekGammaBoost", root.path("greekGammaBoost").asDouble(0));
+        if (root.has("optionRR")) data.put("optionRR", root.path("optionRR").asDouble(0));
+        if (root.has("optionRRpassed")) data.put("optionRRpassed", root.path("optionRRpassed").asBoolean(false));
+        if (root.has("optionSL")) data.put("optionSL", root.path("optionSL").asDouble(0));
+        if (root.has("optionT1")) data.put("optionT1", root.path("optionT1").asDouble(0));
+        if (root.has("optionT2")) data.put("optionT2", root.path("optionT2").asDouble(0));
+        if (root.has("optionT3")) data.put("optionT3", root.path("optionT3").asDouble(0));
+        if (root.has("optionT4")) data.put("optionT4", root.path("optionT4").asDouble(0));
+        if (root.has("optionLotAllocation")) data.put("optionLotAllocation", root.path("optionLotAllocation").asText());
+
         // Futures fallback
         data.put("futuresAvailable", root.path("futuresAvailable").asBoolean(false));
         if (root.has("futuresScripCode")) data.put("futuresScripCode", root.path("futuresScripCode").asText());

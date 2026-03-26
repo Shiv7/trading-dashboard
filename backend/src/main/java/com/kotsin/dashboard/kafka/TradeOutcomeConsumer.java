@@ -324,7 +324,10 @@ public class TradeOutcomeConsumer {
                     .append("blockDealPercent", optionalJsonDouble(root, "blockDealPercent"))
                     .append("riskReward", optionalJsonDouble(root, "riskReward"))
                     .append("executionMode", root.path("executionMode").asText(null))
-                    .append("totalCharges", root.path("totalCharges").asDouble(0));
+                    .append("totalCharges", root.path("totalCharges").asDouble(0))
+                    // MAE/MFE tracking
+                    .append("maxAdverseExcursion", optionalJsonDouble(root, "maxAdverseExcursion"))
+                    .append("maxFavorableExcursion", optionalJsonDouble(root, "maxFavorableExcursion"));
 
             // Store times as Date objects for MongoDB queries
             if (trade.getEntryTime() != null) {

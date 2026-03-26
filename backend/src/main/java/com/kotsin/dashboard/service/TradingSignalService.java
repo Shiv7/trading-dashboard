@@ -140,6 +140,7 @@ public class TradingSignalService {
                     .tp2(signal.getTarget2())
                     .tp1ClosePercent(50.0) // Default 50%
                     .signalId(signalId)
+                    .signalSource("QUANT")
                     .build();
 
             // Execute order via execution service

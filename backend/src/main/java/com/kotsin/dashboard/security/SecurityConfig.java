@@ -56,6 +56,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/risk/**").permitAll()
                 .requestMatchers("/api/market-data/**").permitAll()
                 .requestMatchers("/api/greeks/**").permitAll()
+                .requestMatchers("/api/pnl/**").permitAll()
+                .requestMatchers("/api/wallets/**").permitAll()
                 // Admin-only
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // All other API endpoints require authentication

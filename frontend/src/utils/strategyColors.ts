@@ -7,7 +7,7 @@
  *   MICROALPHA = purple, MERE = rose, QUANT = cyan, MANUAL = slate
  */
 
-export type StrategyKey = 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'PIVOT_CONFLUENCE' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'MCX-BB' | 'MCX-BBT+1' | 'MCX_BB' | 'MCX_BBT1' | 'MANUAL'
+export type StrategyKey = 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'PIVOT_CONFLUENCE' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'MCX-BB' | 'MCX-BBT+1' | 'MCX_BB' | 'MCX_BBT1' | 'MCX_BB_15' | 'MCX-BB-15' | 'MCX_BB_30' | 'MCX-BB-30' | 'NSE_BB_30' | 'NSE-BB-30' | 'MANUAL'
 export type StrategyFilter = 'ALL' | StrategyKey
 
 export interface StrategyColorSet {
@@ -34,6 +34,13 @@ export const STRATEGY_COLORS: Record<string, StrategyColorSet> = {
   // Aliases for canonical keys (backward compat)
   MCX_BB:           { border: 'border-emerald-500/40', bg: 'bg-emerald-500/10', text: 'text-emerald-400', accent: 'from-emerald-500 to-emerald-600', badgeBg: 'bg-emerald-500/15', badgeText: 'text-emerald-400', badgeBorder: 'border-emerald-500/30' },
   MCX_BBT1:         { border: 'border-cyan-500/40',    bg: 'bg-cyan-500/10',    text: 'text-cyan-400',    accent: 'from-cyan-500 to-teal-600',    badgeBg: 'bg-cyan-500/15',    badgeText: 'text-cyan-400',    badgeBorder: 'border-cyan-500/30' },
+  // New BB strategies
+  'MCX-BB-15':      { border: 'border-lime-500/40',    bg: 'bg-lime-500/10',    text: 'text-lime-400',    accent: 'from-lime-500 to-lime-600',    badgeBg: 'bg-lime-500/15',    badgeText: 'text-lime-400',    badgeBorder: 'border-lime-500/30' },
+  MCX_BB_15:        { border: 'border-lime-500/40',    bg: 'bg-lime-500/10',    text: 'text-lime-400',    accent: 'from-lime-500 to-lime-600',    badgeBg: 'bg-lime-500/15',    badgeText: 'text-lime-400',    badgeBorder: 'border-lime-500/30' },
+  'MCX-BB-30':      { border: 'border-emerald-500/40', bg: 'bg-emerald-500/10', text: 'text-emerald-400', accent: 'from-emerald-500 to-emerald-600', badgeBg: 'bg-emerald-500/15', badgeText: 'text-emerald-400', badgeBorder: 'border-emerald-500/30' },
+  MCX_BB_30:        { border: 'border-emerald-500/40', bg: 'bg-emerald-500/10', text: 'text-emerald-400', accent: 'from-emerald-500 to-emerald-600', badgeBg: 'bg-emerald-500/15', badgeText: 'text-emerald-400', badgeBorder: 'border-emerald-500/30' },
+  'NSE-BB-30':      { border: 'border-sky-500/40',     bg: 'bg-sky-500/10',     text: 'text-sky-400',     accent: 'from-sky-500 to-sky-600',     badgeBg: 'bg-sky-500/15',     badgeText: 'text-sky-400',     badgeBorder: 'border-sky-500/30' },
+  NSE_BB_30:        { border: 'border-sky-500/40',     bg: 'bg-sky-500/10',     text: 'text-sky-400',     accent: 'from-sky-500 to-sky-600',     badgeBg: 'bg-sky-500/15',     badgeText: 'text-sky-400',     badgeBorder: 'border-sky-500/30' },
   MANUAL:           { border: 'border-slate-500/40',  bg: 'bg-slate-500/10',  text: 'text-slate-400',  accent: 'from-slate-500 to-slate-600',  badgeBg: 'bg-slate-500/15',  badgeText: 'text-slate-400',  badgeBorder: 'border-slate-500/30' },
 }
 
@@ -66,6 +73,7 @@ export const STRATEGY_FILTER_OPTIONS: { value: StrategyFilter; label: string; co
   { value: 'MICROALPHA',  label: 'MICRO',      color: `${STRATEGY_COLORS.MICROALPHA.badgeBg} ${STRATEGY_COLORS.MICROALPHA.badgeText} border ${STRATEGY_COLORS.MICROALPHA.badgeBorder}` },
   { value: 'MERE',        label: 'MERE',       color: `${STRATEGY_COLORS.MERE.badgeBg} ${STRATEGY_COLORS.MERE.badgeText} border ${STRATEGY_COLORS.MERE.badgeBorder}` },
   { value: 'QUANT',       label: 'QUANT',      color: `${STRATEGY_COLORS.QUANT.badgeBg} ${STRATEGY_COLORS.QUANT.badgeText} border ${STRATEGY_COLORS.QUANT.badgeBorder}` },
-  { value: 'MCX-BB',     label: 'MCX-BB',     color: `${STRATEGY_COLORS['MCX-BB'].badgeBg} ${STRATEGY_COLORS['MCX-BB'].badgeText} border ${STRATEGY_COLORS['MCX-BB'].badgeBorder}` },
-  { value: 'MCX-BBT+1', label: 'MCX-BBT+1',  color: `${STRATEGY_COLORS['MCX-BBT+1'].badgeBg} ${STRATEGY_COLORS['MCX-BBT+1'].badgeText} border ${STRATEGY_COLORS['MCX-BBT+1'].badgeBorder}` },
+  { value: 'MCX_BB_15' as StrategyFilter,  label: 'MCX-BB-15',  color: `${STRATEGY_COLORS['MCX-BB-15'].badgeBg} ${STRATEGY_COLORS['MCX-BB-15'].badgeText} border ${STRATEGY_COLORS['MCX-BB-15'].badgeBorder}` },
+  { value: 'MCX_BB_30' as StrategyFilter,  label: 'MCX-BB-30',  color: `${STRATEGY_COLORS['MCX-BB-30'].badgeBg} ${STRATEGY_COLORS['MCX-BB-30'].badgeText} border ${STRATEGY_COLORS['MCX-BB-30'].badgeBorder}` },
+  { value: 'NSE_BB_30' as StrategyFilter,  label: 'NSE-BB-30',  color: `${STRATEGY_COLORS['NSE-BB-30'].badgeBg} ${STRATEGY_COLORS['NSE-BB-30'].badgeText} border ${STRATEGY_COLORS['NSE-BB-30'].badgeBorder}` },
 ]

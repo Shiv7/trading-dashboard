@@ -10,6 +10,9 @@ import com.kotsin.dashboard.kafka.MicroAlphaConsumer;
 import com.kotsin.dashboard.kafka.PivotConfluenceConsumer;
 import com.kotsin.dashboard.kafka.McxBbConsumer;
 import com.kotsin.dashboard.kafka.McxBbt1Consumer;
+import com.kotsin.dashboard.kafka.McxBb30Consumer;
+import com.kotsin.dashboard.kafka.McxBb15Consumer;
+import com.kotsin.dashboard.kafka.NseBb30Consumer;
 import com.kotsin.dashboard.kafka.StrategyOpportunityConsumer;
 import com.kotsin.dashboard.kafka.StrategyStateConsumer;
 import com.kotsin.dashboard.kafka.TradingSignalConsumer;
@@ -55,6 +58,9 @@ public class StrategyStateController {
     private final MicroAlphaConsumer microAlphaConsumer;
     private final McxBbConsumer mcxBbConsumer;
     private final McxBbt1Consumer mcxBbt1Consumer;
+    private final McxBb30Consumer mcxBb30Consumer;
+    private final McxBb15Consumer mcxBb15Consumer;
+    private final NseBb30Consumer nseBb30Consumer;
     private final TradingSignalService tradingSignalService;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
@@ -889,5 +895,47 @@ public class StrategyStateController {
     @GetMapping("/mcxbbt1/latest")
     public ResponseEntity<Map<String, Map<String, Object>>> getMcxBbt1Latest() {
         return ResponseEntity.ok(mcxBbt1Consumer.getLatestMcxBbt1());
+    }
+
+    // ==================== MCX-BB-30 STRATEGY ENDPOINTS ====================
+
+    @GetMapping("/mcxbb30/triggers")
+    public ResponseEntity<List<Map<String, Object>>> getMcxBb30Triggers() {
+        List<Map<String, Object>> triggers = new ArrayList<>(mcxBb30Consumer.getActiveTriggers().values());
+        log.debug("[API] GET /strategy-state/mcxbb30/triggers | {} triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/mcxbb30/latest")
+    public ResponseEntity<Map<String, Map<String, Object>>> getMcxBb30Latest() {
+        return ResponseEntity.ok(mcxBb30Consumer.getLatestMcxBb30());
+    }
+
+    // ==================== MCX-BB-15 STRATEGY ENDPOINTS ====================
+
+    @GetMapping("/mcxbb15/triggers")
+    public ResponseEntity<List<Map<String, Object>>> getMcxBb15Triggers() {
+        List<Map<String, Object>> triggers = new ArrayList<>(mcxBb15Consumer.getActiveTriggers().values());
+        log.debug("[API] GET /strategy-state/mcxbb15/triggers | {} triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/mcxbb15/latest")
+    public ResponseEntity<Map<String, Map<String, Object>>> getMcxBb15Latest() {
+        return ResponseEntity.ok(mcxBb15Consumer.getLatestMcxBb15());
+    }
+
+    // ==================== NSE-BB-30 STRATEGY ENDPOINTS ====================
+
+    @GetMapping("/nsebb30/triggers")
+    public ResponseEntity<List<Map<String, Object>>> getNseBb30Triggers() {
+        List<Map<String, Object>> triggers = new ArrayList<>(nseBb30Consumer.getActiveTriggers().values());
+        log.debug("[API] GET /strategy-state/nsebb30/triggers | {} triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/nsebb30/latest")
+    public ResponseEntity<Map<String, Map<String, Object>>> getNseBb30Latest() {
+        return ResponseEntity.ok(nseBb30Consumer.getLatestNseBb30());
     }
 }

@@ -10,6 +10,7 @@ import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, is
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
+import ConfluenceBadge from './ConfluenceBadge';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -139,6 +140,38 @@ interface FudkiiSignal {
   niftyGapPct?: number;
   optionLotAllocation?: string;
   optionRRpassed?: boolean;
+  // ConfluentTargetEngine v2 metadata
+  confluenceGrade?: string;
+  confluenceRejectReason?: string;
+  confluenceFortressScore?: number;
+  confluenceRoomRatio?: number;
+  confluenceEntryQuality?: string;
+  confluenceSlScore?: number;
+  confluenceT1Score?: number;
+  confluenceLotAllocation?: string;
+  confluenceZoneCount?: number;
+  confluenceTimePhase?: string;
+  confluenceScore?: number;
+  hybridRank?: number;
+  confluenceSL?: number;
+  confluenceT1?: number;
+  confluenceT2?: number;
+  confluenceT3?: number;
+  confluenceT4?: number;
+  confluenceRR?: number;
+  // Part B: Option confluence
+  confluenceOptSL?: number;
+  confluenceOptT1?: number;
+  confluenceOptT2?: number;
+  confluenceOptT3?: number;
+  confluenceOptT4?: number;
+  confluenceOptRR?: number;
+  confluenceOptSlScore?: number;
+  confluenceOptT1Score?: number;
+  confluenceOptT2Score?: number;
+  confluenceOptT3Score?: number;
+  confluenceOptT4Score?: number;
+  confluenceOptZoneCount?: number;
 }
 
 interface TradePlan {
@@ -1052,6 +1085,39 @@ const FudkiiTradingCard: React.FC<{
           </div>
         </div>
 
+        {/* ── CONFLUENCE QUALITY ── */}
+        {sig.confluenceGrade && (
+          <ConfluenceBadge
+            grade={sig.confluenceGrade}
+            rejectReason={sig.confluenceRejectReason}
+            fortressScore={sig.confluenceFortressScore}
+            roomRatio={sig.confluenceRoomRatio}
+            entryQuality={sig.confluenceEntryQuality}
+            slScore={sig.confluenceSlScore}
+            t1Score={sig.confluenceT1Score}
+            lotAllocation={sig.confluenceLotAllocation}
+            zoneCount={sig.confluenceZoneCount}
+            timePhase={sig.confluenceTimePhase}
+            confluenceScore={sig.confluenceScore}
+            hybridRank={sig.hybridRank}
+            conflSL={sig.confluenceSL}
+            conflT1={sig.confluenceT1}
+            conflT2={sig.confluenceT2}
+            conflT3={sig.confluenceT3}
+            conflT4={sig.confluenceT4}
+            conflRR={sig.confluenceRR}
+            conflOptSL={sig.confluenceOptSL}
+            conflOptT1={sig.confluenceOptT1}
+            conflOptT2={sig.confluenceOptT2}
+            conflOptT3={sig.confluenceOptT3}
+            conflOptT4={sig.confluenceOptT4}
+            conflOptRR={sig.confluenceOptRR}
+            conflOptSlScore={sig.confluenceOptSlScore}
+            conflOptT1Score={sig.confluenceOptT1Score}
+            conflOptZoneCount={sig.confluenceOptZoneCount}
+          />
+        )}
+
         {/* ── MARKET SECTION ── */}
         <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
           {/* Metric columns */}
@@ -1147,6 +1213,24 @@ const FudkiiTradingCard: React.FC<{
           <div className="mt-2 flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/25">
             <span className="text-emerald-400 font-bold text-sm">&#8377;</span>
             <span className="text-[10px] text-emerald-400">Trade executed with added funds</span>
+          </div>
+        )}
+
+        {/* ── GREEKS ROW ── */}
+        {sig.greekEnriched && (
+          <div className="mt-2 flex items-center gap-1 flex-wrap text-[10px] font-mono">
+            <span className="text-slate-400">{'\u03B4'}{(sig.greekDelta ?? 0).toFixed(2)}</span>
+            <span className="text-slate-600">|</span>
+            <span className="text-slate-400">{'\u03B3'}{(sig.greekGamma ?? 0).toFixed(4)}</span>
+            <span className="text-slate-600">|</span>
+            <span className={`${(sig.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(sig.greekTheta ?? 0).toFixed(2)}</span>
+            <span className="text-slate-600">|</span>
+            <span className="text-slate-400">{'\u03BD'}{(sig.greekVega ?? 0).toFixed(2)}</span>
+            <span className="text-slate-600">|</span>
+            <span className="text-slate-400">IV {(sig.greekIV ?? 0).toFixed(0)}%</span>
+            <span className="text-slate-600">|</span>
+            <span className="text-slate-400">DTE {sig.greekDte ?? 0}</span>
+            {sig.greekThetaImpaired && <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-red-500/20 text-red-300 border border-red-500/30">{'\u03B8'}-IMPAIRED</span>}
           </div>
         )}
 

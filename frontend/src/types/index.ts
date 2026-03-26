@@ -63,6 +63,7 @@ export interface Position {
   instrumentType?: string;
   exchange?: string;  // N=NSE, M=MCX, C=Currency, B=BSE
   delta?: number;
+  deltaFallbackReason?: string;  // null = real BS delta, non-null = why fallback to 0.5
   // Trade execution metadata
   exitReason?: string;    // "1% DD", "SL-EQ", "SL-OP", "T1-OP", "T2-EQ", "EOD", etc.
   confidence?: number;
@@ -313,6 +314,12 @@ export interface Trade {
   strategy?: string;
   executionMode?: 'AUTO' | 'MANUAL';
   totalCharges?: number;
+  // Signal enrichment metrics
+  atr?: number;
+  volumeSurge?: number;
+  oiChangePercent?: number;
+  blockDealPercent?: number;
+  riskReward?: number;
 }
 
 // Regime types
@@ -883,6 +890,400 @@ export interface RiskStatus {
   maxOpenPositions: number
   currentBalance: number
   availableMargin: number
+}
+
+// ==================== Trade Intelligence Types ====================
+
+export interface TradeIntelligenceReport {
+  periodSummary: PeriodSummary
+  exitDistribution: Record<string, ExitDistribution>
+  targetFunnel: TargetFunnel
+  rMultipleDistribution: RMultipleBucket[]
+  meanR: number
+  medianR: number
+  percentAbove1R: number
+  timeOfDayHeatmap: HourStats[]
+  durationByOutcome: DurationStats[]
+  topInstruments: InstrumentPerf[]
+  bottomInstruments: InstrumentPerf[]
+  lossClusterAnalysis: LossCluster[]
+  periodComparison: PeriodComparison | null
+  strategyCorrelation: CorrelationMatrix | null
+  // Deep analytics
+  directionalAnalysis: DirectionalAnalysis | null
+  dayOfWeekPerformance: DayOfWeekStats[]
+  strategyExchangeMatrix: StrategyExchangeCell[]
+  confidenceAnalysis: ConfidenceVsOutcome[]
+  partialExitAnalysis: PartialExitAnalysis | null
+  streakAnalysis: DeepStreakAnalysis | null
+  holdingPeriodAnalysis: TradeDecayPoint[]
+  riskRewardAnalysis: RiskRewardAnalysis | null
+  lastUpdated: string
+}
+
+export interface PeriodSummary {
+  totalTrades: number
+  wins: number
+  losses: number
+  winRate: number
+  totalPnl: number
+  avgPnlPerTrade: number
+  bestDay: string
+  bestDayPnl: number
+  worstDay: string
+  worstDayPnl: number
+  profitableDays: number
+  totalTradingDays: number
+  slRate: number
+  avgRMultiple: number
+  profitFactor: number
+}
+
+export interface ExitDistribution {
+  strategy: string
+  totalTrades: number
+  slCount: number
+  t1Count: number
+  t2Count: number
+  t3Count: number
+  t4Count: number
+  eodCount: number
+  otherCount: number
+  slPercent: number
+  t1Percent: number
+  t2Percent: number
+  t3Percent: number
+  t4Percent: number
+  eodPercent: number
+  otherPercent: number
+  avgSlLoss: number
+  avgSlDurationMin: number
+  slWithin5Min: number
+  slWithin5MinPercent: number
+}
+
+export interface TargetFunnel {
+  totalTrades: number
+  survivedSl: number
+  t1HitRate: number
+  t2HitRate: number
+  t3HitRate: number
+  t4HitRate: number
+  t1ToT2Conversion: number
+  t2ToT3Conversion: number
+  t3ToT4Conversion: number
+  avgTimeToT1Min: number
+  avgTimeToT2Min: number
+  avgTimeToT3Min: number
+  avgTimeToT4Min: number
+}
+
+export interface RMultipleBucket {
+  range: string
+  count: number
+  percent: number
+  avgPnl: number
+}
+
+export interface HourStats {
+  hour: number
+  trades: number
+  winRate: number
+  avgPnl: number
+  slPercent: number
+  assessment: string
+}
+
+export interface DurationStats {
+  exitType: string
+  avgDurationMin: number
+  medianDurationMin: number
+  count: number
+}
+
+export interface InstrumentPerf {
+  scripCode: string
+  companyName: string
+  trades: number
+  winRate: number
+  totalPnl: number
+  avgPnl: number
+  slPercent: number
+  avgRMultiple: number
+}
+
+export interface LossCluster {
+  name: string
+  description: string
+  tradeCount: number
+  percentOfLosses: number
+  avgPnl: number
+  avgConfidence: number
+  recommendation: string
+}
+
+export interface PeriodComparison {
+  current: PeriodMetrics
+  previous: PeriodMetrics
+  insight: string
+}
+
+export interface PeriodMetrics {
+  label: string
+  tradeCount: number
+  winRate: number
+  avgPnl: number
+  totalPnl: number
+  slPercent: number
+  avgRMultiple: number
+  profitFactor: number
+  avgHoldWin: number
+  avgHoldLoss: number
+  profitableDays: number
+  totalTradingDays: number
+}
+
+export interface CorrelationMatrix {
+  strategies: string[]
+  correlations: Record<string, Record<string, number>>
+  effectiveDiversification: number
+  insight: string
+}
+
+// ==================== Deep Trade Analytics Types ====================
+
+export interface DirectionalAnalysis {
+  longStats: DirectionStats
+  shortStats: DirectionStats
+  byStrategy: StrategyDirectionStats[]
+  insight: string
+}
+
+export interface DirectionStats {
+  direction: string
+  trades: number
+  winRate: number
+  avgPnl: number
+  totalPnl: number
+  avgRMultiple: number
+  slPercent: number
+  profitFactor: number
+}
+
+export interface StrategyDirectionStats {
+  strategy: string
+  longStats: DirectionStats
+  shortStats: DirectionStats
+  edge: string // "LONG", "SHORT", "NEUTRAL"
+}
+
+export interface DayOfWeekStats {
+  day: string
+  dayNumber: number
+  trades: number
+  winRate: number
+  avgPnl: number
+  totalPnl: number
+  slPercent: number
+  assessment: string
+}
+
+export interface StrategyExchangeCell {
+  strategy: string
+  exchange: string
+  trades: number
+  winRate: number
+  avgPnl: number
+  totalPnl: number
+  slPercent: number
+  avgRMultiple: number
+  profitFactor: number
+}
+
+export interface ConfidenceVsOutcome {
+  bucket: string
+  trades: number
+  winRate: number
+  avgPnl: number
+  avgRMultiple: number
+  totalPnl: number
+  profitable: boolean
+}
+
+export interface PartialExitAnalysis {
+  tradesWithT1: number
+  t1ThenStopped: number
+  t1ThenT2: number
+  t1ThenT2ThenStopped: number
+  t1ThenT2ThenT3: number
+  reachedAllTargets: number
+  avgPnlAfterT1Partial: number
+  trailingEffectiveness: number
+  insight: string
+}
+
+export interface DeepStreakAnalysis {
+  maxWinStreak: number
+  maxLossStreak: number
+  currentStreak: number
+  avgPnlAfterWin: number
+  avgPnlAfterLoss: number
+  winRateAfterWin: number
+  winRateAfterLoss: number
+  insight: string
+}
+
+export interface TradeDecayPoint {
+  bucket: string
+  trades: number
+  winRate: number
+  avgPnl: number
+  avgRMultiple: number
+  assessment: string
+}
+
+export interface RiskRewardAnalysis {
+  avgPlannedRR: number
+  avgActualRR: number
+  rrCapturePercent: number
+  avgWinnerR: number
+  avgLoserR: number
+  tradesAbove2R: number
+  tradesAbove3R: number
+  percentAbove2R: number
+  insight: string
+}
+
+// ==================== Strategy Tuning Types ====================
+
+export interface StrategyTuningReport {
+  strategy: string
+  tradeCount: number
+  period: string
+  slAnalysis: SLAnalysis
+  targetAnalysis: TargetAnalysis
+  positionSizing: PositionSizingAnalysis
+  confidenceGate: ConfidenceGateAnalysis
+  lastUpdated: string
+}
+
+export interface SLAnalysis {
+  currentAtrMultiplier: number
+  avgSlDistance: number
+  avgAtrAtEntry: number
+  slAtrRatio: number
+  slHitRate: number
+  avgSlLoss: number
+  slWithin5Min: number
+  slWithin5MinPercent: number
+  exchangeBreakdown: ExchangeSLStats[]
+  recommendations: TuningRecommendation[]
+}
+
+export interface ExchangeSLStats {
+  exchange: string
+  slRate: number
+  avgSlLoss: number
+  tradeCount: number
+  recommendation: string
+}
+
+export interface TuningRecommendation {
+  id: string
+  title: string
+  description: string
+  configKey: string
+  configFile: string
+  currentValue: string
+  recommendedValue: string
+  estimatedImpact: string
+  exchange: string
+}
+
+export interface TargetAnalysis {
+  targetLevels: TargetLevelStats[]
+  currentMultipliers: number[]
+  currentAllocation: number[]
+  recommendations: TuningRecommendation[]
+}
+
+export interface TargetLevelStats {
+  level: string
+  hitRate: number
+  avgPnlWhenHit: number
+  avgDurationMin: number
+  contribution: number
+}
+
+export interface PositionSizingAnalysis {
+  currentRiskPercent: number
+  avgCapitalEmployed: number
+  avgRiskPerTrade: number
+  riskPercentOfCapital: number
+  walletEfficiency: WalletEfficiency[]
+  kellyFraction: number
+  halfKellyPercent: number
+  recommendations: TuningRecommendation[]
+}
+
+export interface WalletEfficiency {
+  strategy: string
+  currentBalance: number
+  usedMargin: number
+  idleCapital: number
+  idlePercent: number
+  recommendedRiskPercent: number
+  reason: string
+}
+
+export interface ConfidenceGateAnalysis {
+  currentGate: number
+  buckets: ConfidenceBucket[]
+  optimalGate: number
+  recommendations: TuningRecommendation[]
+}
+
+export interface ConfidenceBucket {
+  range: string
+  tradeCount: number
+  winRate: number
+  avgPnl: number
+  avgRMultiple: number
+  profitable: boolean
+}
+
+export interface SimulationResult {
+  totalTrades: number
+  affectedTrades: number
+  currentTotalPnl: number
+  simulatedTotalPnl: number
+  netImpact: number
+  currentWinRate: number
+  simulatedWinRate: number
+  description: string
+  details: SimulationDetail[]
+}
+
+export interface SimulationDetail {
+  configKey: string
+  currentValue: string
+  proposedValue: string
+  impact: string
+}
+
+export interface ConfigChange {
+  changeId: string
+  service: string
+  changes: ConfigDiff[]
+  reason: string
+  appliedAt: string
+  rolledBack: boolean
+}
+
+export interface ConfigDiff {
+  key: string
+  oldValue: string
+  newValue: string
 }
 
 // ==================== Alert History Types ====================

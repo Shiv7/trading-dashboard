@@ -138,6 +138,19 @@ public class FUDKIIConsumer implements OptionSwapAware {
             }
             dedupCache.put(dedupKey, Boolean.TRUE);
 
+            // --- NSE TRADING HOURS FILTER (checks signal's own trigger time, not wall clock) ---
+            String exchange = root.path("exchange").asText("");
+            if ("N".equals(exchange)) {
+                long triggerEpoch = root.path("triggerTimeEpoch").asLong(0);
+                if (triggerEpoch > 0) {
+                    java.time.LocalTime triggerIST = Instant.ofEpochMilli(triggerEpoch).atZone(IST).toLocalTime();
+                    if (triggerIST.isBefore(java.time.LocalTime.of(9, 15)) || triggerIST.isAfter(java.time.LocalTime.of(15, 30))) {
+                        log.debug("FUDKII skipping NSE signal outside trading hours: {} triggerTime={}", scripCode, triggerIST);
+                        return;
+                    }
+                }
+            }
+
             Map<String, Object> fudkiiData = parseFUDKII(root);
             boolean triggered = Boolean.TRUE.equals(fudkiiData.get("triggered"));
 
@@ -245,6 +258,21 @@ public class FUDKIIConsumer implements OptionSwapAware {
         } catch (Exception e) {
             log.error("Error processing FUDKII: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Check if a signal is an NSE signal with triggerTimeEpoch outside NSE trading hours (9:15-15:30 IST).
+     */
+    private boolean isNseOutsideHours(Map<String, Object> data) {
+        String exch = (String) data.get("exchange");
+        if (!"N".equals(exch)) return false;
+        Object epochObj = data.get("triggerTimeEpoch");
+        if (epochObj == null) return false;
+        long epoch = ((Number) epochObj).longValue();
+        java.time.LocalTime triggerIST = Instant.ofEpochMilli(epoch)
+                .atZone(IST).toLocalTime();
+        return triggerIST.isBefore(java.time.LocalTime.of(9, 15))
+                || triggerIST.isAfter(java.time.LocalTime.of(15, 30));
     }
 
     private Map<String, Object> parseFUDKII(JsonNode root) {
@@ -380,6 +408,42 @@ public class FUDKIIConsumer implements OptionSwapAware {
         if (root.has("optionRRpassed")) data.put("optionRRpassed", root.path("optionRRpassed").asBoolean(true));
         if (root.has("optionLotAllocation")) data.put("optionLotAllocation", root.path("optionLotAllocation").asText("40,30,20,10"));
 
+        // ConfluentTargetEngine v2 metadata (trade quality grading + confluence analysis)
+        if (root.has("confluenceGrade")) data.put("confluenceGrade", root.path("confluenceGrade").asText(""));
+        if (root.has("confluenceRejectReason")) data.put("confluenceRejectReason", root.path("confluenceRejectReason").asText(""));
+        if (root.has("confluenceFortressScore")) data.put("confluenceFortressScore", root.path("confluenceFortressScore").asDouble(0));
+        if (root.has("confluenceRoomRatio")) data.put("confluenceRoomRatio", root.path("confluenceRoomRatio").asDouble(0));
+        if (root.has("confluenceEntryQuality")) data.put("confluenceEntryQuality", root.path("confluenceEntryQuality").asText(""));
+        if (root.has("confluenceSlScore")) data.put("confluenceSlScore", root.path("confluenceSlScore").asDouble(0));
+        if (root.has("confluenceT1Score")) data.put("confluenceT1Score", root.path("confluenceT1Score").asDouble(0));
+        if (root.has("confluenceLotAllocation")) data.put("confluenceLotAllocation", root.path("confluenceLotAllocation").asText(""));
+        if (root.has("confluenceZoneCount")) data.put("confluenceZoneCount", root.path("confluenceZoneCount").asInt(0));
+        if (root.has("confluenceTimePhase")) data.put("confluenceTimePhase", root.path("confluenceTimePhase").asText(""));
+        if (root.has("confluenceTimeSlMultiplier")) data.put("confluenceTimeSlMultiplier", root.path("confluenceTimeSlMultiplier").asDouble(1.0));
+        if (root.has("confluenceT2Score")) data.put("confluenceT2Score", root.path("confluenceT2Score").asDouble(0));
+        if (root.has("confluenceT3Score")) data.put("confluenceT3Score", root.path("confluenceT3Score").asDouble(0));
+        if (root.has("confluenceT4Score")) data.put("confluenceT4Score", root.path("confluenceT4Score").asDouble(0));
+        // Confluence-computed equity levels + R:R
+        if (root.has("confluenceSL")) data.put("confluenceSL", root.path("confluenceSL").asDouble(0));
+        if (root.has("confluenceT1")) data.put("confluenceT1", root.path("confluenceT1").asDouble(0));
+        if (root.has("confluenceT2")) data.put("confluenceT2", root.path("confluenceT2").asDouble(0));
+        if (root.has("confluenceT3")) data.put("confluenceT3", root.path("confluenceT3").asDouble(0));
+        if (root.has("confluenceT4")) data.put("confluenceT4", root.path("confluenceT4").asDouble(0));
+        if (root.has("confluenceRR")) data.put("confluenceRR", root.path("confluenceRR").asDouble(0));
+        // Part B: Option confluence targets
+        if (root.has("confluenceOptSL")) data.put("confluenceOptSL", root.path("confluenceOptSL").asDouble(0));
+        if (root.has("confluenceOptT1")) data.put("confluenceOptT1", root.path("confluenceOptT1").asDouble(0));
+        if (root.has("confluenceOptT2")) data.put("confluenceOptT2", root.path("confluenceOptT2").asDouble(0));
+        if (root.has("confluenceOptT3")) data.put("confluenceOptT3", root.path("confluenceOptT3").asDouble(0));
+        if (root.has("confluenceOptT4")) data.put("confluenceOptT4", root.path("confluenceOptT4").asDouble(0));
+        if (root.has("confluenceOptRR")) data.put("confluenceOptRR", root.path("confluenceOptRR").asDouble(0));
+        if (root.has("confluenceOptSlScore")) data.put("confluenceOptSlScore", root.path("confluenceOptSlScore").asDouble(0));
+        if (root.has("confluenceOptT1Score")) data.put("confluenceOptT1Score", root.path("confluenceOptT1Score").asDouble(0));
+        if (root.has("confluenceOptT2Score")) data.put("confluenceOptT2Score", root.path("confluenceOptT2Score").asDouble(0));
+        if (root.has("confluenceOptT3Score")) data.put("confluenceOptT3Score", root.path("confluenceOptT3Score").asDouble(0));
+        if (root.has("confluenceOptT4Score")) data.put("confluenceOptT4Score", root.path("confluenceOptT4Score").asDouble(0));
+        if (root.has("confluenceOptZoneCount")) data.put("confluenceOptZoneCount", root.path("confluenceOptZoneCount").asInt(0));
+
         // Cross-instrumental futures targets (for MCX/commodity)
         if (root.has("futuresSL")) data.put("futuresSL", root.path("futuresSL").asDouble(0));
         if (root.has("futuresT1")) data.put("futuresT1", root.path("futuresT1").asDouble(0));
@@ -499,6 +563,11 @@ public class FUDKIIConsumer implements OptionSwapAware {
                     try {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
+                        // Skip NSE signals outside trading hours
+                        if (isNseOutsideHours(data)) {
+                            log.info("FUDKII restore skipping stale NSE signal: {}", entry.getKey());
+                            continue;
+                        }
                         latestFUDKII.putIfAbsent((String) entry.getKey(), data);
                         restoredAll++;
                     } catch (Exception e) {
@@ -516,6 +585,10 @@ public class FUDKIIConsumer implements OptionSwapAware {
                     try {
                         Map<String, Object> data = objectMapper.readValue(
                                 (String) entry.getValue(), Map.class);
+                        // Skip NSE signals outside trading hours
+                        if (isNseOutsideHours(data)) {
+                            continue;
+                        }
                         todaySignalHistory.putIfAbsent((String) entry.getKey(), data);
                         // Also ensure latestFUDKII has this triggered signal
                         String sc = (String) data.get("scripCode");

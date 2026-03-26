@@ -11,6 +11,7 @@ import {
   Line,
 } from 'recharts'
 import type { Trade } from '../../types'
+import { computeStreakContext } from '../../utils/tradeAnalytics'
 
 interface PerformanceChartsProps {
   trades: Trade[]
@@ -192,6 +193,9 @@ export default function PerformanceCharts({ trades, initialCapital = 100000, act
       t1Hit: boolean; t2Hit: boolean; t3Hit: boolean; t4Hit: boolean
       maxTargetHit: string
       thetaCostEstimate: number; thetaCostPct: number; directionalGain: number
+      // Signal enrichment metrics
+      volumeSurge: number | null; oiChangePercent: number | null
+      atr: number | null; riskReward: number | null
     }
     function buildStreakDetails(streak: typeof parentTrades): StreakDetail[] {
       const details: StreakDetail[] = []
@@ -234,6 +238,10 @@ export default function PerformanceCharts({ trades, initialCapital = 100000, act
             strategy: first.strategy || sp.strategy || '',
             t1Hit, t2Hit, t3Hit, t4Hit, maxTargetHit,
             thetaCostEstimate, thetaCostPct, directionalGain,
+            volumeSurge: (first as any).volumeSurge ?? null,
+            oiChangePercent: (first as any).oiChangePercent ?? null,
+            atr: (first as any).atr ?? null,
+            riskReward: (first as any).riskReward ?? null,
           })
         }
       }
@@ -391,6 +399,28 @@ export default function PerformanceCharts({ trades, initialCapital = 100000, act
                   </div>
                 </div>
               </div>
+              {/* Row 4: Signal Quality Metrics */}
+              {(t.volumeSurge != null || t.atr != null || t.oiChangePercent != null || t.riskReward != null) && (
+                <div className="grid grid-cols-4 gap-2 mt-2">
+                  {[
+                    { label: 'Vol Surge', val: t.volumeSurge, suffix: 'x', good: 1.5, color: 'purple' },
+                    { label: 'OI Chg', val: t.oiChangePercent != null ? Math.abs(t.oiChangePercent) : null, suffix: '%', good: 50, color: 'orange' },
+                    { label: 'ATR', val: t.atr, suffix: '', good: null, color: 'teal' },
+                    { label: 'R:R', val: t.riskReward, suffix: '', good: 1.5, color: 'blue' },
+                  ].map(m => (
+                    <div key={m.label} className="bg-slate-800/40 rounded px-1.5 py-1 text-center">
+                      <div className={`text-[8px] text-${m.color}-400/60 uppercase`}>{m.label}</div>
+                      {m.val != null ? (
+                        <div className={`text-[10px] font-bold ${m.good != null ? (m.val >= m.good ? 'text-emerald-400' : 'text-slate-400') : 'text-slate-300'}`}>
+                          {m.val.toFixed(m.suffix === '%' ? 0 : m.suffix === 'x' ? 1 : 1)}{m.suffix}
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-slate-600 italic">DM</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )
         })}
@@ -440,6 +470,55 @@ export default function PerformanceCharts({ trades, initialCapital = 100000, act
             </>
           )}
         </div>
+        {/* Signal Quality Context */}
+        {(() => {
+          const ctx = computeStreakContext(details.map(d => ({
+            volumeSurge: d.volumeSurge ?? undefined,
+            oiChangePercent: d.oiChangePercent ?? undefined,
+            atr: d.atr ?? undefined,
+            riskReward: d.riskReward ?? undefined,
+            pnl: d.pnl,
+          })))
+          if (!ctx || !ctx.hasData) return null
+          return (
+            <div className="border-t border-slate-700/30 mt-2 pt-2">
+              <div className="font-semibold text-slate-200 text-[10px] mb-1">Signal Quality During Streak</div>
+              <div className="grid grid-cols-4 gap-2 mb-1.5">
+                {ctx.avgVol != null && (
+                  <div className="text-[9px]">
+                    <span className="text-slate-500">Avg Vol Surge: </span>
+                    <span className={`font-bold ${ctx.avgVol >= 1.5 ? 'text-emerald-400' : ctx.avgVol < 1 ? 'text-red-400' : 'text-slate-300'}`}>{ctx.avgVol.toFixed(1)}x</span>
+                  </div>
+                )}
+                {ctx.avgOi != null && (
+                  <div className="text-[9px]">
+                    <span className="text-slate-500">Avg |OI|: </span>
+                    <span className={`font-bold ${Math.abs(ctx.avgOi) >= 50 ? 'text-emerald-400' : 'text-slate-300'}`}>{Math.abs(ctx.avgOi).toFixed(0)}%</span>
+                  </div>
+                )}
+                {ctx.avgAtr != null && (
+                  <div className="text-[9px]">
+                    <span className="text-slate-500">Avg ATR: </span>
+                    <span className="text-slate-300 font-bold">{ctx.avgAtr.toFixed(1)}</span>
+                  </div>
+                )}
+                {ctx.avgRR != null && (
+                  <div className="text-[9px]">
+                    <span className="text-slate-500">Avg R:R: </span>
+                    <span className={`font-bold ${ctx.avgRR >= 1.5 ? 'text-emerald-400' : ctx.avgRR < 1 ? 'text-red-400' : 'text-slate-300'}`}>{ctx.avgRR.toFixed(2)}</span>
+                  </div>
+                )}
+              </div>
+              {ctx.contextInsight && (
+                <div className={`text-[9px] px-2 py-1 rounded border-l-2 ${
+                  mode === 'loss' ? 'border-red-500 bg-red-500/5 text-red-300' : 'border-emerald-500 bg-emerald-500/5 text-emerald-300'
+                }`}>
+                  {ctx.contextInsight}
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
     )
   }

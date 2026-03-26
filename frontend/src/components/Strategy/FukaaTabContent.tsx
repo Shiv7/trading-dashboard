@@ -11,6 +11,7 @@ import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
+import ConfluenceBadge from './ConfluenceBadge';
 
 type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -129,6 +130,25 @@ interface FukaaTrigger {
   futuresT2?: number;
   futuresT3?: number;
   futuresT4?: number;
+  // ConfluentTargetEngine v2 metadata
+  confluenceGrade?: string;
+  confluenceRejectReason?: string;
+  confluenceFortressScore?: number;
+  confluenceRoomRatio?: number;
+  confluenceEntryQuality?: string;
+  confluenceSlScore?: number;
+  confluenceT1Score?: number;
+  confluenceLotAllocation?: string;
+  confluenceZoneCount?: number;
+  confluenceTimePhase?: string;
+  confluenceScore?: number;
+  hybridRank?: number;
+  confluenceSL?: number;
+  confluenceT1?: number;
+  confluenceT2?: number;
+  confluenceT3?: number;
+  confluenceT4?: number;
+  confluenceRR?: number;
 }
 
 interface TradePlan {
@@ -708,7 +728,8 @@ const FukaaCard: React.FC<{
   }, [scripForDrift, premiumForDrift]);
 
   // Metrics — use real FUKAA surge data and OI
-  const surgeVal = (trigger.surgeT ?? 0).toFixed(1);
+  const isPassedTm1 = trigger.passedCandle === 'T_MINUS_1';
+  const surgeVal = isPassedTm1 ? (trigger.surgeTMinus1 ?? 0).toFixed(1) : (trigger.surgeT ?? 0).toFixed(1);
   const oiVal = computeOIChange(trigger);
   const oiChange = (oiVal >= 0 ? '+' : '') + oiVal;
   const oiStyle = getOILabelStyle(trigger.oiLabel);
@@ -780,9 +801,9 @@ const FukaaCard: React.FC<{
             Volume Surge (vs {formatVolume(trigger.avgVolume ?? 0)} avg)
           </div>
           <div className="grid grid-cols-3 gap-2 text-xs">
-            <div className="text-center">
-              <div className="text-slate-500">T-1</div>
-              <div className="font-mono text-slate-300">{formatVolume(trigger.volumeTMinus1 ?? 0)}</div>
+            <div className={`text-center ${isPassedTm1 ? 'rounded-lg bg-green-500/10 border border-green-500/20 p-1 -m-1' : ''}`}>
+              <div className={isPassedTm1 ? 'text-green-400 font-semibold' : 'text-slate-500'}>T-1{isPassedTm1 ? ' \u2713' : ''}</div>
+              <div className={`font-mono ${isPassedTm1 ? 'text-white font-semibold' : 'text-slate-300'}`}>{formatVolume(trigger.volumeTMinus1 ?? 0)}</div>
               <div className={`font-mono ${
                 (trigger.surgeTMinus1 ?? 0) >= 10 ? 'text-amber-300 font-bold' :
                 (trigger.surgeTMinus1 ?? 0) >= 5 ? 'text-green-400 font-semibold' :
@@ -791,8 +812,8 @@ const FukaaCard: React.FC<{
                 {(trigger.surgeTMinus1 ?? 0) > 0 ? (trigger.surgeTMinus1 ?? 0).toFixed(1) + 'x' : '-'}
               </div>
             </div>
-            <div className="text-center">
-              <div className="text-slate-500">T</div>
+            <div className={`text-center ${!isPassedTm1 ? 'rounded-lg bg-green-500/10 border border-green-500/20 p-1 -m-1' : ''}`}>
+              <div className={!isPassedTm1 ? 'text-green-400 font-semibold' : 'text-slate-500'}>T{!isPassedTm1 ? ' \u2713' : ''}</div>
               <div className="font-mono text-white font-semibold">{formatVolume(trigger.volumeT ?? 0)}</div>
               <div className={`font-mono ${
                 (trigger.surgeT ?? 0) >= 10 ? 'text-amber-300 font-bold' :
@@ -825,6 +846,30 @@ const FukaaCard: React.FC<{
           />
         </div>
 
+        {/* ── CONFLUENCE QUALITY ── */}
+        {trigger.confluenceGrade && (
+          <ConfluenceBadge
+            grade={trigger.confluenceGrade}
+            rejectReason={trigger.confluenceRejectReason}
+            fortressScore={trigger.confluenceFortressScore}
+            roomRatio={trigger.confluenceRoomRatio}
+            entryQuality={trigger.confluenceEntryQuality}
+            slScore={trigger.confluenceSlScore}
+            t1Score={trigger.confluenceT1Score}
+            lotAllocation={trigger.confluenceLotAllocation}
+            zoneCount={trigger.confluenceZoneCount}
+            timePhase={trigger.confluenceTimePhase}
+            confluenceScore={trigger.confluenceScore}
+            hybridRank={trigger.hybridRank}
+            conflSL={trigger.confluenceSL}
+            conflT1={trigger.confluenceT1}
+            conflT2={trigger.confluenceT2}
+            conflT3={trigger.confluenceT3}
+            conflT4={trigger.confluenceT4}
+            conflRR={trigger.confluenceRR}
+          />
+        )}
+
         {/* ── TRANSLATED GREEKS ── */}
         {trigger.greekEnriched && (() => {
           const dte = trigger.greekDte ?? 0;
@@ -844,6 +889,8 @@ const FukaaCard: React.FC<{
                 <span className="text-slate-400">{'\u03B3'}{(trigger.greekGamma ?? 0).toFixed(4)}</span>
                 <span className="text-slate-600">|</span>
                 <span className={`${(trigger.greekTheta ?? 0) < -3 ? 'text-red-400' : 'text-slate-400'}`}>{'\u03B8'}{(trigger.greekTheta ?? 0).toFixed(2)}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-slate-400">{'\u03BD'}{(trigger.greekVega ?? 0).toFixed(2)}</span>
                 <span className="text-slate-600">|</span>
                 <span className="text-slate-400">IV {iv.toFixed(0)}%</span>
                 <span className="text-slate-600">|</span>
@@ -865,7 +912,7 @@ const FukaaCard: React.FC<{
         <div className="mt-3 rounded-xl bg-slate-900/60 border border-slate-700/50 p-2.5">
           <div className="grid grid-cols-4 gap-2 text-center">
             {[
-              { val: `${surgeVal}x`, label: 'Vol Surge',
+              { val: `${surgeVal}x`, label: isPassedTm1 ? 'Vol Surge (T-1)' : 'Vol Surge',
                 color: parseFloat(surgeVal) >= 3 ? 'text-green-300' : parseFloat(surgeVal) >= 2 ? 'text-amber-300' : 'text-slate-300' },
               { val: `${oiChange}%`, label: 'OI Change',
                 color: absOi >= 100 ? 'text-green-300' : absOi >= 50 ? 'text-amber-300' : 'text-slate-300' },

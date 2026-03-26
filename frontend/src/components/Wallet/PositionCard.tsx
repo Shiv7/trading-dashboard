@@ -127,8 +127,16 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
             }`}>{instrumentLabel}</span>
             <span className="text-slate-500">@</span>
             <span className="text-white">{position.avgEntryPrice.toFixed(2)}/-</span>
-            {position.delta != null && position.delta < 1 && (
-              <span className="text-slate-500 ml-1 sm:ml-2">delta={position.delta}</span>
+            {position.delta != null && position.delta > 0 && position.delta < 1 && (
+              position.deltaFallbackReason ? (
+                <span className="ml-1 sm:ml-2 text-amber-500" title={position.deltaFallbackReason}>
+                  {'\u03B4'}0.50<span className="text-[8px] ml-0.5">ERR</span>
+                </span>
+              ) : (
+                <span className="ml-1 sm:ml-2 text-cyan-400">
+                  {'\u03B4'}{position.delta.toFixed(2)}
+                </span>
+              )
             )}
           </div>
         </div>

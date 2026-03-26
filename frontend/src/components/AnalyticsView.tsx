@@ -2,7 +2,7 @@ import { TrendingUp, TrendingDown, Activity, Clock, Calendar, Target, Layers } f
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { getStrategyBadgeClass } from '../utils/strategyColors'
 import PerformanceCharts from './Charts/PerformanceCharts'
-import type { AnalyticsResult } from '../utils/tradeAnalytics'
+import type { AnalyticsResult, RegimeAnalyticsResult, RegimeBand } from '../utils/tradeAnalytics'
 import { fmt, fmtINR, fmtDuration } from '../utils/tradeAnalytics'
 import type { Trade } from '../types'
 
@@ -11,8 +11,10 @@ interface AnalyticsViewProps {
   chartsData: Trade[]
   initialCapital: number
   activeStrategy: string
+  regimeAnalytics?: RegimeAnalyticsResult
   liveDrawdown?: number
   unrealizedPnl?: number
+  walletTotalPnl?: number
 }
 
 /** Analytics stat card */
@@ -25,7 +27,31 @@ function StatCard({ label, value, positive }: { label: string; value: string; po
   )
 }
 
-export default function AnalyticsView({ analytics, chartsData, initialCapital, activeStrategy, liveDrawdown, unrealizedPnl }: AnalyticsViewProps) {
+/** Regime band bar renderer */
+function RegimeBandRow({ band, maxCount }: { band: RegimeBand; maxCount: number }) {
+  const barW = maxCount > 0 ? (band.count / maxCount) * 100 : 0
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] font-mono w-16 shrink-0 text-slate-400">{band.label}</span>
+      <div className="flex-1 h-3 bg-slate-700/50 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${band.winRate >= 55 ? 'bg-emerald-500/70' : band.winRate >= 45 ? 'bg-amber-500/70' : 'bg-red-500/60'}`}
+          style={{ width: `${Math.max(barW, 4)}%` }} />
+      </div>
+      <span className="text-[10px] text-slate-500 w-8 text-right">{band.count}</span>
+      <span className={`text-[10px] font-bold w-10 text-right ${band.winRate >= 55 ? 'text-emerald-400' : band.winRate >= 45 ? 'text-amber-400' : 'text-red-400'}`}>
+        {fmt(band.winRate, 0)}%
+      </span>
+      <span className={`text-[10px] font-mono w-14 text-right ${band.avgR >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+        {band.avgR >= 0 ? '+' : ''}{fmt(band.avgR, 2)}R
+      </span>
+      <span className={`text-[10px] font-mono w-16 text-right ${band.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+        {fmtINR(band.totalPnl)}
+      </span>
+    </div>
+  )
+}
+
+export default function AnalyticsView({ analytics, chartsData, initialCapital, activeStrategy, regimeAnalytics, liveDrawdown, unrealizedPnl, walletTotalPnl }: AnalyticsViewProps) {
   if (!analytics) {
     return (
       <div className="card text-center py-16 text-slate-500">
@@ -39,7 +65,7 @@ export default function AnalyticsView({ analytics, chartsData, initialCapital, a
     <div className="space-y-5">
       {/* Key Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-        <StatCard label="Total P&L" value={fmtINR(analytics.totalPnl)} positive={analytics.totalPnl >= 0} />
+        <StatCard label="Total P&L" value={fmtINR(walletTotalPnl ?? analytics.totalPnl)} positive={(walletTotalPnl ?? analytics.totalPnl) >= 0} />
         {unrealizedPnl !== undefined && unrealizedPnl !== 0 && (
           <StatCard label="Unrealized P&L" value={fmtINR(unrealizedPnl)} positive={unrealizedPnl >= 0} />
         )}
@@ -190,7 +216,7 @@ export default function AnalyticsView({ analytics, chartsData, initialCapital, a
               {(() => {
                 const isOptionView = activeStrategy === 'ALL'
                   ? analytics.byInstrument['OPTIONS'] && !analytics.byInstrument['EQUITY'] && !analytics.byInstrument['FUTURES']
-                  : ['FUDKII','FUKAA','FUDKOI','PIVOT','PIVOT_CONFLUENCE','MICROALPHA','MERE','QUANT','MCX-BB','MCX-BBT+1','MCX_BB','MCX_BBT1'].includes(activeStrategy)
+                  : activeStrategy !== 'ALL'
                 const dirData = Object.entries(analytics.byDirection).map(([dir, data]) => ({
                   name: isOptionView ? (dir === 'bullish' ? 'CE' : 'PE') : (dir === 'bullish' ? 'LONG' : 'SHORT'),
                   value: data.count,
@@ -405,6 +431,128 @@ export default function AnalyticsView({ analytics, chartsData, initialCapital, a
             </div>
           </div>
         )}
+
+        {/* ═══ Signal Quality Regime Analysis ═══ */}
+        {regimeAnalytics && (() => {
+          const ra = regimeAnalytics
+          const hasData = ra.dataAvailability.some(d => d.pct >= 10)
+          const regimeSections: { title: string; color: string; bands: RegimeBand[] }[] = [
+            { title: 'Volume Surge', color: 'text-purple-400', bands: ra.regimes.volumeSurge },
+            { title: 'OI Change%', color: 'text-orange-400', bands: ra.regimes.oiChange },
+            { title: 'ATR (Volatility)', color: 'text-teal-400', bands: ra.regimes.atr },
+            { title: 'Risk:Reward', color: 'text-blue-400', bands: ra.regimes.riskReward },
+            { title: 'Block Deal%', color: 'text-pink-400', bands: ra.regimes.blockDeal },
+          ].filter(s => s.bands.length > 0)
+
+          if (!hasData || regimeSections.length === 0) return null
+          return (
+            <div className="card lg:col-span-2">
+              <div className="text-sm font-semibold text-slate-300 mb-1 flex items-center gap-2">
+                <Activity className="w-4 h-4" /> Signal Quality Regime Analysis
+              </div>
+              <div className="text-[10px] text-slate-500 mb-3">Performance segmented by signal-level metrics — which conditions produce winners vs losers</div>
+
+              {/* Data availability banner */}
+              {ra.dataAvailability.every(d => d.pct < 30) && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-4 text-[10px] text-amber-400">
+                  Signal metrics data is accumulating — {ra.dataAvailability.find(d => d.count > 0)?.count ?? 0} trades with metrics so far.
+                  Insights will sharpen as more trades are recorded.
+                </div>
+              )}
+
+              {/* Column headers */}
+              <div className="flex items-center gap-2 mb-2 text-[9px] text-slate-600 uppercase font-semibold">
+                <span className="w-16">Band</span>
+                <span className="flex-1">Distribution</span>
+                <span className="w-8 text-right">N</span>
+                <span className="w-10 text-right">WR</span>
+                <span className="w-14 text-right">Avg R</span>
+                <span className="w-16 text-right">P&L</span>
+              </div>
+
+              {/* Regime grids */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-5">
+                {regimeSections.map(section => {
+                  const maxCount = Math.max(...section.bands.map(b => b.count))
+                  return (
+                    <div key={section.title}>
+                      <div className={`text-[11px] font-semibold ${section.color} mb-2`}>{section.title}</div>
+                      <div className="space-y-1">
+                        {section.bands.map(band => (
+                          <RegimeBandRow key={band.label} band={band} maxCount={maxCount} />
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Per-strategy regime breakdown (ALL view) */}
+              {ra.byStrategyRegime && activeStrategy === 'ALL' && Object.keys(ra.byStrategyRegime).length > 1 && (
+                <div className="mt-5 border-t border-slate-700/40 pt-4">
+                  <div className="text-[11px] font-semibold text-slate-300 mb-3">Strategy x Regime Breakdown</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="border-b border-slate-700/50">
+                          <th className="text-left text-slate-500 py-1 pr-2">Strategy</th>
+                          <th className="text-center text-purple-400/70 px-2" colSpan={3}>Vol Surge</th>
+                          <th className="text-center text-orange-400/70 px-2" colSpan={3}>OI Change</th>
+                          <th className="text-center text-blue-400/70 px-2" colSpan={3}>Risk:Reward</th>
+                        </tr>
+                        <tr className="border-b border-slate-800/50">
+                          <th></th>
+                          {['<1x','1-2x','2x+','<50%','50-100%','100%+','<1.5','1.5-2.5','2.5+'].map(h => (
+                            <th key={h} className="text-[8px] text-slate-600 px-1 py-0.5">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(ra.byStrategyRegime).map(([strat, data]) => (
+                          <tr key={strat} className="border-b border-slate-800/30">
+                            <td className="py-1.5 pr-2 font-bold text-white">{strat}</td>
+                            {[...data.volumeSurge, ...data.oiChange, ...data.riskReward].map((b, i) => (
+                              <td key={i} className="text-center px-1">
+                                {b.count > 0 ? (
+                                  <span className={`font-bold ${b.winRate >= 55 ? 'text-emerald-400' : b.winRate >= 45 ? 'text-amber-400' : 'text-red-400'}`}>
+                                    {fmt(b.winRate, 0)}%
+                                    <span className="text-slate-600 font-normal"> ({b.count})</span>
+                                  </span>
+                                ) : <span className="text-slate-700">—</span>}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Actionable Insights */}
+              {ra.insights.length > 0 && (
+                <div className="mt-4 border-t border-slate-700/40 pt-4">
+                  <div className="text-[11px] font-semibold text-slate-300 mb-2">Actionable Insights</div>
+                  <div className="space-y-1.5">
+                    {ra.insights.map((insight, i) => {
+                      const isPositive = insight.includes('Strong') || insight.includes('powered')
+                      const isWarning = insight.includes('cluster') || insight.includes('consider') || insight.includes('Weak')
+                      return (
+                        <div key={i} className={`text-[10px] px-3 py-1.5 rounded-lg border-l-2 ${
+                          isWarning ? 'border-red-500 bg-red-500/5 text-red-300'
+                          : isPositive ? 'border-emerald-500 bg-emerald-500/5 text-emerald-300'
+                          : 'border-indigo-500 bg-indigo-500/5 text-slate-300'
+                        }`}>
+                          {insight}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Target Progression Funnel */}
         {analytics.targetFunnel.length > 0 && (
