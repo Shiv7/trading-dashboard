@@ -1,0 +1,12 @@
+
+> trading-dashboard@1.0.0 dev
+> vite --port 3001 --force
+
+Forced re-optimization of dependencies
+Port 3001 is in use, trying another one...
+
+  VITE v5.4.21  ready in 125 ms
+
+  ➜  Local:   http://localhost:3002/
+  ➜  Network: http://172.31.35.143:3002/
+  ➜  Network: http://172.17.0.1:3002/

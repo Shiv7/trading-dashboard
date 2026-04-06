@@ -218,11 +218,11 @@ export default function PriceNarrative({ score, narrative, intelligence, classNa
 
     // Generate main summary
     const generateSummary = (): string => {
-        const price = score.close.toFixed(2)
+        const price = score.close > 0 ? `₹${score.close.toFixed(2)}` : 'DM'
         const direction = score.direction === 'BULLISH' ? 'bullish' :
             score.direction === 'BEARISH' ? 'bearish' : 'neutral'
 
-        let summary = `Price at ₹${price} with ${direction} bias. `
+        let summary = `Price at ${price} with ${direction} bias. `
 
         if (score.vcpSupportScore > 0.6 && score.direction === 'BULLISH') {
             summary += 'Holding above key support cluster. '
@@ -255,52 +255,67 @@ export default function PriceNarrative({ score, narrative, intelligence, classNa
         }
     }
 
+    // Track what data is missing — show DM indicators
+    const missingInputs: string[] = []
+    if (score.close === 0) missingInputs.push('Price')
+    if (score.vcpCombinedScore === 0 && score.vcpSupportScore === 0) missingInputs.push('VCP')
+    if (score.ipuFinalScore === 0 && score.ipuMomentumState === 'STEADY') missingInputs.push('IPU')
+    if (!score.oiSignal || score.oiSignal === '') missingInputs.push('OI')
+    if (!score.futuresBuildup || score.futuresBuildup === '') missingInputs.push('F&O')
+
     return (
-        <div className={`bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 ${className}`}>
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3 flex items-center gap-2">
-                <span className="text-amber-400">💡</span>
-                Why Price Is Here
-            </h3>
-
-            {/* Main Summary */}
-            <div className="bg-slate-700/30 rounded-lg p-3 mb-4">
-                <p className="text-sm text-slate-200 leading-relaxed">
-                    {generateSummary()}
-                </p>
+        <div className={`bg-slate-800/50 border border-slate-700/50 rounded-xl p-3 ${className}`}>
+            <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wide flex items-center gap-1.5">
+                    Why Price Is Here
+                </h3>
+                <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${score.direction === 'BULLISH'
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : score.direction === 'BEARISH'
+                            ? 'bg-red-500/20 text-red-400'
+                            : 'bg-slate-700 text-slate-400'
+                    }`}>
+                    {score.direction === 'BULLISH' ? 'BUYERS' :
+                        score.direction === 'BEARISH' ? 'SELLERS' : 'BALANCED'}
+                </span>
             </div>
 
-            {/* Key Factors */}
-            <div className="space-y-2">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide">Key Factors</h4>
-                {narrativePoints.map((point, i) => (
-                    <div
-                        key={i}
-                        className={`flex items-start gap-2 p-2 rounded-lg text-sm ${point.positive
-                                ? 'bg-emerald-500/10 text-emerald-300'
-                                : 'bg-red-500/10 text-red-300'
-                            }`}
-                    >
-                        <span className="flex-shrink-0">{getIconForType(point.type)}</span>
-                        <span>{point.text}</span>
-                    </div>
-                ))}
-            </div>
+            {/* Main Summary — compact */}
+            <p className="text-xs text-slate-300 leading-relaxed mb-2">
+                {generateSummary()}
+            </p>
 
-            {/* Controlling Party */}
-            <div className="mt-4 pt-3 border-t border-slate-700">
-                <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-400">Controlling Party:</span>
-                    <span className={`font-bold px-3 py-1 rounded ${score.direction === 'BULLISH'
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : score.direction === 'BEARISH'
-                                ? 'bg-red-500/20 text-red-400'
-                                : 'bg-slate-700 text-slate-400'
-                        }`}>
-                        {score.direction === 'BULLISH' ? '🐂 BUYERS' :
-                            score.direction === 'BEARISH' ? '🐻 SELLERS' : '⚖️ BALANCED'}
-                    </span>
+            {/* Key Factors — only show if we have them */}
+            {narrativePoints.length > 0 && (
+                <div className="space-y-1">
+                    {narrativePoints.map((point, i) => (
+                        <div
+                            key={i}
+                            className={`flex items-start gap-1.5 px-2 py-1 rounded text-xs ${point.positive
+                                    ? 'bg-emerald-500/10 text-emerald-300'
+                                    : 'bg-red-500/10 text-red-300'
+                                }`}
+                        >
+                            <span className="flex-shrink-0 text-[10px]">{getIconForType(point.type)}</span>
+                            <span>{point.text}</span>
+                        </div>
+                    ))}
                 </div>
-            </div>
+            )}
+
+            {/* Show missing data sources */}
+            {missingInputs.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-slate-700/50">
+                    <div className="flex items-center gap-1 flex-wrap">
+                        <span className="text-[9px] text-slate-500">Missing:</span>
+                        {missingInputs.map(m => (
+                            <span key={m} className="text-[9px] text-red-400/70 italic bg-red-500/5 px-1 rounded">
+                                {m}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

@@ -6,12 +6,14 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyTradesApi, strategyWalletsApi, marketDataApi, greeksApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment, isAnyMarketOpen } from '../../utils/tradingUtils';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
+import ConvictionBadge from '../ConvictionBadge';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
 import ConfluenceBadge from './ConfluenceBadge';
+import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
 
 type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -149,6 +151,15 @@ interface FukaaTrigger {
   confluenceT3?: number;
   confluenceT4?: number;
   confluenceRR?: number;
+  // Liquidity source
+  liquiditySource?: string;
+  // Retest enrichment
+  retestActive?: boolean;
+  retestLevel?: number;
+  retestSource?: string;
+  retestStage?: string;
+  retestDirectionAligned?: boolean;
+  retestBoost?: number;
 }
 
 interface TradePlan {
@@ -281,7 +292,26 @@ function extractTradePlan(sig: FukaaTrigger): TradePlan {
     ? sig.atr30m
     : bw > 0 ? bw / 2.5 : sig.triggerPrice * 0.004;
 
-  // If backend enriched targets exist (pivot-based), use them
+  // Prefer ConfluentTargetEngine levels (what actually gets traded)
+  const hasConfluence = (sig.confluenceSL ?? 0) > 0 && (sig.confluenceT1 ?? 0) > 0;
+  if (hasConfluence) {
+    return {
+      entry: sig.triggerPrice,
+      sl: sig.confluenceSL!,
+      t1: sig.confluenceT1 ?? null,
+      t2: sig.confluenceT2 ?? null,
+      t3: sig.confluenceT3 ?? null,
+      t4: sig.confluenceT4 ?? null,
+      rr: sig.confluenceRR ?? sig.riskReward ?? 0,
+      hasPivots: true,
+      atr,
+      optionType,
+      strike,
+      strikeInterval: interval,
+    };
+  }
+
+  // Legacy fallback: EntryLevelCalculator targets
   if (sig.target1 != null && sig.stopLoss != null) {
     return {
       entry: sig.triggerPrice,
@@ -617,7 +647,8 @@ const FukaaCard: React.FC<{
   onBuy: (sig: FukaaTrigger, plan: TradePlan, lots: number) => void;
   onRequestFunds: (sig: FukaaTrigger, plan: TradePlan, creditAmount: number, premium: number, lotSize: number, multiplier: number, confidence: number) => void;
   isFunded: boolean;
-}> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded }) => {
+  onNavigateToScrip: (scripCode: string) => void;
+}> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded, onNavigateToScrip }) => {
   const [pressing, setPressing] = useState(false);
   const [showRevisedPopup, setShowRevisedPopup] = useState(false);
   const [revisedData, setRevisedData] = useState<any>(null);
@@ -689,7 +720,7 @@ const FukaaCard: React.FC<{
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
+    displayInstrumentName = `${trigger.symbol} ${trigger.optionStrike ?? plan.strike} ${trigger.optionType ?? plan.optionType}`;
     lotSize = 1;
     isEstimatedPremium = true;
   }
@@ -723,7 +754,7 @@ const FukaaCard: React.FC<{
       } catch {}
     };
     checkDrift();
-    const iv = setInterval(checkDrift, 30000);
+    const iv = setInterval(() => { if (isAnyMarketOpen()) checkDrift(); }, 30000);
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
@@ -740,13 +771,17 @@ const FukaaCard: React.FC<{
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
+      overflow-clip transition-shadow duration-200 hover:shadow-lg cursor-pointer`}
+      onClick={() => onNavigateToScrip(trigger.scripCode)}>
       <div className="p-3 sm:p-4">
 
         {/* ── TOP SECTION ── */}
         <div className="flex items-start justify-between mb-1">
           <div>
-            <h3 className="text-lg font-semibold text-white leading-tight">{displayName}</h3>
+            <h3 className="text-lg font-semibold text-white leading-tight flex items-center gap-2">
+              {displayName}
+              <ConvictionBadge symbol={trigger.symbol || ''} compact />
+            </h3>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-slate-500">
                 Confidence <span className="font-mono text-slate-400">{confidence}%</span>
@@ -755,6 +790,15 @@ const FukaaCard: React.FC<{
               <span className="text-xs text-slate-500 font-mono">
                 {formatTriggerTime(trigger)}
               </span>
+              {premium > 0 && premium < 10 && instrumentMode === 'OPTION' && (
+                <>
+                  <span className="text-slate-700">|</span>
+                  <span className="text-[9px] text-amber-500/70 whitespace-nowrap">
+                    ~{((premium < 5 ? 6 : 4) * 0.05 / premium * 100).toFixed(1)}% slip
+                  </span>
+                </>
+              )}
+              <LiquiditySourceBadge source={trigger.liquiditySource} />
             </div>
           </div>
           <div className="flex items-center gap-1.5">
@@ -869,6 +913,9 @@ const FukaaCard: React.FC<{
             conflRR={trigger.confluenceRR}
           />
         )}
+
+        {/* ── RETEST BADGE ── */}
+        <RetestBadge active={trigger.retestActive} aligned={trigger.retestDirectionAligned} boost={trigger.retestBoost} source={trigger.retestSource} level={trigger.retestLevel} stage={trigger.retestStage} />
 
         {/* ── TRANSLATED GREEKS ── */}
         {trigger.greekEnriched && (() => {
@@ -987,7 +1034,7 @@ const FukaaCard: React.FC<{
         {/* ── INSUFFICIENT FUNDS LABEL (clickable → Add Funds) ── */}
         {sizing.insufficientFunds && !sizing.disabled && (
           <button
-            onClick={() => onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence)}
+            onClick={(e) => { e.stopPropagation(); onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence); }}
             className="mt-3 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 transition-colors cursor-pointer text-left"
           >
             <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
@@ -1033,6 +1080,9 @@ const FukaaCard: React.FC<{
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lots={sizing.lots}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">prem={Number(premium.toFixed(2))}</span>
+          {premium > 0 && premium < 10 && instrumentMode === 'OPTION' && (
+            <span className="px-1 rounded bg-amber-500/30 text-amber-300 whitespace-nowrap">slip~{((premium < 5 ? 6 : 4) * 0.05 / premium * 100).toFixed(1)}%</span>
+          )}
           {isEstimatedPremium && <span className="px-1 rounded bg-yellow-500/30 text-yellow-300 whitespace-nowrap">EST</span>}
           {trigger.blockTradeDetected && (() => {
             const pct = trigger.blockTradePct ?? 0;
@@ -1090,7 +1140,8 @@ const FukaaCard: React.FC<{
               </span>
             )}
             <button
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation();
                 if ((isBeyond30mBoundary || (isWithin30mWindow && isStale)) && instrumentMode === 'OPTION' && trigger.optionScripCode) {
                   setLoadingRevised(true);
                   try {
@@ -1105,7 +1156,7 @@ const FukaaCard: React.FC<{
                       const eqT4 = plan.t4 || 0;
                       const revised = await greeksApi.compute({
                         spot: eqEntry,
-                        strike: plan.strike || trigger.optionStrike || 0,
+                        strike: trigger.optionStrike || plan.strike || 0,
                         optionLtp: currentLtp,
                         optionType: plan.optionType || 'CE',
                         expiry: trigger.optionExpiry || '',
@@ -1158,7 +1209,7 @@ const FukaaCard: React.FC<{
             </button>
 
             {showRevisedPopup && revisedData && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowRevisedPopup(false)}>
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}>
                 <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
                   <h3 className="text-lg font-bold text-white mb-1">Revised Trade Levels</h3>
                   <p className="text-xs text-slate-400 mb-4">Signal is {revisedData.signalAge}m old — levels recomputed with current LTP</p>
@@ -1187,11 +1238,12 @@ const FukaaCard: React.FC<{
                   </div>
 
                   <div className="flex gap-3">
-                    <button onClick={() => setShowRevisedPopup(false)}
+                    <button onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}
                       className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">
                       Cancel
                     </button>
-                    <button onClick={() => {
+                    <button onClick={(e) => {
+                      e.stopPropagation();
                       setShowRevisedPopup(false);
                       onBuy(trigger, { ...plan, sl: revisedData.optionSL, t1: revisedData.optionT1, t2: revisedData.optionT2, t3: revisedData.optionT3, t4: revisedData.optionT4, entry: revisedData.currentLtp }, sizing.lots);
                     }} className={`flex-1 h-10 rounded-xl text-white font-semibold text-sm transition-colors ${buyBg} ${buyHover}`}>
@@ -1261,7 +1313,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     fetchFukaa(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchFukaa, 60000); // 60s fallback safety net
+      interval = setInterval(() => { if (isAnyMarketOpen()) fetchFukaa(); }, 60000); // 60s fallback safety net
     }
     // WebSocket push: prepend new triggered signals in real-time
     const onWsSignal = (e: Event) => {
@@ -1308,7 +1360,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       } catch { /* ignore */ }
     };
     fetchCapital();
-    const interval = setInterval(fetchCapital, 30000);
+    const interval = setInterval(() => { if (isAnyMarketOpen()) fetchCapital(); }, 30000);
     const onWalletUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.strategy === 'FUKAA') fetchCapital();
@@ -1371,7 +1423,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
     let lotSize = 1;
     let multiplier = 1;
     let tradingScripCode = sig.scripCode;
-    let strike = plan.strike;
+    let strike = sig.optionStrike ?? plan.strike;
     let optionType: 'CE' | 'PE' = plan.optionType;
 
     if (hasRealOption) {
@@ -1405,7 +1457,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
       instrumentType = 'FUTURES';
     } else {
       premium = estimateOptionPremium(plan);
-      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType ?? ''}`;
+      instrumentSymbol = `${sig.symbol} ${sig.optionStrike ?? plan.strike} ${sig.optionType ?? plan.optionType ?? ''}`;
       instrumentType = 'OPTION';
     }
 
@@ -1683,6 +1735,7 @@ export const FukaaTabContent: React.FC<FukaaTabContentProps> = ({ autoRefresh = 
                   setFundModal({ strategyKey: 'FUKAA', creditAmount: credit, sig: s, plan: p, premium: prem, lotSize: lotSz, multiplier: mult, confidence: conf });
                 }}
                 isFunded={fundedScripCodes.has(sig.scripCode)}
+                onNavigateToScrip={(sc) => navigate(`/stock/${sc}`)}
               />
             ))}
           </div>

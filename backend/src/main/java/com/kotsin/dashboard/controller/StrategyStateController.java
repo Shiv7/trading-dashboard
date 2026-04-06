@@ -13,6 +13,7 @@ import com.kotsin.dashboard.kafka.McxBbt1Consumer;
 import com.kotsin.dashboard.kafka.McxBb30Consumer;
 import com.kotsin.dashboard.kafka.McxBb15Consumer;
 import com.kotsin.dashboard.kafka.NseBb30Consumer;
+import com.kotsin.dashboard.kafka.RetestConsumer;
 import com.kotsin.dashboard.kafka.StrategyOpportunityConsumer;
 import com.kotsin.dashboard.kafka.StrategyStateConsumer;
 import com.kotsin.dashboard.kafka.TradingSignalConsumer;
@@ -61,6 +62,7 @@ public class StrategyStateController {
     private final McxBb30Consumer mcxBb30Consumer;
     private final McxBb15Consumer mcxBb15Consumer;
     private final NseBb30Consumer nseBb30Consumer;
+    private final RetestConsumer retestConsumer;
     private final TradingSignalService tradingSignalService;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
@@ -205,6 +207,7 @@ public class StrategyStateController {
         stats.put("totalOpportunities", opportunityConsumer.getOpportunityCount());
         stats.put("highScoreOpportunities", opportunityConsumer.getHighScoreOpportunities(70).size());
         stats.put("fukaaActive", fukaaConsumer.getActiveTriggerCount());
+        stats.put("retestActive", retestConsumer.getActiveTriggerCount());
         stats.put("microAlphaActive", microAlphaConsumer.getActiveTriggerCount());
 
         log.debug("[API] GET /strategy-state/stats | {}", stats);
@@ -937,5 +940,31 @@ public class StrategyStateController {
     @GetMapping("/nsebb30/latest")
     public ResponseEntity<Map<String, Map<String, Object>>> getNseBb30Latest() {
         return ResponseEntity.ok(nseBb30Consumer.getLatestNseBb30());
+    }
+
+    // ==================== RETEST STRATEGY ENDPOINTS ====================
+
+    @GetMapping("/retest/active")
+    public ResponseEntity<Map<String, Map<String, Object>>> getActiveRetestTriggers() {
+        Map<String, Map<String, Object>> triggers = retestConsumer.getActiveTriggers();
+        log.debug("[API] GET /strategy-state/retest/active | {} active triggers", triggers.size());
+        return ResponseEntity.ok(triggers);
+    }
+
+    @GetMapping("/retest/active/list")
+    public ResponseEntity<List<Map<String, Object>>> getActiveRetestTriggersList() {
+        Map<String, Map<String, Object>> triggers = retestConsumer.getActiveTriggers();
+        List<Map<String, Object>> list = new ArrayList<>(triggers.values());
+        return ResponseEntity.ok(list);
+    }
+
+    @GetMapping("/retest/all-latest")
+    public ResponseEntity<List<Map<String, Object>>> getRetestAllLatest() {
+        return ResponseEntity.ok(retestConsumer.getAllLatestList());
+    }
+
+    @GetMapping("/retest/history")
+    public ResponseEntity<List<Map<String, Object>>> getRetestHistory() {
+        return ResponseEntity.ok(retestConsumer.getTodaySignalHistory());
     }
 }

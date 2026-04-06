@@ -1,5 +1,7 @@
 package com.kotsin.dashboard.kafka;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.model.dto.RiskEventDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,24 +18,37 @@ import org.springframework.stereotype.Service;
 public class RiskEventConsumer {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private static final ObjectMapper mapper = new ObjectMapper();
 
     @KafkaListener(topics = "risk-events", groupId = "dashboard-risk-consumer")
-    public void consumeRiskEvent(RiskEventDTO event) {
+    public void consumeRiskEvent(String payload) {
         try {
-            log.info("RISK_EVENT_RECEIVED type={} severity={} message={}",
-                    event.getEventType(), event.getSeverity(), event.getMessage());
+            JsonNode root = mapper.readTree(payload);
 
-            // Broadcast to all connected WebSocket clients
+            RiskEventDTO event = new RiskEventDTO();
+            // Producer sends "type", DTO expects "eventType"
+            event.setEventType(root.has("eventType") ? root.path("eventType").asText()
+                    : root.path("type").asText("UNKNOWN"));
+            event.setScripCode(root.path("scripCode").asText(null));
+            event.setMessage(root.path("message").asText(""));
+            event.setSeverity(root.path("severity").asText("INFO"));
+            event.setWalletId(root.path("walletId").asText(null));
+            event.setCurrentValue(root.path("currentValue").asDouble(0));
+            event.setLimitValue(root.path("limitValue").asDouble(0));
+            event.setThresholdPercent(root.path("thresholdPercent").asDouble(0));
+
+            log.info("RISK_EVENT type={} scrip={} message={}",
+                    event.getEventType(), event.getScripCode(), event.getMessage());
+
             messagingTemplate.convertAndSend("/topic/risk", event);
 
-            // For critical events, also send to a separate alert topic
             if ("CRITICAL".equals(event.getSeverity())) {
                 messagingTemplate.convertAndSend("/topic/alerts", event);
                 log.warn("CRITICAL_RISK_ALERT: {}", event.getMessage());
             }
 
         } catch (Exception e) {
-            log.error("Error processing risk event: {}", e.getMessage());
+            log.debug("Error processing risk event: {}", e.getMessage());
         }
     }
 }

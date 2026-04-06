@@ -11,7 +11,7 @@ type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
 // Display order for strategy tabs — strategies not in this list appear at end.
 // Actual strategy names come from backend API (StrategyNameResolver is single source of truth).
-const STRATEGY_DISPLAY_ORDER = ['FUKAA', 'FUDKOI', 'FUDKII', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30']
+const STRATEGY_DISPLAY_ORDER = ['FUKAA', 'FUDKOI', 'FUDKII', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30']
 
 const fmtTime = (ts: string) => {
   try {

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown, ChevronRight, Clock, AlertTriangle,
   TrendingUp, TrendingDown
@@ -18,12 +19,13 @@ interface WatchingCardProps {
 }
 
 export const WatchingCard: React.FC<WatchingCardProps> = ({ snapshot, setup, isSample }) => {
+  const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
   const config = getStrategyConfig(setup.strategyId);
   const isLong = setup.direction === 'LONG';
 
   return (
-    <div className={`bg-slate-800 rounded-lg border ${isSample ? 'border-dashed border-yellow-500/60' : 'border-yellow-500/30'} overflow-hidden`}>
+    <div className={`bg-slate-800 rounded-lg border ${isSample ? 'border-dashed border-yellow-500/60' : 'border-yellow-500/30'} overflow-hidden cursor-pointer`} onClick={() => navigate(`/stock/${snapshot.scripCode}`)}>
       {isSample && (
         <div className="bg-yellow-500/10 px-3 py-1 text-[10px] text-yellow-400 font-medium text-center">
           SAMPLE CARD
@@ -124,7 +126,7 @@ export const WatchingCard: React.FC<WatchingCardProps> = ({ snapshot, setup, isS
       <div className="border-t border-gray-800">
         <div
           className="px-3 py-2 cursor-pointer hover:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-400"
-          onClick={() => setExpanded(!expanded)}
+          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
         >
           {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           Active Setup

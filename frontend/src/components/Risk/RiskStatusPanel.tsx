@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { riskStatusApi, type RiskStatus } from '../../services/api'
+import { isAnyMarketOpen } from '../../utils/tradingUtils'
 
 export default function RiskStatusPanel() {
   const [status, setStatus] = useState<RiskStatus | null>(null)
@@ -22,7 +23,7 @@ export default function RiskStatusPanel() {
 
   useEffect(() => {
     loadStatus()
-    const interval = setInterval(loadStatus, 10000) // Check every 10 seconds
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadStatus() }, 10000) // Check every 10 seconds
     return () => clearInterval(interval)
   }, [loadStatus])
 

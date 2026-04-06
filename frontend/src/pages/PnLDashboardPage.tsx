@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { strategyWalletsApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
 import { getStrategyColors } from '../utils/strategyColors'
 import { computeAnalytics, computeAdvancedAnalytics, computeRegimeAnalytics, fmt, fmtINR } from '../utils/tradeAnalytics'
@@ -13,7 +14,7 @@ type ResultFilter = 'ALL' | 'WIN' | 'LOSS'
 type ExchangeFilter = 'ALL' | 'N' | 'M' | 'C'
 
 // Display order for strategy tabs — strategies not in this list appear at end
-const STRATEGY_DISPLAY_ORDER = ['FUKAA', 'FUDKOI', 'FUDKII', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30']
+const STRATEGY_DISPLAY_ORDER = ['FUKAA', 'FUDKOI', 'FUDKII', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30']
 
 // ── Period helpers for analytics tabs ──
 type AnalyticsPeriod = 'TODAY' | '1W' | '1M' | 'QTR' | '1Y' | 'ALL' | 'DATE'
@@ -119,6 +120,7 @@ export default function PnLDashboardPage() {
   useEffect(() => {
     loadTradeData(analyticsPeriod, customDate)
     const interval = setInterval(async () => {
+      if (!isAnyMarketOpen()) return
       try {
         const sums = await strategyWalletsApi.getSummaries().catch(() => [])
         if (sums.length === 0) return

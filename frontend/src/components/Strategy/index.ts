@@ -17,3 +17,4 @@ export { McxBbt1TabContent } from './McxBbt1TabContent';
 export { McxBb30TabContent } from './McxBb30TabContent';
 export { McxBb15TabContent } from './McxBb15TabContent';
 export { NseBb30TabContent } from './NseBb30TabContent';
+export { RetestTabContent } from './RetestTabContent';

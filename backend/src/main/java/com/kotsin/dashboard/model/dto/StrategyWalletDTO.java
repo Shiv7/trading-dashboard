@@ -102,6 +102,7 @@ public class StrategyWalletDTO {
         // Instrument metadata
         private String instrumentType;      // "OPTION" / "FUTURES" / null
         private String instrumentSymbol;    // e.g. "NATGASMINI FEB 275PE"
+        private String tradeLabel;          // e.g. "FUT FALLBACK due to Illiquid Opt"
 
         // Analytics
         private Double rMultiple;
@@ -110,6 +111,24 @@ public class StrategyWalletDTO {
 
         // Transaction charges (Zerodha round-trip)
         private Double totalCharges;
+
+        // Slippage — entry
+        private Double estimatedEntrySlippage;
+        private Double estimatedEntrySlippageTotal;
+        private Double estimatedSlippagePct;
+        private String slippageTier;
+        // Slippage — exit
+        private Double exitSlippagePerUnit;
+        private Double exitSlippageTotal;
+        // Gross P&L (after slippage, before charges)
+        private Double grossPnl;
+        // Charge breakdown
+        private Double chargesBrokerage;
+        private Double chargesStt;
+        private Double chargesExchange;
+        private Double chargesGst;
+        private Double chargesSebi;
+        private Double chargesStamp;
 
         // Signal-level metrics (for correlation analytics)
         private Double atr;

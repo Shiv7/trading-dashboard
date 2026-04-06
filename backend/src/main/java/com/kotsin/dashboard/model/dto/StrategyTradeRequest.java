@@ -90,4 +90,34 @@ public class StrategyTradeRequest {
     private double oiChangePercent;
     private double blockDealPercent;
     private double riskReward;
+
+    // ========== Slippage Estimation (from orderbook-aware model) ==========
+    private Double estimatedEntrySlippage;      // ₹ per unit at entry
+    private Double estimatedEntrySlippageTotal;  // ₹ total at entry
+    private Double estimatedSlippagePct;          // estimated round-trip %
+    private String slippageTier;                  // FULL/SPREAD_ONLY/VOLUME_ONLY/STATIC
+
+    // ========== Gap Analysis ==========
+    private double gapFactor;                    // Gap penalty factor (0.3 - 1.0)
+    private double gapQualityScore;              // GQS: 0.0-1.0+ gap-fill trap detector
+    private double gapPct;                       // Scrip gap% at open
+
+    // ========== Retest Enrichment ==========
+    private boolean retestActive;
+    private Double retestBoost;
+    private boolean retestDirectionAligned;
+    private String retestSource;                 // "W_PIVOT", "W_S1", "W_R1", etc.
+    private String retestStage;                  // "D1_BROKEN", "RETEST_30M", "RETEST_15M", etc.
+
+    // ========== Liquidity + Institutional Conviction ==========
+    private String liquiditySource;              // "DIRECT", "PROXY", "ON_DEMAND", or "DISABLED"
+    private double realMoneyScore;               // Institutional conviction total
+    private double dayValueCr;                   // Day value in crores
+    private double convictionScore;              // Final conviction score for outcome analysis
+
+    // ========== Option Swap Tracking ==========
+    private String originalOptionScripCode;      // Pre-swap ITM option scripCode for proxy liquidity fallback
+
+    // ========== Trade Label ==========
+    private String tradeLabel;                   // e.g. "FUT FALLBACK due to Illiquid Opt"
 }

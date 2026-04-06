@@ -6,10 +6,11 @@ import {
 import { fetchJson, strategyWalletsApi, strategyTradesApi, pivotAutoTradeApi, marketDataApi, greeksApi } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment, isAnyMarketOpen } from '../../utils/tradingUtils';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import StalePriceModal from './StalePriceModal';
+import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -147,6 +148,15 @@ interface PivotSignal {
   futuresT2?: number;
   futuresT3?: number;
   futuresT4?: number;
+  // Liquidity source
+  liquiditySource?: string;
+  // Retest enrichment (cross-strategy)
+  retestActive?: boolean;
+  retestLevelNum?: number;
+  retestSource?: string;
+  retestStage?: string;
+  retestDirectionAligned?: boolean;
+  retestBoost?: number;
 }
 
 interface TradePlan {
@@ -636,7 +646,8 @@ const PivotCard: React.FC<{
   plan: TradePlan;
   walletState: SlotWalletState;
   onBuy: (sig: PivotSignal, plan: TradePlan, lots: number) => void;
-}> = ({ sig, plan, walletState, onBuy }) => {
+  onNavigateToScrip: (scripCode: string) => void;
+}> = ({ sig, plan, walletState, onBuy, onNavigateToScrip }) => {
   const [pressing, setPressing] = useState(false);
   const [showRevisedPopup, setShowRevisedPopup] = useState(false);
   const [revisedData, setRevisedData] = useState<any>(null);
@@ -707,7 +718,7 @@ const PivotCard: React.FC<{
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${symbol} ${plan.strike} ${plan.optionType}`;
+    displayInstrumentName = `${symbol} ${sig.optionStrike ?? plan.strike} ${sig.optionType ?? plan.optionType}`;
     lotSize = 1;
   }
 
@@ -730,7 +741,7 @@ const PivotCard: React.FC<{
       } catch {}
     };
     checkDrift();
-    const iv = setInterval(checkDrift, 30000);
+    const iv = setInterval(() => { if (isAnyMarketOpen()) checkDrift(); }, 30000);
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
@@ -741,7 +752,8 @@ const PivotCard: React.FC<{
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
+      overflow-clip transition-shadow duration-200 hover:shadow-lg cursor-pointer`}
+      onClick={() => onNavigateToScrip(sig.scripCode)}>
       <div className="p-3 sm:p-4">
 
         {/* ── TOP SECTION ── */}
@@ -754,6 +766,15 @@ const PivotCard: React.FC<{
               </span>
               <span className="text-slate-700">|</span>
               <span className="text-xs text-slate-500 font-mono">{formatTriggerTime(sig)}</span>
+              {premium > 0 && premium < 10 && instrumentMode === 'OPTION' && (
+                <>
+                  <span className="text-slate-700">|</span>
+                  <span className="text-[9px] text-amber-500/70 whitespace-nowrap">
+                    ~{((premium < 5 ? 6 : 4) * 0.05 / premium * 100).toFixed(1)}% slip
+                  </span>
+                </>
+              )}
+              <LiquiditySourceBadge source={sig.liquiditySource} />
             </div>
           </div>
           <div className="flex items-center gap-1.5">
@@ -1001,6 +1022,9 @@ const PivotCard: React.FC<{
               )}
             </div>
           </div>
+
+          {/* ── CROSS-STRATEGY RETEST BADGE ── */}
+          <RetestBadge active={sig.retestActive} aligned={sig.retestDirectionAligned} boost={sig.retestBoost} source={sig.retestSource} level={sig.retestLevelNum} stage={sig.retestStage} />
 
           {/* SMC */}
           {(() => {
@@ -1295,7 +1319,8 @@ const PivotCard: React.FC<{
         ) : (
           <div className="relative mt-4">
             <button
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation();
                 if ((isBeyond30mBoundary || (isWithin30mWindow && isStale)) && instrumentMode === 'OPTION' && sig.optionScripCode) {
                   setLoadingRevised(true);
                   try {
@@ -1310,7 +1335,7 @@ const PivotCard: React.FC<{
                       const eqT4 = plan.t4 || 0;
                       const revised = await greeksApi.compute({
                         spot: eqEntry,
-                        strike: plan.strike || sig.optionStrike || 0,
+                        strike: sig.optionStrike || plan.strike || 0,
                         optionLtp: currentLtp,
                         optionType: plan.optionType || 'CE',
                         expiry: sig.optionExpiry || '',
@@ -1363,7 +1388,7 @@ const PivotCard: React.FC<{
             </button>
 
             {showRevisedPopup && revisedData && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowRevisedPopup(false)}>
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}>
                 <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
                   <h3 className="text-lg font-bold text-white mb-1">Revised Trade Levels</h3>
                   <p className="text-xs text-slate-400 mb-4">Signal is {revisedData.signalAge}m old — levels recomputed with current LTP</p>
@@ -1392,11 +1417,12 @@ const PivotCard: React.FC<{
                   </div>
 
                   <div className="flex gap-3">
-                    <button onClick={() => setShowRevisedPopup(false)}
+                    <button onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}
                       className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">
                       Cancel
                     </button>
-                    <button onClick={() => {
+                    <button onClick={(e) => {
+                      e.stopPropagation();
                       setShowRevisedPopup(false);
                       onBuy(sig, { ...plan, sl: revisedData.optionSL, t1: revisedData.optionT1, t2: revisedData.optionT2, t3: revisedData.optionT3, t4: revisedData.optionT4, entry: revisedData.currentLtp }, sizing.lots);
                     }} className={`flex-1 h-10 rounded-xl text-white font-semibold text-sm transition-colors ${buyBg} ${buyHover}`}>
@@ -1481,7 +1507,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     fetchPivot(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchPivot, 60000); // 60s fallback safety net
+      interval = setInterval(() => { if (isAnyMarketOpen()) fetchPivot(); }, 60000); // 60s fallback safety net
     }
     // WebSocket push: prepend new triggered signals in real-time
     const onWsSignal = (e: Event) => {
@@ -1528,7 +1554,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
       } catch { /* ignore */ }
     };
     fetchCapital();
-    const interval = setInterval(fetchCapital, 30000);
+    const interval = setInterval(() => { if (isAnyMarketOpen()) fetchCapital(); }, 30000);
     const onWalletUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.strategy === 'PIVOT_CONFLUENCE') fetchCapital();
@@ -1586,7 +1612,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     let lotSize = 1;
     let multiplier = 1;
     let tradingScripCode = sig.scripCode;
-    let displayStrike = plan.strike;
+    let displayStrike = sig.optionStrike ?? plan.strike;
     let displayOptionType: 'CE' | 'PE' = plan.optionType;
 
     if (hasRealOption) {
@@ -1615,7 +1641,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
     } else {
       instrumentMode = 'OPTION';
       premium = estimateOptionPremium(plan);
-      displayName = `${symbol} ${plan.strike} ${plan.optionType ?? ''}`;
+      displayName = `${symbol} ${sig.optionStrike ?? plan.strike} ${sig.optionType ?? plan.optionType ?? ''}`;
       lotSize = 1;
     }
 
@@ -1882,6 +1908,7 @@ export const PivotTabContent: React.FC<PivotTabContentProps> = ({ autoRefresh = 
                 plan={plan}
                 walletState={walletState}
                 onBuy={handleBuy}
+                onNavigateToScrip={(sc) => navigate(`/stock/${sc}`)}
               />
             ))}
           </div>

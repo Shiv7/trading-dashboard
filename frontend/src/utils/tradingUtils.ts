@@ -87,11 +87,16 @@ const PHASE3_BUDGETS: Record<string, { allocPct: number; maxPositions: number }>
   C: { allocPct: 0.00, maxPositions: 0 },
 };
 
+/** Convert a Date to IST hours and minutes */
+export function toIST(date: Date): { h: number; m: number; minutes: number } {
+  const h = (date.getUTCHours() + 5 + Math.floor((date.getUTCMinutes() + 30) / 60)) % 24;
+  const m = (date.getUTCMinutes() + 30) % 60;
+  return { h, m, minutes: h * 60 + m };
+}
+
 function getAllocationPhase(): number {
   const now = new Date();
-  const istH = (now.getUTCHours() + 5 + Math.floor((now.getUTCMinutes() + 30) / 60)) % 24;
-  const istM = (now.getUTCMinutes() + 30) % 60;
-  const istMinutes = istH * 60 + istM;
+  const { minutes: istMinutes } = toIST(now);
   if (istMinutes >= 17 * 60) return 3;
   if (istMinutes >= 15 * 60 + 25) return 2;
   return 1;
@@ -360,4 +365,126 @@ export function checkStalePriceAdjustment(
     adjustedT4: newT4 ?? null,
     levelsShifted: crossed,
   };
+}
+
+// ─────────────────────────────────────────────
+//  Market Hours & Holiday Calendar
+// ─────────────────────────────────────────────
+
+/** NSE trading holidays 2026 (MMDD format) — synced with TradingCalendarService (16 dates) */
+const NSE_HOLIDAYS_2026: Set<string> = new Set([
+  '0115', // Municipal Corporation Election - Maharashtra
+  '0126', // Republic Day
+  '0303', // Holi
+  '0326', // Shri Ram Navami
+  '0331', // Shri Mahavir Jayanti
+  '0403', // Good Friday
+  '0414', // Dr. Baba Saheb Ambedkar Jayanti
+  '0501', // Maharashtra Day
+  '0528', // Bakri Id
+  '0626', // Muharram
+  '0914', // Ganesh Chaturthi
+  '1002', // Mahatma Gandhi Jayanti
+  '1020', // Dussehra
+  '1110', // Diwali - Balipratipada
+  '1124', // Prakash Gurpurb Sri Guru Nanak Dev
+  '1225', // Christmas
+]);
+
+/**
+ * MCX holidays 2026 — only 5 dates where MCX evening session is also closed.
+ * On the other 11 NSE holidays, MCX evening session (5PM–close) remains OPEN.
+ */
+const MCX_HOLIDAYS_2026: Set<string> = new Set([
+  '0101', // New Year — NSE open, MCX evening closed
+  '0126', // Republic Day
+  '0403', // Good Friday
+  '1002', // Mahatma Gandhi Jayanti
+  '1225', // Christmas
+]);
+
+function getIstMMDD(date: Date): string {
+  const istDate = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
+  const mm = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(istDate.getUTCDate()).padStart(2, '0');
+  return mm + dd;
+}
+
+/** Check if a given date is a trading holiday for a specific exchange. */
+function isTradingHoliday(date: Date, exchange?: string): boolean {
+  const mmdd = getIstMMDD(date);
+  const ex = (exchange || 'N').toUpperCase();
+  if (ex === 'M' || ex === 'MCX') return MCX_HOLIDAYS_2026.has(mmdd);
+  return NSE_HOLIDAYS_2026.has(mmdd);
+}
+
+/** Check if today is a weekday in IST */
+function isWeekday(date: Date): boolean {
+  const istDate = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
+  const day = istDate.getUTCDay();
+  return day >= 1 && day <= 5;
+}
+
+/**
+ * MCX close time — seasonal (US DST):
+ *   US DST active (Mar second Sun – Nov first Sun): 23:30 IST
+ *   US standard time: 23:55 IST
+ */
+function getMcxCloseMinutes(): number {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  // Second Sunday of March
+  const dstStart = new Date(Date.UTC(year, 2, 8 + (7 - new Date(Date.UTC(year, 2, 8)).getUTCDay()) % 7));
+  // First Sunday of November
+  const dstEnd = new Date(Date.UTC(year, 10, 1 + (7 - new Date(Date.UTC(year, 10, 1)).getUTCDay()) % 7));
+  const isDST = now >= dstStart && now < dstEnd;
+  return isDST ? 23 * 60 + 30 : 23 * 60 + 55;
+}
+
+/**
+ * Check if a specific exchange is currently open.
+ * Exchange codes: 'N'|'NSE' (NSE), 'M'|'MCX' (MCX), 'C'|'CDS' (Currency)
+ *
+ * MCX special case: On NSE-only holidays (not in MCX_HOLIDAYS_2026),
+ * MCX evening session runs 5PM–close. Morning session is closed.
+ */
+export function isExchangeOpen(exchange?: string): boolean {
+  const now = new Date();
+  if (!isWeekday(now)) return false;
+
+  const { minutes } = toIST(now);
+  const ex = (exchange || 'N').toUpperCase();
+
+  switch (ex) {
+    case 'N':
+    case 'NSE':
+      if (isTradingHoliday(now, 'N')) return false;
+      return minutes >= 9 * 60 && minutes <= 15 * 60 + 30; // 9:00–15:30
+
+    case 'M':
+    case 'MCX':
+      if (isTradingHoliday(now, 'M')) return false; // MCX full holiday (5 dates)
+      if (isTradingHoliday(now, 'N')) {
+        // NSE-only holiday: MCX evening session only (5PM–close)
+        return minutes >= 17 * 60 && minutes <= getMcxCloseMinutes();
+      }
+      return minutes >= 9 * 60 && minutes <= getMcxCloseMinutes(); // Normal day: 9:00–23:30/23:55
+
+    case 'C':
+    case 'CDS':
+      if (isTradingHoliday(now, 'N')) return false; // CDS follows NSE holidays
+      return minutes >= 9 * 60 && minutes <= 17 * 60; // 9:00–17:00
+
+    default:
+      if (isTradingHoliday(now, 'N')) return false;
+      return minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
+  }
+}
+
+/**
+ * Check if ANY Indian exchange is currently open.
+ * Accounts for MCX evening session on NSE-only holidays.
+ */
+export function isAnyMarketOpen(): boolean {
+  return isExchangeOpen('NSE') || isExchangeOpen('MCX') || isExchangeOpen('CDS');
 }

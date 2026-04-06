@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { technicalIndicatorsApi } from '../services/api'
+import { isAnyMarketOpen, isExchangeOpen } from '../utils/tradingUtils'
 import {
   TechnicalIndicators,
   IndicatorHistoryPoint,
@@ -24,7 +25,7 @@ interface UseIndicatorsReturn {
  * @param timeframe Timeframe (default: '5m')
  * @returns Indicators data, history for chart overlays, and loading state
  */
-export function useIndicators(scripCode: string | undefined, timeframe: string = '5m'): UseIndicatorsReturn {
+export function useIndicators(scripCode: string | undefined, timeframe: string = '5m', exchange?: string): UseIndicatorsReturn {
   const [indicators, setIndicators] = useState<TechnicalIndicators | null>(null)
   const [history, setHistory] = useState<IndicatorHistoryPoint[]>([])
   const [loading, setLoading] = useState(true)
@@ -80,6 +81,7 @@ export function useIndicators(scripCode: string | undefined, timeframe: string =
 
     // Poll for updates every 5 seconds
     const pollInterval = setInterval(async () => {
+      if (exchange ? !isExchangeOpen(exchange) : !isAnyMarketOpen()) return
       try {
         const data = await technicalIndicatorsApi.getIndicators(scripCode, timeframe)
         if (data) {
@@ -170,7 +172,7 @@ export function useBatchIndicators(scripCodes: string[], timeframe: string = '5m
   useEffect(() => {
     if (scripCodes.length === 0) return
 
-    const pollInterval = setInterval(fetchBatch, 10000) // Every 10 seconds for batch
+    const pollInterval = setInterval(() => { if (isAnyMarketOpen()) fetchBatch() }, 10000) // Every 10 seconds for batch
     return () => clearInterval(pollInterval)
   }, [fetchBatch, scripCodes.length])
 

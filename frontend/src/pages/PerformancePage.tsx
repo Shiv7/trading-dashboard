@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { performanceApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import type { PerformanceMetrics } from '../types'
 
 const fmtINR = (n: number) => Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })
@@ -22,7 +23,7 @@ export default function PerformancePage() {
       }
     }
     loadMetrics()
-    const interval = setInterval(loadMetrics, 30000) // auto-refresh every 30s
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadMetrics() }, 30000) // auto-refresh every 30s
     return () => clearInterval(interval)
   }, [])
 

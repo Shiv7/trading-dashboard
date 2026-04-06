@@ -54,14 +54,17 @@ public class StrategyWalletsService {
                     // is the fresh source (2s from monitoring). Wallet entity's unrealizedPnl is Lua-maintained
                     // every 5s and including it here causes double-counting when position-level is added.
                     double unrealizedPnl = 0;
-                    double totalPnl = realizedPnl;
+                    // totalPnl = balance - initial (source of truth, not wallet counters which may miss partial exits)
+                    double totalPnl = currentBalance - initialCapital;
                     int totalTrades = getIntValue(wallet, "totalTradeCount", 0);
                     int wins = getIntValue(wallet, "totalWinCount", 0);
                     int losses = getIntValue(wallet, "totalLossCount", 0);
                     double winRate = getNumericValue(wallet, "winRate", 0);
                     double availableMargin = getNumericValue(wallet, "availableMargin", 0);
                     double usedMargin = getNumericValue(wallet, "usedMargin", 0);
-                    double dayPnl = getNumericValue(wallet, "dayPnl", 0);
+                    // Use dayRealizedPnl (realized only), NOT dayPnl (which mixes unrealized)
+                    double dayPnl = getNumericValue(wallet, "dayRealizedPnl",
+                            getNumericValue(wallet, "dayPnl", 0));
                     boolean circuitBreakerTripped = getBoolValue(wallet, "circuitBreakerTripped", false);
 
                     double pnlPercent = initialCapital > 0 ? totalPnl / initialCapital * 100 : 0;
@@ -456,6 +459,7 @@ public class StrategyWalletsService {
                     // Instrument metadata
                     .instrumentType(pos.get("instrumentType") != null ? pos.get("instrumentType").toString() : null)
                     .instrumentSymbol(pos.get("instrumentSymbol") != null ? pos.get("instrumentSymbol").toString() : null)
+                    .tradeLabel(pos.get("tradeLabel") != null ? pos.get("tradeLabel").toString() : null)
                     // Analytics
                     .confidence(getMetricDouble(pos, "confidence"))
                     .rMultiple(null)
@@ -569,6 +573,22 @@ public class StrategyWalletsService {
                     .durationMinutes(doc.get("durationMinutes") instanceof Number
                             ? ((Number) doc.get("durationMinutes")).longValue() : null)
                     .totalCharges(getMetricDoubleFromDoc(doc, "totalCharges"))
+                    // Slippage — entry
+                    .estimatedEntrySlippage(getMetricDoubleFromDoc(doc, "estimatedEntrySlippage"))
+                    .estimatedEntrySlippageTotal(getMetricDoubleFromDoc(doc, "estimatedEntrySlippageTotal"))
+                    .estimatedSlippagePct(getMetricDoubleFromDoc(doc, "estimatedSlippagePct"))
+                    .slippageTier(doc.getString("slippageTier"))
+                    // Slippage — exit
+                    .exitSlippagePerUnit(getMetricDoubleFromDoc(doc, "exitSlippagePerUnit"))
+                    .exitSlippageTotal(getMetricDoubleFromDoc(doc, "exitSlippageTotal"))
+                    // Gross P&L + charge breakdown
+                    .grossPnl(getMetricDoubleFromDoc(doc, "grossPnl"))
+                    .chargesBrokerage(getMetricDoubleFromDoc(doc, "chargesBrokerage"))
+                    .chargesStt(getMetricDoubleFromDoc(doc, "chargesStt"))
+                    .chargesExchange(getMetricDoubleFromDoc(doc, "chargesExchange"))
+                    .chargesGst(getMetricDoubleFromDoc(doc, "chargesGst"))
+                    .chargesSebi(getMetricDoubleFromDoc(doc, "chargesSebi"))
+                    .chargesStamp(getMetricDoubleFromDoc(doc, "chargesStamp"))
                     // Signal-level metrics
                     .atr(getMetricDoubleFromDoc(doc, "atr"))
                     .volumeSurge(getMetricDoubleFromDoc(doc, "volumeSurge"))

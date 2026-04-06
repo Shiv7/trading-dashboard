@@ -53,6 +53,9 @@ public class PivotConfluenceConsumer implements OptionSwapAware {
     private static final String REDIS_KEY = "dashboard:pivot:active-triggers";
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
+    @Value("${strategy.pivot.enabled:true}")
+    private boolean pivotEnabled;
+
     @Value("${signal.pivot.ttl.minutes:30}")
     private int signalTtlMinutes;
 
@@ -106,6 +109,7 @@ public class PivotConfluenceConsumer implements OptionSwapAware {
             groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}"
     )
     public void onPivotConfluence(String payload) {
+        if (!pivotEnabled) return;
         try {
             JsonNode root = objectMapper.readTree(payload);
 
@@ -349,6 +353,17 @@ public class PivotConfluenceConsumer implements OptionSwapAware {
         if (root.has("futuresExpiry")) data.put("futuresExpiry", root.path("futuresExpiry").asText());
         if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
         if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
+
+        // Liquidity source (DIRECT / PROXY / ON_DEMAND / DISABLED)
+        if (root.has("liquiditySource")) data.put("liquiditySource", root.path("liquiditySource").asText("DIRECT"));
+
+        // Retest enrichment fields
+        if (root.has("retestActive")) data.put("retestActive", root.path("retestActive").asBoolean(false));
+        if (root.has("retestLevel")) data.put("retestLevel", root.path("retestLevel").asDouble(0));
+        if (root.has("retestSource")) data.put("retestSource", root.path("retestSource").asText(""));
+        if (root.has("retestStage")) data.put("retestStage", root.path("retestStage").asText(""));
+        if (root.has("retestDirectionAligned")) data.put("retestDirectionAligned", root.path("retestDirectionAligned").asBoolean(false));
+        if (root.has("retestBoost")) data.put("retestBoost", root.path("retestBoost").asDouble(0));
 
         return data;
     }

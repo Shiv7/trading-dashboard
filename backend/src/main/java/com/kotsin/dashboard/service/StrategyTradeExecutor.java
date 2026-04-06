@@ -68,6 +68,12 @@ public class StrategyTradeExecutor {
     @Autowired
     private TransactionCostService transactionCostService;
 
+    @Autowired
+    private ExitSlippageService exitSlippageService;
+
+    @Autowired
+    private com.kotsin.dashboard.greeks.GreekTrailingEngine greekTrailingEngine;
+
     @Value("${kafka.topics.trade-outcomes:trade-outcomes}")
     private String tradeOutcomesTopic;
 
@@ -88,6 +94,9 @@ public class StrategyTradeExecutor {
 
     @Value("${optionproducer.api.base:http://localhost:8208}")
     private String optionProducerBaseUrl;
+
+    @Value("${execution.service.url:http://localhost:8089}")
+    private String executionServiceUrl;
 
     // Stale-price tracking: scripCode → {price, timestamp}
     private final ConcurrentHashMap<String, double[]> lastPriceSnapshot = new ConcurrentHashMap<>();
@@ -216,6 +225,7 @@ public class StrategyTradeExecutor {
         position.put("instrumentSymbol", req.getInstrumentSymbol());
         position.put("underlyingScripCode", req.getUnderlyingScripCode());
         position.put("confidence", req.getConfidence());
+        position.put("tradeLabel", req.getTradeLabel());
         position.put("exitReason", "");
         position.put("equityLtp", req.getEquitySpot());
 
@@ -304,6 +314,28 @@ public class StrategyTradeExecutor {
         targets.put("oiChangePercent", req.getOiChangePercent());
         targets.put("blockDealPercent", req.getBlockDealPercent());
         targets.put("riskReward", req.getRiskReward());
+        // Slippage estimation at entry
+        targets.put("estimatedEntrySlippage", req.getEstimatedEntrySlippage());
+        targets.put("estimatedEntrySlippageTotal", req.getEstimatedEntrySlippageTotal());
+        targets.put("estimatedSlippagePct", req.getEstimatedSlippagePct());
+        targets.put("slippageTier", req.getSlippageTier());
+        // Gap analysis
+        targets.put("gapFactor", req.getGapFactor());
+        targets.put("gapQualityScore", req.getGapQualityScore());
+        targets.put("gapPct", req.getGapPct());
+        // Retest enrichment
+        targets.put("retestActive", req.isRetestActive());
+        targets.put("retestBoost", req.getRetestBoost());
+        targets.put("retestDirectionAligned", req.isRetestDirectionAligned());
+        targets.put("retestSource", req.getRetestSource());
+        targets.put("retestStage", req.getRetestStage());
+        // Liquidity + institutional conviction
+        targets.put("liquiditySource", req.getLiquiditySource());
+        targets.put("realMoneyScore", req.getRealMoneyScore());
+        targets.put("dayValueCr", req.getDayValueCr());
+        targets.put("convictionScore", req.getConvictionScore());
+        // Option swap tracking
+        targets.put("originalOptionScripCode", req.getOriginalOptionScripCode());
         targets.put("optionHighFiveMin", req.getEntryPrice());
         targets.put("optionHighFiveMinUpdatedAt", now);
         // Equity/futures levels for dual monitoring
@@ -955,7 +987,7 @@ public class StrategyTradeExecutor {
             if (ddGatePass) {
                 String instrumentType2 = (String) targets.getOrDefault("instrumentType", "OPTION");
                 String direction2 = (String) targets.getOrDefault("direction", "BULLISH");
-                boolean isShortFut = "FUTURES".equals(instrumentType2) && "BEARISH".equals(direction2);
+                boolean isShortFut = ("FUTURES".equals(instrumentType2) || "EQUITY".equals(instrumentType2)) && "BEARISH".equals(direction2);
 
                 // ZONE A: Price reversed past last-hit-target
                 // OPTION/LONG: price dropped below lastHitPrice
@@ -1039,9 +1071,14 @@ public class StrategyTradeExecutor {
                                         targets.put("optionHighFiveMinUpdatedAt", now);
 
                                         boolean isShortFut2 = isShortFut;
+                                        // Orderbook-aware exit slippage
+                                        String ddExch = (String) targets.getOrDefault("exchange", "N");
+                                        double ddExitSlip = exitSlippageService.computeExitSlippage(scripCode, closeQty, optionLtp, ddExch);
+                                        double ddSlippedExit = isShortFut2
+                                            ? optionLtp + ddExitSlip : Math.max(optionLtp - ddExitSlip, 0.05);
                                         double grossPnl = isShortFut2
-                                            ? (entryPrice - optionLtp) * closeQty
-                                            : (optionLtp - entryPrice) * closeQty;
+                                            ? (entryPrice - ddSlippedExit) * closeQty
+                                            : (ddSlippedExit - entryPrice) * closeQty;
 
                                         double trancheCharges = 0.0;
                                         try {
@@ -1111,7 +1148,7 @@ public class StrategyTradeExecutor {
         boolean isBearish = "BEARISH".equals(direction);
 
         String instrumentType = (String) targets.getOrDefault("instrumentType", "OPTION");
-        boolean isShortFutures = "FUTURES".equals(instrumentType) && isBearish;
+        boolean isShortFutures = ("FUTURES".equals(instrumentType) || "EQUITY".equals(instrumentType)) && isBearish;
         // LONG/OPTION: SL hit when price DROPS below SL level
         // SHORT FUTURES: SL hit when price RISES above SL level
         boolean optionSlHit = isShortFutures
@@ -1141,6 +1178,33 @@ public class StrategyTradeExecutor {
             executeExit(targets, scripCode, optionLtp, remainingQty,
                 "OI_EXIT(" + oiPattern + ")", targetKey);
             return;
+        }
+
+        // --- GREEK TRAILING: check exit for positions under Greek trailing (after T1 hit) ---
+        if (greekTrailingEngine != null && greekTrailingEngine.isEnabled()
+                && greekTrailingEngine.isTrailing(scripCode)
+                && "OPTION".equals(targets.getOrDefault("instrumentType", "OPTION"))) {
+            String underlyingScripCodeGT = (String) targets.get("underlyingScripCode");
+            double spotPriceGT = -1;
+            if (underlyingScripCodeGT != null && !underlyingScripCodeGT.isEmpty()) {
+                if ("M".equals(exchange) || "C".equals(exchange)) {
+                    spotPriceGT = getLtpFromRedis(exchange, underlyingScripCodeGT);
+                } else {
+                    spotPriceGT = getLtpFromRedis("N", underlyingScripCodeGT);
+                }
+            }
+            if (spotPriceGT <= 0) spotPriceGT = optionLtp; // fallback: use option LTP
+
+            int dteGT = computeDte(targets);
+            String greekExitReason = greekTrailingEngine.checkExit(scripCode, optionLtp, spotPriceGT, dteGT);
+            if (greekExitReason != null) {
+                greekTrailingEngine.removeTrail(scripCode);
+                log.info("{} GREEK TRAILING EXIT for {} reason={} optionLtp={} remaining={}",
+                    LOG_PREFIX, scripCode, greekExitReason,
+                    String.format("%.2f", optionLtp), remainingQty);
+                executeExit(targets, scripCode, optionLtp, remainingQty, greekExitReason, targetKey);
+                return;
+            }
         }
 
         // --- Dual target checks T1→T4: whichever level is hit first ---
@@ -1207,9 +1271,14 @@ public class StrategyTradeExecutor {
                 remainingQty -= closeQty;
                 targets.put("remainingQty", remainingQty);
 
+                // Orderbook-aware exit slippage for target-hit tranche
+                String tgtExch = (String) targets.getOrDefault("exchange", "N");
+                double tgtExitSlip = exitSlippageService.computeExitSlippage(scripCode, closeQty, optionLtp, tgtExch);
+                double tgtSlippedExit = isShortFutures
+                    ? optionLtp + tgtExitSlip : Math.max(optionLtp - tgtExitSlip, 0.05);
                 double grossTranchePnl = isShortFutures
-                    ? (entryPrice - optionLtp) * closeQty
-                    : (optionLtp - entryPrice) * closeQty;
+                    ? (entryPrice - tgtSlippedExit) * closeQty
+                    : (tgtSlippedExit - entryPrice) * closeQty;
 
                 // Calculate Zerodha charges for this tranche
                 double trancheCharges = 0.0;
@@ -1255,6 +1324,14 @@ public class StrategyTradeExecutor {
 
                 log.info("{} {} partial exit: closeQty={} ({}L) remainingQty={} pnl={}",
                     LOG_PREFIX, hitSource, closeQty, lots, remainingQty, String.format("%.2f", tranchePnl));
+
+                // GREEK-TRAIL: Activate Greek trailing for remaining option qty after T1 hit
+                if ("T1".equals(level) && remainingQty > 0
+                        && greekTrailingEngine != null && greekTrailingEngine.isEnabled()
+                        && "OPTION".equals(targets.getOrDefault("instrumentType", "OPTION"))
+                        && !greekTrailingEngine.isTrailing(scripCode)) {
+                    activateGreekTrailingForOption(targets, scripCode, optionLtp);
+                }
 
                 if (remainingQty <= 0) break;
             }
@@ -1793,13 +1870,28 @@ public class StrategyTradeExecutor {
     @SuppressWarnings("unchecked")
     private void executeExit(Map<String, Object> targets, String scripCode,
                               double exitPrice, int qty, String exitReason, String targetKey) {
+        // Clean up Greek trailing state if active (in-memory + Redis)
+        if (greekTrailingEngine != null) {
+            greekTrailingEngine.removeTrail(scripCode);
+        }
+        // Delete Redis greek:trailing key (written by Trade Execution 8089, not cleaned by dashboard engine)
+        try {
+            redisTemplate.delete("greek:trailing:" + scripCode);
+        } catch (Exception e) {
+            log.debug("{} Failed to delete greek:trailing:{} from Redis: {}", LOG_PREFIX, scripCode, e.getMessage());
+        }
         double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
         String exitDirection = (String) targets.getOrDefault("direction", "BULLISH");
         String exitInstrType = (String) targets.getOrDefault("instrumentType", "OPTION");
-        boolean isExitShortFutures = "FUTURES".equals(exitInstrType) && "BEARISH".equals(exitDirection);
+        boolean isExitShortFutures = ("FUTURES".equals(exitInstrType) || "EQUITY".equals(exitInstrType)) && "BEARISH".equals(exitDirection);
+        // Orderbook-aware exit slippage
+        String exitExch = (String) targets.getOrDefault("exchange", "N");
+        double exitSlipPerUnit = exitSlippageService.computeExitSlippage(scripCode, qty, exitPrice, exitExch);
+        double slippedExit = isExitShortFutures
+            ? exitPrice + exitSlipPerUnit : Math.max(exitPrice - exitSlipPerUnit, 0.05);
         double grossPnl = isExitShortFutures
-            ? (entryPrice - exitPrice) * qty
-            : (exitPrice - entryPrice) * qty;
+            ? (entryPrice - slippedExit) * qty
+            : (slippedExit - entryPrice) * qty;
 
         // ── Calculate Zerodha charges (round-trip: entry BUY + exit SELL) ──
         double totalCharges = 0.0;
@@ -1897,6 +1989,10 @@ public class StrategyTradeExecutor {
         }
 
         publishTradeOutcome(targets, scripCode, exitPrice, qty, exitReason, netPnl, totalCharges, true);
+
+        // ML Shadow: record outcome for Bayesian update + shadow log linkage (async, fire-and-forget)
+        recordMlShadowOutcome((String) targets.get("strategy"), scripCode, netPnl > 0,
+                exitReason, netPnl, entryPrice);
 
         // Credit NET PnL + release margin for REMAINING qty only (partial exits already released their share)
         String strategy = (String) targets.get("strategy");
@@ -2031,6 +2127,44 @@ public class StrategyTradeExecutor {
             outcome.put("oiChangePercent", targets.get("oiChangePercent"));
             outcome.put("blockDealPercent", targets.get("blockDealPercent"));
             outcome.put("riskReward", targets.get("riskReward"));
+            // Slippage estimation (entry data from signal time + tier)
+            outcome.put("estimatedEntrySlippage", targets.get("estimatedEntrySlippage"));
+            outcome.put("estimatedEntrySlippageTotal", targets.get("estimatedEntrySlippageTotal"));
+            outcome.put("estimatedSlippagePct", targets.get("estimatedSlippagePct"));
+            outcome.put("slippageTier", targets.get("slippageTier"));
+
+            // Greek enrichment (for backtesting option regime analysis)
+            outcome.put("greekDelta", targets.get("greekDelta"));
+            outcome.put("greekGamma", targets.get("greekGamma"));
+            outcome.put("greekTheta", targets.get("greekTheta"));
+            outcome.put("greekVega", targets.get("greekVega"));
+            outcome.put("greekIV", targets.get("greekIV"));
+            outcome.put("greekDte", targets.get("greekDte"));
+            outcome.put("greekMoneynessType", targets.get("greekMoneynessType"));
+            outcome.put("greekThetaImpaired", targets.get("greekThetaImpaired"));
+            outcome.put("greekGammaBoost", targets.get("greekGammaBoost"));
+            outcome.put("optionRR", targets.get("optionRR"));
+
+            // Gap analysis
+            outcome.put("gapFactor", targets.get("gapFactor"));
+            outcome.put("gapQualityScore", targets.get("gapQualityScore"));
+            outcome.put("gapPct", targets.get("gapPct"));
+
+            // Retest enrichment
+            outcome.put("retestActive", targets.get("retestActive"));
+            outcome.put("retestBoost", targets.get("retestBoost"));
+            outcome.put("retestDirectionAligned", targets.get("retestDirectionAligned"));
+            outcome.put("retestSource", targets.get("retestSource"));
+            outcome.put("retestStage", targets.get("retestStage"));
+
+            // Liquidity + institutional conviction
+            outcome.put("liquiditySource", targets.get("liquiditySource"));
+            outcome.put("realMoneyScore", targets.get("realMoneyScore"));
+            outcome.put("dayValueCr", targets.get("dayValueCr"));
+            outcome.put("convictionScore", targets.get("convictionScore"));
+
+            // Option swap tracking
+            outcome.put("originalOptionScripCode", targets.get("originalOptionScripCode"));
 
             String json = objectMapper.writeValueAsString(outcome);
             kafkaTemplate.send(tradeOutcomesTopic, scripCode, json);
@@ -2042,6 +2176,39 @@ public class StrategyTradeExecutor {
         } catch (Exception e) {
             log.error("{} Failed to publish trade outcome: {}", LOG_PREFIX, e.getMessage());
         }
+    }
+
+    /**
+     * Fire-and-forget: notify trade execution's ML Shadow system about a trade outcome.
+     * This links the shadow log entry with actual P&L and updates Bayesian distributions.
+     * Runs async via virtual thread — never blocks the exit path.
+     */
+    private void recordMlShadowOutcome(String strategy, String scripCode, boolean isWin,
+                                        String exitReason, double netPnl, double entryPrice) {
+        new Thread(() -> {
+            try {
+                String jsonBody = objectMapper.writeValueAsString(Map.of(
+                        "strategy", strategy != null ? strategy : "UNKNOWN",
+                        "scripCode", scripCode,
+                        "isWin", isWin,
+                        "exitReason", exitReason != null ? exitReason : "UNKNOWN",
+                        "netPnl", netPnl,
+                        "entryPrice", entryPrice));
+
+                java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(executionServiceUrl + "/api/ml/shadow/record-outcome"))
+                        .header("Content-Type", "application/json")
+                        .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody))
+                        .timeout(java.time.Duration.ofSeconds(5))
+                        .build();
+
+                httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+                log.debug("{} ML_SHADOW_OUTCOME sent: strategy={} scrip={} win={} pnl={}",
+                        LOG_PREFIX, strategy, scripCode, isWin, String.format("%.2f", netPnl));
+            } catch (Exception e) {
+                log.debug("{} ML_SHADOW_OUTCOME_FAIL: {}", LOG_PREFIX, e.getMessage());
+            }
+        }, "ml-shadow-outcome").start();
     }
 
     // ==================== STRATEGY WALLET MANAGEMENT (Lua-atomic) ====================
@@ -2104,14 +2271,43 @@ public class StrategyTradeExecutor {
         "  local totalTrades = (tonumber(w['totalWinCount']) or 0) + (tonumber(w['totalLossCount']) or 0)\n" +
         "  w['winRate'] = totalTrades > 0 and ((tonumber(w['totalWinCount']) or 0) / totalTrades * 100) or 0\n" +
         "end\n" +
-        // Peak balance + max drawdown
+        // Peak balance + day peak + dynamic maxDrawdown
         "local peak = tonumber(w['peakBalance']) or 0\n" +
         "if w['currentBalance'] > peak then peak = w['currentBalance'] end\n" +
         "w['peakBalance'] = peak\n" +
-        "local dd = peak - w['currentBalance']\n" +
+        "local dayPeak = tonumber(w['dayPeakBalance']) or w['currentBalance']\n" +
+        "if w['currentBalance'] > dayPeak then dayPeak = w['currentBalance'] end\n" +
+        "w['dayPeakBalance'] = dayPeak\n" +
+        "local prevDayPeak = tonumber(w['prevDayPeak']) or peak\n" +
+        "local ddBase = math.min(prevDayPeak, dayPeak)\n" +
+        "w['maxDrawdown'] = ddBase * 0.10\n" +
+        "w['effectiveAvailableMargin'] = math.max(0, ddBase - w['usedMargin'])\n" +
+        "local unrealized = tonumber(w['unrealizedPnl']) or 0\n" +
+        "local dd = unrealized < 0 and -unrealized or 0\n" +
         "local maxDD = tonumber(w['maxDrawdownHit']) or 0\n" +
         "if dd > maxDD then maxDD = dd end\n" +
         "w['maxDrawdownHit'] = maxDD\n" +
+        "local dayPnl = (tonumber(w['dayRealizedPnl']) or 0) + unrealized\n" +
+        "local dailyLoss = dayPnl < 0 and -dayPnl or 0\n" +
+        "local maxDailyLoss = tonumber(w['maxDailyLoss']) or 999999999\n" +
+        "local maxDrawdown = tonumber(w['maxDrawdown']) or 999999999\n" +
+        "if dailyLoss >= maxDailyLoss then\n" +
+        "  w['circuitBreakerTripped'] = true\n" +
+        "  w['circuitBreakerReason'] = 'Daily loss limit reached: realized=' .. string.format('%.0f', w['dayRealizedPnl']) .. ' unrealized=' .. string.format('%.0f', unrealized) .. ' total=' .. string.format('%.0f', dayPnl)\n" +
+        "  w['circuitBreakerTrippedAt'] = now\n" +
+        "elseif dd >= maxDrawdown and dd > 0 then\n" +
+        "  w['circuitBreakerTripped'] = true\n" +
+        "  w['circuitBreakerReason'] = 'Max drawdown breached: active positions dd=' .. string.format('%.2f', dd) .. ' limit=' .. string.format('%.2f', maxDrawdown)\n" +
+        "  w['circuitBreakerTrippedAt'] = now\n" +
+        "elseif dd < maxDrawdown and dailyLoss < maxDailyLoss and w['circuitBreakerTripped'] == true then\n" +
+        "  local reason = w['circuitBreakerReason'] or ''\n" +
+        "  if type(reason) == 'string' and (string.find(reason, 'drawdown') or string.find(reason, 'Daily loss')) then\n" +
+        "    w['circuitBreakerTripped'] = false\n" +
+        "    w['circuitBreakerReason'] = cjson.null\n" +
+        "    w['circuitBreakerTrippedAt'] = cjson.null\n" +
+        "    w['circuitBreakerResetsAt'] = cjson.null\n" +
+        "  end\n" +
+        "end\n" +
         // Derived fields
         "w['availableMargin'] = math.max(0, w['currentBalance'] - w['usedMargin'])\n" +
         "w['totalPnl'] = w['realizedPnl'] + (tonumber(w['unrealizedPnl']) or 0)\n" +
@@ -2330,6 +2526,58 @@ public class StrategyTradeExecutor {
         }
     }
 
+    /**
+     * Expiry-day forced exit: at 14:30 IST, close all OPTION positions whose expiry is today.
+     * Prevents holding options through settlement where theta is catastrophic and pricing erratic.
+     */
+    @Scheduled(cron = "0 30 14 * * MON-FRI", zone = "Asia/Kolkata")
+    @SuppressWarnings("unchecked")
+    public void expiryDayForcedExit() {
+        if (!executionEnabled) return;
+        String todayStr = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).toString();
+        log.info("{} Expiry-day forced exit check at 14:30 IST for expiry={}", LOG_PREFIX, todayStr);
+
+        try {
+            Set<String> targetKeys = redisTemplate.keys(TARGETS_PREFIX + "*");
+            if (targetKeys == null || targetKeys.isEmpty()) return;
+
+            int exitCount = 0;
+            for (String targetKey : targetKeys) {
+                try {
+                    String targetsJson = redisTemplate.opsForValue().get(targetKey);
+                    if (targetsJson == null) continue;
+
+                    java.util.Map<String, Object> targets = objectMapper.readValue(targetsJson, java.util.Map.class);
+                    int remainingQty = ((Number) targets.get("remainingQty")).intValue();
+                    if (remainingQty <= 0) continue;
+
+                    String instrumentType = (String) targets.get("instrumentType");
+                    if (!"OPTION".equals(instrumentType)) continue;
+
+                    String expiry = (String) targets.get("optionExpiry");
+                    if (expiry == null) expiry = (String) targets.get("expiry");
+                    if (!todayStr.equals(expiry)) continue;
+
+                    String scripCode = (String) targets.get("scripCode");
+                    String exchange = (String) targets.get("exchange");
+                    double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
+                    double currentLtp = getLtpFromRedis(exchange, scripCode);
+                    if (currentLtp <= 0) currentLtp = entryPrice;
+
+                    executeExit(targets, scripCode, currentLtp, remainingQty, "EXPIRY_DAY", targetKey);
+                    exitCount++;
+                    log.info("{} Expiry-day exit: {} expiry={} qty={} price={}",
+                        LOG_PREFIX, scripCode, expiry, remainingQty, String.format("%.2f", currentLtp));
+                } catch (Exception e) {
+                    log.error("{} Expiry-day exit error for {}: {}", LOG_PREFIX, targetKey, e.getMessage());
+                }
+            }
+            log.info("{} Expiry-day forced exit complete: closed {} positions", LOG_PREFIX, exitCount);
+        } catch (Exception e) {
+            log.error("{} Expiry-day forced exit failed: {}", LOG_PREFIX, e.getMessage(), e);
+        }
+    }
+
     private static final ZoneId US_EASTERN = ZoneId.of("America/New_York");
 
     /**
@@ -2500,5 +2748,104 @@ public class StrategyTradeExecutor {
             log.error("{} Failed to get active trades: {}", LOG_PREFIX, e.getMessage());
         }
         return result;
+    }
+
+    // ==================== GREEK TRAILING HELPERS ====================
+
+    /**
+     * Activate Greek trailing for an option position after T1 hit.
+     * Computes IV from current market data and delegates to GreekTrailingEngine.
+     */
+    private void activateGreekTrailingForOption(Map<String, Object> targets,
+                                                 String scripCode, double currentPremium) {
+        try {
+            String optionType = (String) targets.get("optionType");
+            if (optionType == null) return; // not an option
+
+            double strike = targets.get("strike") != null
+                ? ((Number) targets.get("strike")).doubleValue() : 0;
+            if (strike <= 0) return;
+
+            String instrumentSymbol = (String) targets.getOrDefault("instrumentSymbol", scripCode);
+            int dte = computeDte(targets);
+
+            // Resolve underlying spot price
+            double spotPrice = 0;
+            String underlyingScripCode = (String) targets.get("underlyingScripCode");
+            String exchange = (String) targets.get("exchange");
+            if (underlyingScripCode != null && !underlyingScripCode.isEmpty()) {
+                if ("M".equals(exchange) || "C".equals(exchange)) {
+                    spotPrice = getLtpFromRedis(exchange, underlyingScripCode);
+                } else {
+                    spotPrice = getLtpFromRedis("N", underlyingScripCode);
+                }
+            }
+
+            // Compute delta and IV from Black-Scholes
+            boolean isCall = "CE".equals(optionType);
+            double tte = Math.max(dte, 0.5) / 365.0;
+            double iv = 0.30; // default 30%
+            double delta = isCall ? 0.5 : -0.5; // default
+
+            if (spotPrice > 0 && strike > 0 && currentPremium > 0) {
+                double computedIV = com.kotsin.dashboard.greeks.BlackScholesLite.impliedVol(
+                    currentPremium, spotPrice, strike, tte, isCall);
+                if (computedIV > 0.01 && computedIV < 5.0) {
+                    iv = computedIV;
+                }
+                delta = com.kotsin.dashboard.greeks.BlackScholesLite.delta(
+                    spotPrice, strike, tte, iv, isCall);
+            }
+
+            // Use greek enrichment data if available (more accurate than our computation)
+            if (Boolean.TRUE.equals(targets.get("greekEnriched"))) {
+                double enrichedDelta = targets.get("greekDelta") != null
+                    ? ((Number) targets.get("greekDelta")).doubleValue() : 0;
+                double enrichedIV = targets.get("greekIV") != null
+                    ? ((Number) targets.get("greekIV")).doubleValue() : 0;
+                if (enrichedDelta != 0) delta = enrichedDelta;
+                if (enrichedIV > 0) iv = enrichedIV / 100.0; // greekIV stored as percentage
+            }
+
+            greekTrailingEngine.onT1Hit(scripCode, scripCode, instrumentSymbol,
+                optionType, strike, delta, currentPremium, iv, dte);
+
+            // Store activation state in targets for persistence across restarts
+            targets.put("greekTrailingActive", true);
+            targets.put("greekTrailingActivatedAt", System.currentTimeMillis());
+
+            log.info("{} Greek trailing activated for {} {} strike={} delta={} iv={}% dte={}",
+                LOG_PREFIX, instrumentSymbol, optionType,
+                String.format("%.0f", strike), String.format("%.3f", delta),
+                String.format("%.1f", iv * 100), dte);
+
+        } catch (Exception e) {
+            log.warn("{} Failed to activate Greek trailing for {}: {}",
+                LOG_PREFIX, scripCode, e.getMessage());
+        }
+    }
+
+    /**
+     * Compute DTE (days to expiry) from target metadata.
+     * Falls back to 7 if expiry is not available.
+     */
+    private int computeDte(Map<String, Object> targets) {
+        String optionExpiry = (String) targets.get("optionExpiry");
+        if (optionExpiry != null && !optionExpiry.isEmpty()) {
+            try {
+                LocalDate expiryDate = LocalDate.parse(optionExpiry,
+                    DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                LocalDate today = LocalDate.now(IST);
+                int dte = (int) java.time.temporal.ChronoUnit.DAYS.between(today, expiryDate);
+                return Math.max(dte, 0);
+            } catch (Exception e) {
+                // fall through to default
+            }
+        }
+        // Try greekDte from enrichment
+        if (targets.get("greekDte") != null) {
+            return ((Number) targets.get("greekDte")).intValue();
+        }
+        return 7; // safe default
     }
 }

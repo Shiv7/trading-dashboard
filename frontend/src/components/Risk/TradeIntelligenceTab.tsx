@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { riskApi } from '../../services/api'
+import { isAnyMarketOpen } from '../../utils/tradingUtils'
 import { getStrategyColors } from '../../utils/strategyColors'
 import type { TradeIntelligenceReport } from '../../types'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts'
@@ -120,7 +121,7 @@ export default function TradeIntelligenceTab({ dateRange, strategyFilter, exchan
   useEffect(() => {
     setLoading(true)
     loadData()
-    const interval = setInterval(loadData, 60000)
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadData() }, 60000)
     return () => clearInterval(interval)
   }, [loadData])
 

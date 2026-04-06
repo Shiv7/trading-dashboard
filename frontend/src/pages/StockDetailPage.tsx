@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { scoresApi, signalsApi, indicatorsApi, quantScoresApi, walletApi, ordersApi } from '../services/api'
 import { useDashboardStore } from '../store/dashboardStore'
@@ -9,8 +9,6 @@ import type { FamilyScore, Signal, IPUSignal, VCPSignal, QuantScore, Wallet } fr
 import { IPUPanel } from '../components/Indicators/IPUPanel'
 import { VCPClusters } from '../components/Indicators/VCPClusters'
 import { TechnicalIndicatorsPanel } from '../components/Indicators/TechnicalIndicatorsPanel'
-import PriceChart from '../components/Charts/PriceChart'
-import { IndicatorControls, type IndicatorToggles } from '../components/Charts/IndicatorControls'
 import OptionsPanel from '../components/Options/OptionsPanel'
 import {
   TradingModeToggle,
@@ -31,6 +29,18 @@ import { ActiveSetupsPanel } from '../components/Intelligence/ActiveSetupsPanel'
 // Multi-Timeframe Analysis components
 import { MTFScoreHeatmap, MTFMicrostructurePanel, MTFOptionsFlowPanel } from '../components/MTF'
 
+// Data Quality components (redesign)
+import {
+  VerdictBar,
+  StrategyConvictionCards,
+  DataAuditPanel,
+  DataQualityBadge,
+  DMValue,
+  ProvenancedValue,
+  computeDataQuality,
+} from '../components/DataQuality'
+import type { ProvenanceInfo } from '../components/DataQuality'
+
 
 // Helper functions for microstructure data mapping
 const getOfiRegime = (flowDirection?: string): 'STRONG_POSITIVE' | 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'STRONG_NEGATIVE' => {
@@ -39,7 +49,6 @@ const getOfiRegime = (flowDirection?: string): 'STRONG_POSITIVE' | 'POSITIVE' | 
     case 'BUYING': return 'POSITIVE'
     case 'SELLING': return 'NEGATIVE'
     case 'BALANCED': return 'NEUTRAL'
-    // Legacy values
     case 'STRONG_BULLISH': return 'STRONG_POSITIVE'
     case 'BULLISH': return 'POSITIVE'
     case 'BEARISH': return 'NEGATIVE'
@@ -55,13 +64,20 @@ const getVpinRegime = (vpin?: number): 'HIGH_TOXIC' | 'MODERATE' | 'LOW' => {
   return 'LOW'
 }
 
+/** Get provenance for a field — returns LIVE if value exists, DM if not, FALLBACK if flagged */
+function prov(value: unknown, fallbackReason?: string): ProvenanceInfo {
+  if (value === undefined || value === null || value === '' || value === 0) {
+    return fallbackReason ? { status: 'FALLBACK', reason: fallbackReason } : { status: 'DM' }
+  }
+  return { status: 'LIVE' }
+}
+
 export default function StockDetailPage() {
   const { scripCode } = useParams<{ scripCode: string }>()
 
   // Core state
   const [score, setScore] = useState<FamilyScore | null>(null)
   const [signals, setSignals] = useState<Signal[]>([])
-  const [scoreHistory, setScoreHistory] = useState<FamilyScore[]>([])
   const [wallet, setWallet] = useState<Wallet | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -70,14 +86,11 @@ export default function StockDetailPage() {
   const [vcpSignal, setVcpSignal] = useState<VCPSignal | null>(null)
   const [quantScore, setQuantScore] = useState<QuantScore | null>(null)
 
-  // Technical Indicators (BB, VWAP, SuperTrend)
+  // Technical Indicators (BB, VWAP, SuperTrend) — data only, no chart
   const [indicatorTimeframe, setIndicatorTimeframe] = useState<string>('5m')
-  const { indicators: techIndicators, history: indicatorHistory, loading: indicatorsLoading } = useIndicators(scripCode, indicatorTimeframe)
-  const [indicatorToggles, setIndicatorToggles] = useState<IndicatorToggles>({
-    bollingerBands: true,
-    vwap: true,
-    superTrend: true,
-  })
+  // Derive exchange for market-hours gating (quantScore.exchange: N=NSE, M=MCX, C=CDS)
+  const scripExchange = quantScore?.exchange
+  const { indicators: techIndicators, loading: indicatorsLoading } = useIndicators(scripCode, indicatorTimeframe, scripExchange)
 
   // Store - integrate WebSocket data
   const wsScores = useDashboardStore((s) => s.scores)
@@ -104,31 +117,26 @@ export default function StockDetailPage() {
     async function loadData() {
       setLoading(true)
       try {
-        const [scoreData, signalsData, historyData, ipuData, vcpData, quantData, walletData, allTfScores] = await Promise.all([
+        const [scoreData, signalsData, ipuData, vcpData, quantData, walletData, allTfScores] = await Promise.all([
           scoresApi.getScore(scripCode!).catch(() => null),
           signalsApi.getSignalsForStock(scripCode!, 50).catch(() => []),
-          scoresApi.getScoreHistory(scripCode!, 100).catch(() => []),
           indicatorsApi.getIPUSignal(scripCode!).catch(() => null),
           indicatorsApi.getVCPSignal(scripCode!).catch(() => null),
           quantScoresApi.getScore(scripCode!).catch(() => null),
           walletApi.getWallet().catch(() => null),
-          // FIX: Fetch ALL timeframe scores for MTF display
           quantScoresApi.getScoreAllTimeframes(scripCode!).catch(() => null),
         ])
         setScore(scoreData)
         setSignals(signalsData)
-        setScoreHistory(historyData)
         setIpuSignal(ipuData)
         setVcpSignal(vcpData)
         setQuantScore(quantData)
         setWallet(walletData)
 
-        // FIX: Populate store with all timeframe scores for MTF components
         if (allTfScores && typeof allTfScores === 'object') {
           const scoresArray = Object.values(allTfScores) as QuantScore[]
           if (scoresArray.length > 0) {
             bulkUpdateQuantScores(scoresArray)
-            console.log(`[MTF] Loaded ${scoresArray.length} timeframe scores for ${scripCode}`)
           }
         }
       } catch (error) {
@@ -141,7 +149,6 @@ export default function StockDetailPage() {
     loadData()
     subscribeToStock(scripCode)
 
-    // Subscribe to detailed indicators
     const unsubIPU = subscribeToIPU(scripCode, (data) => setIpuSignal(data as IPUSignal))
     const unsubVCP = subscribeToVCP(scripCode, (data) => setVcpSignal(data as VCPSignal))
 
@@ -165,39 +172,14 @@ export default function StockDetailPage() {
     mtis: displayQuantScore.quantScore || 0,
     mtisLabel: displayQuantScore.quantLabel || 'NEUTRAL',
     mtisTrend: 'STABLE',
-    open: 0,
-    high: 0,
-    low: 0,
-    close: 0,
-    volume: 0,
-    vwap: 0,
-    vcpCombinedScore: 0,
-    vcpRunway: 0,
-    vcpStructuralBias: 0,
-    vcpSupportScore: 0,
-    vcpResistanceScore: 0,
-    ipuFinalScore: 0,
-    ipuInstProxy: 0,
-    ipuMomentum: 0,
-    ipuExhaustion: 0,
-    ipuUrgency: 0,
-    ipuDirectionalConviction: 0,
-    ipuXfactor: false,
-    ipuMomentumState: 'STEADY',
-    indexRegimeLabel: 'NEUTRAL',
-    indexRegimeStrength: 0,
-    securityRegimeLabel: 'NEUTRAL',
-    securityAligned: false,
-    oiSignal: '',
-    futuresBuildup: '',
-    hardGatePassed: false,
-    hardGateReason: '',
-    mtfGatePassed: false,
-    mtfGateReason: '',
-    qualityGatePassed: false,
-    qualityGateReason: '',
-    statsGatePassed: false,
-    statsGateReason: '',
+    open: 0, high: 0, low: 0, close: 0, volume: 0, vwap: 0,
+    vcpCombinedScore: 0, vcpRunway: 0, vcpStructuralBias: 0, vcpSupportScore: 0, vcpResistanceScore: 0,
+    ipuFinalScore: 0, ipuInstProxy: 0, ipuMomentum: 0, ipuExhaustion: 0, ipuUrgency: 0,
+    ipuDirectionalConviction: 0, ipuXfactor: false, ipuMomentumState: 'STEADY',
+    indexRegimeLabel: 'NEUTRAL', indexRegimeStrength: 0, securityRegimeLabel: 'NEUTRAL', securityAligned: false,
+    oiSignal: '', futuresBuildup: '',
+    hardGatePassed: false, hardGateReason: '', mtfGatePassed: false, mtfGateReason: '',
+    qualityGatePassed: false, qualityGateReason: '', statsGatePassed: false, statsGateReason: '',
     overallScore: displayQuantScore.quantScore || 0,
     direction: displayQuantScore.direction || 'NEUTRAL',
     signalEmitted: false,
@@ -219,6 +201,11 @@ export default function StockDetailPage() {
     p => p.scripCode === scripCode && p.quantity > 0
   ) || null
 
+  // Compute Data Quality
+  const dq = useMemo(
+    () => computeDataQuality(displayScore, displayQuantScore, displayQuantScore?.dataQuality),
+    [displayScore, displayQuantScore]
+  )
 
   const handleTradeExecute = async (order: { scripCode: string; direction: 'LONG' | 'SHORT'; entryPrice: number; stopLoss: number; target: number; quantity: number }) => {
     try {
@@ -230,36 +217,32 @@ export default function StockDetailPage() {
         currentPrice: order.entryPrice,
         sl: order.stopLoss,
         tp1: order.target,
-      });
-      console.log(`[${tradingMode}] Order created:`, result);
-      // Refresh wallet to show new position
-      walletApi.getWallet().then(setWallet).catch(() => {});
+      })
+      console.log(`[${tradingMode}] Order created:`, result)
+      walletApi.getWallet().then(setWallet).catch(() => {})
     } catch (err) {
-      console.error('Trade execution failed:', err);
+      console.error('Trade execution failed:', err)
     }
   }
 
   const handleClosePosition = async () => {
-    if (!activePosition?.scripCode) return;
+    if (!activePosition?.scripCode) return
     try {
-      await ordersApi.closePosition(activePosition.scripCode);
-      console.log('Position closed:', activePosition.scripCode);
-      // Refresh wallet
-      walletApi.getWallet().then(setWallet).catch(() => {});
+      await ordersApi.closePosition(activePosition.scripCode)
+      walletApi.getWallet().then(setWallet).catch(() => {})
     } catch (err) {
-      console.error('Close position failed:', err);
+      console.error('Close position failed:', err)
     }
   }
 
   // Loading state
   if (loading) {
     return (
-      <div className="space-y-6 animate-pulse">
-        <div className="h-16 bg-slate-800/50 rounded-xl" />
-        <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-3 h-96 bg-slate-800/50 rounded-xl" />
-          <div className="col-span-6 h-96 bg-slate-800/50 rounded-xl" />
-          <div className="col-span-3 h-96 bg-slate-800/50 rounded-xl" />
+      <div className="space-y-4 animate-pulse">
+        <div className="h-14 bg-slate-800/50 rounded-xl" />
+        <div className="h-20 bg-slate-800/50 rounded-xl" />
+        <div className="grid grid-cols-5 gap-3">
+          {[...Array(5)].map((_, i) => <div key={i} className="h-48 bg-slate-800/50 rounded-xl" />)}
         </div>
       </div>
     )
@@ -270,9 +253,7 @@ export default function StockDetailPage() {
     return (
       <div className="text-center py-12">
         <div className="text-xl text-slate-400 mb-4">No data for {scripCode}</div>
-        <Link to="/dashboard" className="btn btn-primary">
-          Back to Dashboard
-        </Link>
+        <Link to="/dashboard" className="btn btn-primary">Back to Dashboard</Link>
       </div>
     )
   }
@@ -282,31 +263,34 @@ export default function StockDetailPage() {
 
   return (
     <div className="min-h-screen pb-20">
-      {/* Header Bar */}
-      <header className="flex items-center justify-between px-6 py-4 bg-slate-900/80 
-                         border-b border-slate-700/50 backdrop-blur-sm sticky top-0 z-40 -mx-6 -mt-6 mb-6">
-        {/* Left: Navigation + Stock Info */}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          HEADER BAR (sticky)
+          ═══════════════════════════════════════════════════════════════ */}
+      <header className="flex items-center justify-between px-6 py-3 bg-slate-900/80
+                         border-b border-slate-700/50 backdrop-blur-sm sticky top-0 z-40 -mx-6 -mt-6 mb-4">
+        {/* Left: Nav + Stock Info */}
         <div className="flex items-center gap-4">
-          <Link to="/dashboard" className="text-slate-400 hover:text-white transition-colors">
-            ← Back
+          <Link to="/dashboard" className="text-slate-400 hover:text-white transition-colors text-sm">
+            \u2190 Back
           </Link>
           <div>
-            <h1 className="text-xl font-bold text-white">
+            <h1 className="text-lg font-bold text-white leading-tight">
               {displayScore.companyName || scripCode}
             </h1>
             <div className="flex items-center gap-3">
-              <span className="text-2xl font-bold text-white">
-                ₹{displayScore.close?.toFixed(2)}
+              <span className="text-xl font-bold text-white">
+                {displayScore.close > 0 ? `\u20B9${displayScore.close.toFixed(2)}` : <DMValue label="No price data" />}
               </span>
               <span className={`text-sm font-medium ${priceChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {priceChange >= 0 ? '+' : ''}{(priceChangePercent ?? 0).toFixed(2)}%
-                {priceChange >= 0 ? ' ↑' : ' ↓'}
+                {priceChange >= 0 ? ' \u2191' : ' \u2193'}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Center: Trading Mode Toggle + Session */}
+        {/* Center: Trading Mode + Session + DQ */}
         <div className="flex items-center gap-3">
           <TradingModeToggle />
           <SessionBadge
@@ -321,115 +305,174 @@ export default function StockDetailPage() {
             })()}
             sessionQuality={0.75}
           />
+          <DataQualityBadge
+            percentage={dq.percentage}
+            liveCount={dq.liveCount}
+            fallbackCount={dq.fallbackCount}
+            missingCount={dq.missingCount}
+            compact
+          />
         </div>
 
         {/* Right: Wallet Summary */}
         <WalletHeader wallet={displayWallet} />
       </header>
 
-      {/* Multi-Timeframe Analysis Section - Collapsible */}
-      {allTimeframeScores.length > 0 && (
-        <details className="mb-6 bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden" open>
-          <summary className="px-4 py-3 bg-slate-800/50 cursor-pointer hover:bg-slate-700/30 transition-colors flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold text-white">Multi-Timeframe Analysis</span>
-              <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">
-                {allTimeframeScores.length} TFs
-              </span>
-              <span className={`text-xs px-2 py-0.5 rounded ${
-                directionConsensus.dominant === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' :
-                directionConsensus.dominant === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
-                'bg-slate-700 text-slate-400'
-              }`}>
-                {(directionConsensus.percentage ?? 0).toFixed(0)}% {directionConsensus.dominant}
-              </span>
-            </div>
-            <span className="text-slate-400 text-xs">Click to expand/collapse</span>
-          </summary>
-          <div className="p-4 space-y-4">
-            {/* Score Heatmap - Full Width */}
-            <MTFScoreHeatmap scores={allTimeframeScores} />
 
-            {/* Microstructure and Options Flow - Side by Side */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <MTFMicrostructurePanel scores={allTimeframeScores} />
-              <MTFOptionsFlowPanel scores={allTimeframeScores} />
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 1: VERDICT BAR — The Decision
+          ═══════════════════════════════════════════════════════════════ */}
+      <VerdictBar score={displayScore} dq={dq} className="mb-4" />
+
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 1: PRICE DATA + QUICK TRADE (2-column: 55/45)
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-12 gap-4 mb-6">
+        {/* Price Data Strip + Narrative */}
+        <div className="col-span-12 lg:col-span-7 space-y-4">
+          {/* OHLCV Strip */}
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3">Price Action</h3>
+            <div className="grid grid-cols-5 gap-4 text-center">
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase">Open</div>
+                <div className="text-sm font-mono font-bold text-white">
+                  <ProvenancedValue value={displayScore.open} provenance={prov(displayScore.open)} format={v => `\u20B9${v.toFixed(2)}`} valueClassName="text-white" />
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase">High</div>
+                <div className="text-sm font-mono font-bold text-emerald-400">
+                  <ProvenancedValue value={displayScore.high} provenance={prov(displayScore.high)} format={v => `\u20B9${v.toFixed(2)}`} valueClassName="text-emerald-400" />
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase">Low</div>
+                <div className="text-sm font-mono font-bold text-red-400">
+                  <ProvenancedValue value={displayScore.low} provenance={prov(displayScore.low)} format={v => `\u20B9${v.toFixed(2)}`} valueClassName="text-red-400" />
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase">Close</div>
+                <div className="text-sm font-mono font-bold text-white">
+                  <ProvenancedValue value={displayScore.close} provenance={prov(displayScore.close)} format={v => `\u20B9${v.toFixed(2)}`} valueClassName="text-white" />
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase">Volume</div>
+                <div className="text-sm font-mono font-bold text-white">
+                  <ProvenancedValue value={displayScore.volume} provenance={prov(displayScore.volume)} format={v => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : `${(v / 1000).toFixed(0)}K`} valueClassName="text-white" />
+                </div>
+              </div>
             </div>
+            {/* Day range bar */}
+            {displayScore.high > 0 && displayScore.low > 0 && displayScore.close > 0 && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-[9px] text-slate-500 mb-0.5">
+                  <span>\u20B9{displayScore.low.toFixed(2)}</span>
+                  <span>Day Range</span>
+                  <span>\u20B9{displayScore.high.toFixed(2)}</span>
+                </div>
+                <div className="relative h-1.5 bg-slate-700 rounded-full">
+                  <div
+                    className="absolute h-full bg-gradient-to-r from-red-500 via-amber-500 to-emerald-500 rounded-full"
+                    style={{ width: '100%' }}
+                  />
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 w-2 h-2 bg-white rounded-full border border-slate-600 shadow"
+                    style={{
+                      left: `${Math.max(0, Math.min(100, ((displayScore.close - displayScore.low) / (displayScore.high - displayScore.low)) * 100))}%`,
+                      transform: 'translate(-50%, -50%)',
+                    }}
+                    title={`Close: \u20B9${displayScore.close.toFixed(2)}`}
+                  />
+                </div>
+              </div>
+            )}
+            {/* VWAP */}
+            {displayScore.vwap > 0 && (
+              <div className="mt-2 flex items-center gap-4 text-[10px]">
+                <span className="text-slate-500">VWAP:</span>
+                <span className={`font-mono font-bold ${displayScore.close >= displayScore.vwap ? 'text-emerald-400' : 'text-red-400'}`}>
+                  \u20B9{displayScore.vwap.toFixed(2)}
+                </span>
+                <span className={`text-[9px] ${displayScore.close >= displayScore.vwap ? 'text-emerald-400/60' : 'text-red-400/60'}`}>
+                  Price {displayScore.close >= displayScore.vwap ? 'above' : 'below'} VWAP
+                </span>
+              </div>
+            )}
           </div>
-        </details>
-      )}
 
-      {/* Main Content - 3 Column Layout */}
-      <div className="grid grid-cols-12 gap-6">
-        {/* Left Column - MTF Analysis + Indicators */}
-        <div className="col-span-12 lg:col-span-3 space-y-6">
-          <EnhancedMTFPanel
-            scripCode={scripCode || ''}
-            currentPrice={displayScore.close || 0}
+          {/* Price Narrative */}
+          <PriceNarrative
+            score={displayScore}
+            narrative={narrative}
+            intelligence={marketIntel}
+          />
+        </div>
+
+        {/* Quick Trade */}
+        <div className="col-span-12 lg:col-span-5 space-y-4">
+          <EnhancedQuickTradePanel
+            score={displayScore}
+            onExecute={handleTradeExecute}
+            onWatchlist={() => {}}
+            exchange={scripExchange}
           />
 
-          {/* VCP Clusters */}
-          {vcpSignal ? (
-            <VCPClusters data={vcpSignal} />
-          ) : (
-            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3">VCP Module</h3>
-              <div className="text-center py-4">
-                <div className="text-3xl font-bold text-emerald-400 mb-1">
-                  {((displayScore.vcpCombinedScore ?? 0) * 100).toFixed(0)}%
-                </div>
-                <div className="text-xs text-slate-400">Combined Score</div>
+          {/* Compact OI/Regime strip */}
+          <div className="grid grid-cols-2 gap-3">
+            {/* Regime */}
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide mb-1">Regime</div>
+              <div className={`text-sm font-bold ${displayScore.securityAligned ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {displayScore.indexRegimeLabel || <DMValue />}
               </div>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Runway</span>
-                  <span className="text-white">{((displayScore.vcpRunway ?? 0) * 100).toFixed(0)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Support</span>
-                  <span className="text-white">{((displayScore.vcpSupportScore ?? 0) * 100).toFixed(0)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Resistance</span>
-                  <span className="text-white">{((displayScore.vcpResistanceScore ?? 0) * 100).toFixed(0)}%</span>
-                </div>
+              <div className="text-[10px] text-slate-400 mt-1">
+                Strength: <ProvenancedValue value={displayScore.indexRegimeStrength} provenance={prov(displayScore.indexRegimeStrength)} format={v => `${(v * 100).toFixed(0)}%`} valueClassName="text-white" />
+              </div>
+              <div className="text-[10px] mt-0.5">
+                Aligned: <span className={displayScore.securityAligned ? 'text-emerald-400' : 'text-red-400'}>
+                  {displayScore.securityAligned ? '\u2713 Yes' : '\u2717 No'}
+                </span>
               </div>
             </div>
-          )}
 
-          {/* IPU Panel */}
-          {ipuSignal ? (
-            <IPUPanel data={ipuSignal} />
-          ) : (
-            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3 flex items-center gap-2">
-                IPU Module
-                {displayScore.ipuXfactor && <span className="text-yellow-400">⚡</span>}
-              </h3>
-              <div className="text-center py-4">
-                <div className="text-3xl font-bold text-blue-400 mb-1">
-                  {((displayScore.ipuFinalScore ?? 0) * 100).toFixed(0)}%
-                </div>
-                <div className="text-xs text-slate-400">Final Score</div>
+            {/* OI / F&O */}
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-3">
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide mb-1">OI / F&O</div>
+              <div className={`text-sm font-bold ${
+                displayScore.oiSignal?.includes('BULLISH') ? 'text-emerald-400' :
+                displayScore.oiSignal?.includes('BEARISH') ? 'text-red-400' : 'text-slate-400'
+              }`}>
+                {displayScore.oiSignal || <DMValue label="No OI signal" />}
               </div>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Institutional</span>
-                  <span className="text-white">{((displayScore.ipuInstProxy ?? 0) * 100).toFixed(0)}%</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Momentum</span>
-                  <span className="text-white">{displayScore.ipuMomentumState}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Exhaustion</span>
-                  <span className="text-white">{((displayScore.ipuExhaustion ?? 0) * 100).toFixed(0)}%</span>
-                </div>
+              <div className="text-[10px] text-slate-400 mt-1">
+                PCR: <ProvenancedValue value={displayScore.pcr} provenance={prov(displayScore.pcr)} format={v => v.toFixed(2)} valueClassName="text-white" />
+              </div>
+              <div className="text-[10px] mt-0.5">
+                Fut: <ProvenancedValue value={displayScore.futuresBuildup} provenance={prov(displayScore.futuresBuildup)} valueClassName="text-white" />
               </div>
             </div>
-          )}
+          </div>
+        </div>
+      </div>
 
-          {/* Technical Indicators Panel (BB, VWAP, SuperTrend) */}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 2: STRATEGY CONVICTION CARDS
+          ═══════════════════════════════════════════════════════════════ */}
+      <StrategyConvictionCards dq={dq} className="mb-6" />
+
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 3: EVIDENCE PANELS (2-column grid)
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-12 gap-4 mb-6">
+        {/* Left: Technical & Microstructure */}
+        <div className="col-span-12 lg:col-span-6 space-y-4">
+          {/* Technical Indicators */}
           <TechnicalIndicatorsPanel
             indicators={techIndicators}
             currentPrice={displayScore.close || 0}
@@ -438,24 +481,100 @@ export default function StockDetailPage() {
             onTimeframeChange={setIndicatorTimeframe}
           />
 
-          {/* Microstructure Panel - using QuantScore data */}
+          {/* Microstructure */}
           <MicrostructurePanel
             data={{
               ofi: displayQuantScore?.microstructureSummary?.avgOFI || 0,
-              ofiZScore: 0, // Z-score calculation would require historical data
+              ofiZScore: 0,
               ofiRegime: getOfiRegime(displayQuantScore?.microstructureSummary?.flowDirection),
               vpin: displayQuantScore?.microstructureSummary?.avgVPIN || 0,
               vpinRegime: getVpinRegime(displayQuantScore?.microstructureSummary?.avgVPIN),
               kyleLambda: displayQuantScore?.microstructureSummary?.avgKyleLambda || 0,
-              lambdaZScore: 0, // Z-score calculation would require historical data
+              lambdaZScore: 0,
               depthImbalance: displayQuantScore?.microstructureSummary?.avgDepthImbalance || 0,
-              // Use actual aggressive buy/sell ratios from QuantScore
               buyPressure: (displayQuantScore?.microstructureSummary?.aggressiveBuyRatio || 0.5) * 100,
               sellPressure: (displayQuantScore?.microstructureSummary?.aggressiveSellRatio || 0.5) * 100,
               spread: displayQuantScore?.microstructureSummary?.avgSpread || 0,
-              spreadZScore: 0 // Z-score calculation would require historical data
+              spreadZScore: 0,
             }}
           />
+        </div>
+
+        {/* Right: Options + IPU/VCP + Regime */}
+        <div className="col-span-12 lg:col-span-6 space-y-4">
+          {/* Options Panel */}
+          <OptionsPanel quantScore={displayQuantScore} familyScore={displayScore} />
+
+          {/* VCP */}
+          {vcpSignal ? (
+            <VCPClusters data={vcpSignal} />
+          ) : (
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3">VCP Module</h3>
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div>
+                  <div className="text-lg font-bold text-emerald-400">
+                    {displayScore.vcpCombinedScore > 0 ? `${(displayScore.vcpCombinedScore * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Combined</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    {displayScore.vcpRunway > 0 ? `${(displayScore.vcpRunway * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Runway</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    {displayScore.vcpSupportScore > 0 ? `${(displayScore.vcpSupportScore * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Support</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    {displayScore.vcpResistanceScore > 0 ? `${(displayScore.vcpResistanceScore * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Resistance</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* IPU */}
+          {ipuSignal ? (
+            <IPUPanel data={ipuSignal} />
+          ) : (
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-3 flex items-center gap-2">
+                IPU Module
+                {displayScore.ipuXfactor && <span className="text-yellow-400">\u26A1</span>}
+              </h3>
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div>
+                  <div className="text-lg font-bold text-blue-400">
+                    {displayScore.ipuFinalScore > 0 ? `${(displayScore.ipuFinalScore * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Final Score</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    {displayScore.ipuInstProxy > 0 ? `${(displayScore.ipuInstProxy * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Institutional</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">{displayScore.ipuMomentumState || <DMValue />}</div>
+                  <div className="text-[10px] text-slate-500">Momentum</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    {displayScore.ipuExhaustion > 0 ? `${(displayScore.ipuExhaustion * 100).toFixed(0)}%` : <DMValue />}
+                  </div>
+                  <div className="text-[10px] text-slate-500">Exhaustion</div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Regime Panel */}
           <RegimePanel
@@ -467,7 +586,7 @@ export default function StockDetailPage() {
                   displayScore.indexRegimeLabel?.includes('BEARISH') ? 'NEGATIVE' : 'NEUTRAL',
                 zScore: 0,
                 percentile: (displayScore.indexRegimeStrength || 0.5) * 100,
-                flipDetected: false
+                flipDetected: false,
               },
               {
                 name: 'SECURITY',
@@ -476,192 +595,93 @@ export default function StockDetailPage() {
                   displayScore.securityRegimeLabel?.includes('BEARISH') ? 'NEGATIVE' : 'NEUTRAL',
                 zScore: 0,
                 percentile: 50,
-                flipDetected: false
-              }
+                flipDetected: false,
+              },
             ]}
           />
 
-          {/* Active Setups from Market Intelligence */}
+          {/* Active Setups */}
           <ActiveSetupsPanel setups={stockSetups} />
-        </div>
-
-        {/* Center Column - Chart + Narrative + Signals */}
-        <div className="col-span-12 lg:col-span-6 space-y-6">
-          {/* Price Chart */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wide">
-                Price Action
-              </h3>
-              <div className="flex items-center gap-4 text-xs text-slate-400">
-                <span>O: <span className="text-white">{displayScore.open?.toFixed(2)}</span></span>
-                <span>H: <span className="text-emerald-400">{displayScore.high?.toFixed(2)}</span></span>
-                <span>L: <span className="text-red-400">{displayScore.low?.toFixed(2)}</span></span>
-                <span>C: <span className="text-white">{displayScore.close?.toFixed(2)}</span></span>
-                <span>Vol: <span className="text-white">{((displayScore.volume ?? 0) / 1000).toFixed(0)}K</span></span>
-              </div>
-            </div>
-            {/* Indicator Toggle Controls */}
-            <div className="mb-3">
-              <IndicatorControls
-                toggles={indicatorToggles}
-                onToggle={(key) => setIndicatorToggles(prev => ({ ...prev, [key]: !prev[key] }))}
-                disabled={indicatorsLoading}
-              />
-            </div>
-            {scoreHistory.length > 0 ? (
-              <PriceChart
-                data={scoreHistory}
-                height={280}
-                showVolume
-                indicatorHistory={indicatorHistory}
-                indicatorToggles={indicatorToggles}
-              />
-            ) : (
-              <div className="h-64 flex items-center justify-center bg-slate-700/30 rounded-lg">
-                <span className="text-slate-500">Chart data loading...</span>
-              </div>
-            )}
-          </div>
-
-          {/* Price Narrative - using real Kafka narrative data when available */}
-          <PriceNarrative
-            score={displayScore}
-            narrative={narrative}
-            intelligence={marketIntel}
-          />
-
-          {/* Options Panel - using WebSocket QuantScore with API fallback */}
-          <OptionsPanel quantScore={displayQuantScore} familyScore={displayScore} />
-
-          {/* Signal History - merged WebSocket + API signals */}
-          <SignalHistory signals={displaySignals} />
-
-          {/* Gate Status */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-4">Gate Status</h3>
-            <div className="grid grid-cols-4 gap-3">
-              {[
-                { name: 'Hard', passed: displayScore.hardGatePassed, reason: displayScore.hardGateReason },
-                { name: 'MTF', passed: displayScore.mtfGatePassed, reason: displayScore.mtfGateReason },
-                { name: 'Quality', passed: displayScore.qualityGatePassed, reason: displayScore.qualityGateReason },
-                { name: 'Stats', passed: displayScore.statsGatePassed, reason: displayScore.statsGateReason },
-              ].map(gate => (
-                <div key={gate.name} className={`p-3 rounded-lg text-center ${gate.passed
-                  ? 'bg-emerald-500/10 border border-emerald-500/30'
-                  : 'bg-red-500/10 border border-red-500/30'
-                  }`}>
-                  <div className={`text-lg mb-1 ${gate.passed ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {gate.passed ? '✓' : '✗'}
-                  </div>
-                  <div className="text-xs font-medium text-white">{gate.name}</div>
-                  {gate.reason && (
-                    <div className="text-[10px] text-slate-400 mt-1 truncate" title={gate.reason}>
-                      {gate.reason}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column - Quick Trade + Module Summary */}
-        <div className="col-span-12 lg:col-span-3 space-y-6">
-          <EnhancedQuickTradePanel
-            score={displayScore}
-            onExecute={handleTradeExecute}
-            onWatchlist={() => { /* TODO: implement watchlist */ }}
-          />
-
-          {/* Regime Info */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-4">Regime</h3>
-            <div className="text-center mb-4">
-              <div className={`text-2xl font-bold ${displayScore.securityAligned ? 'text-emerald-400' : 'text-amber-400'
-                }`}>
-                {displayScore.indexRegimeLabel}
-              </div>
-              <div className="text-xs text-slate-400">Index Regime</div>
-            </div>
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Strength</span>
-                <span className="text-white">{((displayScore.indexRegimeStrength ?? 0) * 100).toFixed(0)}%</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Security</span>
-                <span className="text-white">{displayScore.securityRegimeLabel}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Aligned</span>
-                <span className={displayScore.securityAligned ? 'text-emerald-400' : 'text-red-400'}>
-                  {displayScore.securityAligned ? '✓ Yes' : '✗ No'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* OI/F&O Info */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide mb-4">OI / F&O</h3>
-            <div className="text-center mb-4">
-              <div className={`text-lg font-bold ${displayScore.oiSignal?.includes('BULLISH') ? 'text-emerald-400' :
-                displayScore.oiSignal?.includes('BEARISH') ? 'text-red-400' : 'text-slate-400'
-                }`}>
-                {displayScore.oiSignal || 'NEUTRAL'}
-              </div>
-            </div>
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">PCR</span>
-                <span className="text-white">{displayScore.pcr?.toFixed(2) || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Spot-Future</span>
-                <span className="text-white">{displayScore.spotFuturePremium?.toFixed(2) || 'N/A'}%</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Futures</span>
-                <span className="text-white">{displayScore.futuresBuildup || 'N/A'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Overall Score */}
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wide">Overall Score</h3>
-              <span className={`text-3xl font-bold ${displayScore.overallScore >= 7 ? 'text-emerald-400' :
-                displayScore.overallScore >= 5 ? 'text-amber-400' :
-                  'text-slate-400'
-                }`}>
-                {(displayScore.overallScore ?? 0).toFixed(1)}
-              </span>
-            </div>
-            <div className="mt-3 h-2 bg-slate-700 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-500 ${displayScore.overallScore >= 7 ? 'bg-emerald-500' :
-                  displayScore.overallScore >= 5 ? 'bg-amber-500' : 'bg-slate-500'
-                  }`}
-                style={{ width: `${displayScore.overallScore * 10}%` }}
-              />
-            </div>
-            <div className="mt-2 flex justify-between text-xs text-slate-400">
-              <span>Direction: <span className={
-                displayScore.direction === 'BULLISH' ? 'text-emerald-400' :
-                  displayScore.direction === 'BEARISH' ? 'text-red-400' : 'text-slate-400'
-              }>{displayScore.direction}</span></span>
-              <span>Signal: {displayScore.signalEmitted ?
-                <span className="text-emerald-400">✓ Emitted</span> :
-                <span className="text-slate-400">—</span>}
-              </span>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Active Position Bar (Fixed Footer) */}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 3b: MULTI-TIMEFRAME (collapsed by default) + MTF Panel
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-12 gap-4 mb-6">
+        <div className="col-span-12 lg:col-span-4">
+          <EnhancedMTFPanel
+            scripCode={scripCode || ''}
+            currentPrice={displayScore.close || 0}
+          />
+        </div>
+
+        <div className="col-span-12 lg:col-span-8">
+          {allTimeframeScores.length > 0 && (
+            <details className="bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden">
+              <summary className="px-4 py-3 bg-slate-800/50 cursor-pointer hover:bg-slate-700/30 transition-colors flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold text-white">Multi-Timeframe Analysis</span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                    {allTimeframeScores.length} TFs
+                  </span>
+                  <span className={`text-xs px-2 py-0.5 rounded ${
+                    directionConsensus.dominant === 'BULLISH' ? 'bg-emerald-500/20 text-emerald-400' :
+                    directionConsensus.dominant === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
+                    'bg-slate-700 text-slate-400'
+                  }`}>
+                    {(directionConsensus.percentage ?? 0).toFixed(0)}% {directionConsensus.dominant}
+                  </span>
+                </div>
+                <span className="text-slate-400 text-xs">Click to expand</span>
+              </summary>
+              <div className="p-4 space-y-4">
+                <MTFScoreHeatmap scores={allTimeframeScores} />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <MTFMicrostructurePanel scores={allTimeframeScores} />
+                  <MTFOptionsFlowPanel scores={allTimeframeScores} />
+                </div>
+              </div>
+            </details>
+          )}
+        </div>
+      </div>
+
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 4: SIGNAL HISTORY
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="mb-6">
+        <SignalHistory signals={displaySignals} />
+      </div>
+
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FOLD 5: DATA AUDIT — Full Transparency
+          ═══════════════════════════════════════════════════════════════ */}
+      <details className="bg-slate-800/30 border border-slate-700/50 rounded-xl overflow-hidden mb-6">
+        <summary className="px-4 py-3 bg-slate-800/50 cursor-pointer hover:bg-slate-700/30 transition-colors flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold text-white">Data Audit Trail</span>
+            <span className="text-[10px] text-slate-500">{dq.allFields.length} fields tracked</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-emerald-400">{dq.liveCount} live</span>
+            <span className="text-[10px] text-amber-400">{dq.fallbackCount} fallback</span>
+            <span className="text-[10px] text-red-400">{dq.missingCount} missing</span>
+            <span className="text-slate-400 text-xs">Click to expand</span>
+          </div>
+        </summary>
+        <div className="p-4">
+          <DataAuditPanel dq={dq} />
+        </div>
+      </details>
+
+
+      {/* ═══════════════════════════════════════════════════════════════
+          FIXED FOOTER: Active Position Bar
+          ═══════════════════════════════════════════════════════════════ */}
       <ActivePositionBar
         position={activePosition}
         onClose={handleClosePosition}

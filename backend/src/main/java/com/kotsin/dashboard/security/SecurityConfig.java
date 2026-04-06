@@ -48,6 +48,7 @@ public class SecurityConfig {
                 .requestMatchers("/technical-indicators/**").permitAll()
                 .requestMatchers("/api/strategy-state/**").permitAll()
                 .requestMatchers("/api/strategy-wallets/**").permitAll()
+                .requestMatchers("/api/live/**").permitAll()
                 .requestMatchers("/api/wallet/**").permitAll()
                 .requestMatchers("/api/strategy-trades/**").permitAll()
                 .requestMatchers("/api/orders/**").permitAll()
@@ -55,9 +56,17 @@ public class SecurityConfig {
                 .requestMatchers("/api/ml/**").permitAll()
                 .requestMatchers("/api/risk/**").permitAll()
                 .requestMatchers("/api/market-data/**").permitAll()
+                .requestMatchers("/api/market-pulse/**").permitAll()
                 .requestMatchers("/api/greeks/**").permitAll()
                 .requestMatchers("/api/pnl/**").permitAll()
                 .requestMatchers("/api/wallets/**").permitAll()
+                .requestMatchers("/api/state/**").permitAll()
+                .requestMatchers("/api/watchlists/**").authenticated()  // user-specific, needs auth token
+                .requestMatchers("/api/trades/**").permitAll()
+                .requestMatchers("/api/performance/**").permitAll()
+                .requestMatchers("/api/alerts/**").permitAll()
+                .requestMatchers("/api/analysis/**").permitAll()
+                .requestMatchers("/api/slippage/**").permitAll()
                 // Admin-only
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // All other API endpoints require authentication

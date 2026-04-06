@@ -476,6 +476,21 @@ public class FUDKIIConsumer implements OptionSwapAware {
         if (root.has("futuresExchange")) data.put("futuresExchange", root.path("futuresExchange").asText());
         if (root.has("futuresExchangeType")) data.put("futuresExchangeType", root.path("futuresExchangeType").asText());
 
+        // Retest enrichment fields (from RetestStateMachine.enrichPayload in Streaming Candle)
+        if (root.has("retestActive")) data.put("retestActive", root.path("retestActive").asBoolean(false));
+        if (root.has("retestLevel")) data.put("retestLevel", root.path("retestLevel").asDouble(0));
+        if (root.has("retestSource")) data.put("retestSource", root.path("retestSource").asText(""));
+        if (root.has("retestStage")) data.put("retestStage", root.path("retestStage").asText(""));
+        if (root.has("retestDirectionAligned")) data.put("retestDirectionAligned", root.path("retestDirectionAligned").asBoolean(false));
+        if (root.has("retestBoost")) data.put("retestBoost", root.path("retestBoost").asDouble(0));
+
+        // Liquidity source (DIRECT / PROXY / ON_DEMAND / DISABLED)
+        if (root.has("liquiditySource")) data.put("liquiditySource", root.path("liquiditySource").asText("DIRECT"));
+
+        // Previous close for A/D ratio market breadth
+        if (root.has("prevClose")) data.put("prevClose", root.path("prevClose").asDouble(0));
+        if (root.has("price")) data.put("price", root.path("triggerPrice").asDouble(0));
+
         return data;
     }
 

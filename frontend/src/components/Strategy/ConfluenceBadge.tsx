@@ -56,7 +56,7 @@ export default function ConfluenceBadge({
   if (!grade) return null
 
   const config = GRADE_CONFIG[grade] || GRADE_CONFIG['C']
-  const hasFortress = (fortressScore ?? 0) >= 12
+  const hasFortress = (fortressScore ?? 0) >= 10
   const roomFavorable = (roomRatio ?? 1) >= 1.5
   const roomUnfavorable = (roomRatio ?? 1) < 0.8
 
@@ -97,9 +97,9 @@ export default function ConfluenceBadge({
       {hasFortress && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded px-2 py-1 text-[9px] text-amber-300">
           <span className="font-bold text-amber-400">FORTRESS </span>
-          Score <span className="font-bold text-white">{fortressScore?.toFixed(1)}</span> at entry —{' '}
-          <span className="font-bold text-amber-400">entering AT strong resistance/support</span>.{' '}
-          Multiple timeframes agree this is a wall. High rejection probability.
+          Score <span className="font-bold text-white">{fortressScore?.toFixed(1)}</span> at entry (distance-decayed) —{' '}
+          <span className="font-bold text-amber-400">near strong confluence zone</span>.{' '}
+          Closer zones score higher. High rejection probability near pivot cluster.
         </div>
       )}
 

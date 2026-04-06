@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
-  RefreshCw, Filter, Activity, Eye, Target, BarChart2,
+  RefreshCw, Filter, Activity, Eye, BarChart2,
   Zap, CheckCircle2, Volume2, TrendingUp
 } from 'lucide-react';
-import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent, McxBb30TabContent, McxBb15TabContent, NseBb30TabContent } from '../components/Strategy';
+import { isAnyMarketOpen } from '../utils/tradingUtils';
+import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent, McxBb30TabContent, McxBb15TabContent, NseBb30TabContent, RetestTabContent } from '../components/Strategy';
 import {
   InstrumentStateSnapshot,
   StrategyOpportunity,
@@ -12,7 +13,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'pivot' | 'microalpha' | 'mere' | 'quant' | 'mcxbb15' | 'mcxbb30' | 'nsebb30';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'retest' | 'pivot' | 'microalpha' | 'mere' | 'mcxbb15' | 'mcxbb30' | 'nsebb30';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -61,7 +62,7 @@ export const StrategyTransparencyPage: React.FC = () => {
     // Auto-refresh every 5 seconds
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchData, 5000);
+      interval = setInterval(() => { if (isAnyMarketOpen()) fetchData(); }, 5000);
     }
 
     return () => {
@@ -140,10 +141,11 @@ export const StrategyTransparencyPage: React.FC = () => {
               { id: 'fudkii' as TabType, label: 'FUDKII', shortLabel: 'FUDKII', icon: Zap, accent: 'text-orange-400' },
               { id: 'fukaa' as TabType, label: 'FUKAA', shortLabel: 'FUKAA', icon: Volume2, accent: 'text-amber-400' },
               { id: 'fudkoi' as TabType, label: 'FUDKOI', shortLabel: 'FUDKOI', icon: BarChart2, accent: 'text-teal-400' },
+              { id: 'retest' as TabType, label: 'RETEST', shortLabel: 'RETEST', icon: RefreshCw, accent: 'text-violet-400' },
               { id: 'mere' as TabType, label: 'MERE', shortLabel: 'MERE', icon: TrendingUp, accent: 'text-emerald-400' },
-              { id: 'quant' as TabType, label: 'QUANT', shortLabel: 'QUANT', icon: BarChart2, accent: 'text-sky-400' },
               { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
-              { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
+              // PIVOT suspended 2026-04-02
+              // { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
               { id: 'mcxbb15' as TabType, label: 'MCX-BB-15', shortLabel: 'BB-15', icon: TrendingUp, accent: 'text-lime-400' },
               { id: 'mcxbb30' as TabType, label: 'MCX-BB-30', shortLabel: 'BB-30', icon: TrendingUp, accent: 'text-emerald-400' },
               { id: 'nsebb30' as TabType, label: 'NSE-BB-30', shortLabel: 'NSE-BB', icon: TrendingUp, accent: 'text-sky-400' },
@@ -198,6 +200,10 @@ export const StrategyTransparencyPage: React.FC = () => {
 
         {activeTab === 'fudkoi' && (
           <FudkoiTabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'retest' && (
+          <RetestTabContent autoRefresh={autoRefresh} />
         )}
 
         {activeTab === 'pivot' && (

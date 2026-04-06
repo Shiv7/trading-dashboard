@@ -5,7 +5,7 @@ import type { PatternSignal, PatternSummary, PatternStats } from '../types'
 import type { StrategyTradeRequest } from '../types/orders'
 import { useDashboardStore } from '../store/dashboardStore'
 import { useWebSocket } from '../hooks/useWebSocket'
-import { getOTMStrike, mapToOptionLevels, computeLotSizing, MCX_MULTIPLIER_MAP, getExpiryMonth } from '../utils/tradingUtils'
+import { getOTMStrike, mapToOptionLevels, computeLotSizing, MCX_MULTIPLIER_MAP, getExpiryMonth, isAnyMarketOpen } from '../utils/tradingUtils'
 
 // Timeframe ordering: highest weight first
 const TF_ORDER = ['1D', '4h', '2h', '1h', '30m', '15m', '5m', '3m', '1m']
@@ -656,7 +656,7 @@ export default function PatternsPage() {
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 30000)
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadData() }, 30000)
     return () => clearInterval(interval)
   }, [])
 

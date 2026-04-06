@@ -6,10 +6,11 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyWalletsApi, strategyTradesApi, marketDataApi, greeksApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import { computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment, getOTMStrike, mapToOptionLevels, isAnyMarketOpen } from '../../utils/tradingUtils';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import StalePriceModal from './StalePriceModal';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
+import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -94,6 +95,15 @@ interface MicroAlphaSignal {
   futuresT2?: number;
   futuresT3?: number;
   futuresT4?: number;
+  // Liquidity source
+  liquiditySource?: string;
+  // Retest enrichment
+  retestActive?: boolean;
+  retestLevel?: number;
+  retestSource?: string;
+  retestStage?: string;
+  retestDirectionAligned?: boolean;
+  retestBoost?: number;
 }
 
 interface TradePlan {
@@ -142,24 +152,6 @@ function fmt(v: number | null | undefined): string {
   return Number(v.toFixed(2)).toString();
 }
 
-function getStrikeInterval(price: number): number {
-  if (price > 40000) return 500;
-  if (price > 20000) return 200;
-  if (price > 10000) return 100;
-  if (price > 5000) return 50;
-  if (price > 2000) return 20;
-  if (price > 1000) return 10;
-  if (price > 500) return 5;
-  if (price > 100) return 2.5;
-  return 1;
-}
-
-function getOTMStrike(price: number, direction: string): { strike: number; interval: number } {
-  const interval = getStrikeInterval(price);
-  const atm = Math.round(price / interval) * interval;
-  const strike = direction === 'BULLISH' ? atm + interval : atm - interval;
-  return { strike, interval };
-}
 
 function getEpoch(sig: MicroAlphaSignal): number {
   if (sig.triggerTimeEpoch) return sig.triggerTimeEpoch;
@@ -184,32 +176,6 @@ function estimateOptionPremium(plan: TradePlan): number {
   return Math.round(Math.max(plan.atr * 3, plan.entry * 0.008) * 10) / 10;
 }
 
-/** Approximate option delta from moneyness using logistic function */
-function approximateDelta(spot: number, strike: number, optionType: 'CE' | 'PE'): number {
-  const moneyness = (spot - strike) / strike;
-  const ceDelta = 1 / (1 + Math.exp(-10 * moneyness));
-  return optionType === 'CE' ? ceDelta : 1 - ceDelta;
-}
-
-/** Map equity-level SL/targets to option premium levels using delta */
-function mapToOptionLevels(
-  optionEntry: number,
-  equitySpot: number,
-  equitySl: number,
-  equityTargets: (number | null)[],
-  strike: number,
-  optionType: 'CE' | 'PE'
-): { sl: number; targets: number[]; delta: number } {
-  const delta = approximateDelta(equitySpot, strike, optionType);
-  const slMove = Math.abs(equitySpot - equitySl);
-  const optionSl = Math.max(0.5, optionEntry - delta * slMove);
-  const targets = equityTargets.map(t => {
-    if (t == null) return 0;
-    const targetMove = Math.abs(t - equitySpot);
-    return Math.round((optionEntry + delta * targetMove) * 100) / 100;
-  });
-  return { sl: Math.round(optionSl * 100) / 100, targets, delta: Math.round(delta * 100) / 100 };
-}
 
 function extractTradePlan(sig: MicroAlphaSignal): TradePlan {
   const isLong = sig.direction === 'BULLISH';
@@ -565,7 +531,8 @@ const MicroAlphaCard: React.FC<{
   plan: TradePlan;
   walletState: SlotWalletState;
   onBuy: (sig: MicroAlphaSignal, plan: TradePlan, lots: number) => void;
-}> = ({ sig, plan, walletState, onBuy }) => {
+  onNavigateToScrip: (scripCode: string) => void;
+}> = ({ sig, plan, walletState, onBuy, onNavigateToScrip }) => {
   const [pressing, setPressing] = useState(false);
   const [showRevisedPopup, setShowRevisedPopup] = useState(false);
   const [revisedData, setRevisedData] = useState<any>(null);
@@ -629,7 +596,7 @@ const MicroAlphaCard: React.FC<{
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${sig.symbol || sig.scripCode} ${plan.strike} ${plan.optionType}`;
+    displayInstrumentName = `${sig.symbol || sig.scripCode} ${sig.optionStrike ?? plan.strike} ${sig.optionType ?? plan.optionType}`;
     lotSize = 1;
   }
 
@@ -652,7 +619,7 @@ const MicroAlphaCard: React.FC<{
       } catch {}
     };
     checkDrift();
-    const iv = setInterval(checkDrift, 30000);
+    const iv = setInterval(() => { if (isAnyMarketOpen()) checkDrift(); }, 30000);
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
@@ -688,7 +655,8 @@ const MicroAlphaCard: React.FC<{
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
+      overflow-clip transition-shadow duration-200 hover:shadow-lg cursor-pointer`}
+      onClick={() => onNavigateToScrip(sig.scripCode)}>
       <div className="p-3 sm:p-4">
 
         {/* ── TOP: Symbol + Direction + Conviction + Time ── */}
@@ -701,6 +669,7 @@ const MicroAlphaCard: React.FC<{
               <span className={`text-xl font-bold font-mono ${convColor}`}>{confidence}%</span>
               <span className="text-slate-700">|</span>
               <span className="text-[11px] text-slate-500 font-mono">{formatTriggerTime(sig)}</span>
+              <LiquiditySourceBadge source={sig.liquiditySource} />
             </div>
           </div>
           <div className="flex items-center gap-1.5">
@@ -818,6 +787,9 @@ const MicroAlphaCard: React.FC<{
           </div>
         </div>
 
+        {/* ── RETEST BADGE ── */}
+        <RetestBadge active={sig.retestActive} aligned={sig.retestDirectionAligned} boost={sig.retestBoost} source={sig.retestSource} level={sig.retestLevel} stage={sig.retestStage} />
+
         {/* ── TRANSLATED GREEKS (only when greekEnriched) ── */}
         {sig.greekEnriched && (() => {
           const dte = sig.greekDte ?? 0;
@@ -904,7 +876,8 @@ const MicroAlphaCard: React.FC<{
         ) : (
           <div className="relative mt-4">
             <button
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation();
                 if ((isBeyond30mBoundary || (isWithin30mWindow && isStale)) && instrumentMode === 'OPTION' && sig.optionScripCode) {
                   setLoadingRevised(true);
                   try {
@@ -918,7 +891,7 @@ const MicroAlphaCard: React.FC<{
                       const eqT3 = plan.t3 || 0;
                       const revised = await greeksApi.compute({
                         spot: eqEntry,
-                        strike: plan.strike || sig.optionStrike || 0,
+                        strike: sig.optionStrike || plan.strike || 0,
                         optionLtp: currentLtp,
                         optionType: plan.optionType || 'CE',
                         expiry: sig.optionExpiry || '',
@@ -971,7 +944,7 @@ const MicroAlphaCard: React.FC<{
             </button>
 
             {showRevisedPopup && revisedData && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowRevisedPopup(false)}>
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}>
                 <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
                   <h3 className="text-lg font-bold text-white mb-1">Revised Trade Levels</h3>
                   <p className="text-xs text-slate-400 mb-4">Signal is {revisedData.signalAge}m old — levels recomputed with current LTP</p>
@@ -1000,11 +973,12 @@ const MicroAlphaCard: React.FC<{
                   </div>
 
                   <div className="flex gap-3">
-                    <button onClick={() => setShowRevisedPopup(false)}
+                    <button onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}
                       className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">
                       Cancel
                     </button>
-                    <button onClick={() => {
+                    <button onClick={(e) => {
+                      e.stopPropagation();
                       setShowRevisedPopup(false);
                       onBuy(sig, { ...plan, sl: revisedData.optionSL, t1: revisedData.optionT1, t2: revisedData.optionT2, t3: revisedData.optionT3, entry: revisedData.currentLtp }, sizing.lots);
                     }} className={`flex-1 h-10 rounded-xl text-white font-semibold text-sm transition-colors ${buyBg} ${buyHover}`}>
@@ -1068,7 +1042,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
     fetchSignals(); // Initial full history load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchSignals, 60000); // 60s fallback safety net
+      interval = setInterval(() => { if (isAnyMarketOpen()) fetchSignals(); }, 60000); // 60s fallback safety net
     }
     // WebSocket push: prepend new triggered signals in real-time
     const onWsSignal = (e: Event) => {
@@ -1115,7 +1089,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
       } catch { /* ignore */ }
     };
     fetchCapital();
-    const interval = setInterval(fetchCapital, 30000);
+    const interval = setInterval(() => { if (isAnyMarketOpen()) fetchCapital(); }, 30000);
     const onWalletUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.strategy === 'MICROALPHA') fetchCapital();
@@ -1204,9 +1178,9 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
     } else {
       instrumentType = 'OPTION';
       premium = estimateOptionPremium(plan);
-      displayStrike = plan.strike;
-      displayOptionType = plan.optionType;
-      instrumentSymbol = `${sig.symbol || sig.scripCode} ${plan.strike} ${plan.optionType ?? ''}`;
+      displayStrike = sig.optionStrike ?? plan.strike;
+      displayOptionType = sig.optionType ?? plan.optionType;
+      instrumentSymbol = `${sig.symbol || sig.scripCode} ${sig.optionStrike ?? plan.strike} ${sig.optionType ?? plan.optionType ?? ''}`;
       lotSize = 1;
       tradingScripCode = sig.scripCode;
       exchange = sig.exchange;
@@ -1468,6 +1442,7 @@ export const MicroAlphaTabContent: React.FC<MicroAlphaTabContentProps> = ({ auto
                 plan={plan}
                 walletState={walletState}
                 onBuy={handleBuy}
+                onNavigateToScrip={(sc) => navigate(`/stock/${sc}`)}
               />
             ))}
           </div>

@@ -6,11 +6,12 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyTradesApi, strategyWalletsApi, marketDataApi, greeksApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
-import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, checkStalePriceAdjustment } from '../../utils/tradingUtils';
+import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, checkStalePriceAdjustment, isAnyMarketOpen } from '../../utils/tradingUtils';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
+import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
 
 type SortField = 'timestamp' | 'score' | 'rr' | 'surge';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -88,6 +89,15 @@ interface McxBbTrigger {
   futuresT2?: number;
   futuresT3?: number;
   futuresT4?: number;
+  // Liquidity source
+  liquiditySource?: string;
+  // Retest
+  retestActive?: boolean;
+  retestLevel?: number;
+  retestSource?: string;
+  retestStage?: string;
+  retestDirectionAligned?: boolean;
+  retestBoost?: number;
 }
 
 interface TradePlan {
@@ -410,7 +420,8 @@ const McxBbCard: React.FC<{
   onBuy: (sig: McxBbTrigger, plan: TradePlan, lots: number) => void;
   onRequestFunds: (sig: McxBbTrigger, plan: TradePlan, creditAmount: number, premium: number, lotSize: number, multiplier: number, confidence: number) => void;
   isFunded: boolean;
-}> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded }) => {
+  onNavigateToScrip: (scripCode: string) => void;
+}> = ({ trigger, plan, walletState, onBuy, onRequestFunds, isFunded, onNavigateToScrip }) => {
   const [pressing, setPressing] = useState(false);
   const [showRevisedPopup, setShowRevisedPopup] = useState(false);
   const [revisedData, setRevisedData] = useState<any>(null);
@@ -482,7 +493,7 @@ const McxBbCard: React.FC<{
     // Legacy fallback (old signals without optionAvailable field)
     instrumentMode = 'OPTION';
     premium = estimateOptionPremium(plan);
-    displayInstrumentName = `${trigger.symbol} ${plan.strike} ${plan.optionType}`;
+    displayInstrumentName = `${trigger.symbol} ${trigger.optionStrike ?? plan.strike} ${trigger.optionType ?? plan.optionType}`;
     lotSize = 1;
     isEstimatedPremium = true;
   }
@@ -516,13 +527,14 @@ const McxBbCard: React.FC<{
       } catch {}
     };
     checkDrift();
-    const iv = setInterval(checkDrift, 30000);
+    const iv = setInterval(() => { if (isAnyMarketOpen()) checkDrift(); }, 30000);
     return () => clearInterval(iv);
   }, [scripForDrift, premiumForDrift]);
 
   return (
     <div className={`bg-slate-800/90 backdrop-blur-sm rounded-2xl border ${cardBorderGlow}
-      overflow-clip transition-shadow duration-200 hover:shadow-lg`}>
+      overflow-clip transition-shadow duration-200 hover:shadow-lg cursor-pointer`}
+      onClick={() => onNavigateToScrip(trigger.scripCode)}>
       <div className="p-3 sm:p-4">
 
         {/* -- TOP SECTION -- */}
@@ -535,6 +547,7 @@ const McxBbCard: React.FC<{
               </span>
               <span className="text-slate-700">|</span>
               <span className="text-xs text-slate-500 font-mono">MCX</span>
+              <LiquiditySourceBadge source={trigger.liquiditySource} />
             </div>
           </div>
           <div className="flex items-center gap-1.5">
@@ -615,6 +628,9 @@ const McxBbCard: React.FC<{
           />
         </div>
 
+        {/* ── RETEST BADGE ── */}
+        <RetestBadge active={trigger.retestActive} aligned={trigger.retestDirectionAligned} boost={trigger.retestBoost} source={trigger.retestSource} level={trigger.retestLevel} stage={trigger.retestStage} />
+
         {/* ── TRANSLATED GREEKS ── */}
         {trigger.greekEnriched && (() => {
           const dte = trigger.greekDte ?? 0;
@@ -665,7 +681,7 @@ const McxBbCard: React.FC<{
         {/* -- INSUFFICIENT FUNDS LABEL (clickable -> Add Funds) -- */}
         {sizing.insufficientFunds && !sizing.disabled && (
           <button
-            onClick={() => onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence)}
+            onClick={(e) => { e.stopPropagation(); onRequestFunds(trigger, plan, sizing.creditAmount, premium, lotSize, multiplier, confidence); }}
             className="mt-3 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/30 hover:bg-orange-500/20 transition-colors cursor-pointer text-left"
           >
             <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
@@ -740,7 +756,8 @@ const McxBbCard: React.FC<{
               </span>
             )}
             <button
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation();
                 if ((isBeyond30mBoundary || (isWithin30mWindow && isStale)) && instrumentMode === 'OPTION' && trigger.optionScripCode) {
                   setLoadingRevised(true);
                   try {
@@ -755,7 +772,7 @@ const McxBbCard: React.FC<{
                       const eqT4 = plan.t4 || 0;
                       const revised = await greeksApi.compute({
                         spot: eqEntry,
-                        strike: plan.strike || trigger.optionStrike || 0,
+                        strike: trigger.optionStrike || plan.strike || 0,
                         optionLtp: currentLtp,
                         optionType: plan.optionType || 'CE',
                         expiry: trigger.optionExpiry || '',
@@ -837,11 +854,12 @@ const McxBbCard: React.FC<{
                   </div>
 
                   <div className="flex gap-3">
-                    <button onClick={() => setShowRevisedPopup(false)}
+                    <button onClick={(e) => { e.stopPropagation(); setShowRevisedPopup(false); }}
                       className="flex-1 h-10 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium text-sm transition-colors">
                       Cancel
                     </button>
-                    <button onClick={() => {
+                    <button onClick={(e) => {
+                      e.stopPropagation();
                       setShowRevisedPopup(false);
                       onBuy(trigger, { ...plan, sl: revisedData.optionSL, t1: revisedData.optionT1, t2: revisedData.optionT2, t3: revisedData.optionT3, t4: revisedData.optionT4, entry: revisedData.currentLtp }, sizing.lots);
                     }} className={`flex-1 h-10 rounded-xl text-white font-semibold text-sm transition-colors ${buyBg} ${buyHover}`}>
@@ -909,7 +927,7 @@ export const McxBbTabContent: React.FC<McxBbTabContentProps> = ({ autoRefresh = 
     fetchTriggers(); // Initial load
     let interval: ReturnType<typeof setInterval> | null = null;
     if (autoRefresh) {
-      interval = setInterval(fetchTriggers, 60000); // 60s fallback safety net
+      interval = setInterval(() => { if (isAnyMarketOpen()) fetchTriggers(); }, 60000); // 60s fallback safety net
     }
     // WebSocket push: prepend new triggered signals in real-time
     const onWsSignal = (e: Event) => {
@@ -956,7 +974,7 @@ export const McxBbTabContent: React.FC<McxBbTabContentProps> = ({ autoRefresh = 
       } catch { /* ignore */ }
     };
     fetchCapital();
-    const interval = setInterval(fetchCapital, 30000);
+    const interval = setInterval(() => { if (isAnyMarketOpen()) fetchCapital(); }, 30000);
     const onWalletUpdate = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.strategy === 'MCX_BB' || detail?.strategy === 'MCX-BB') fetchCapital();
@@ -1010,7 +1028,7 @@ export const McxBbTabContent: React.FC<McxBbTabContentProps> = ({ autoRefresh = 
     let lotSize = 1;
     let multiplier = 1;
     let tradingScripCode = sig.scripCode;
-    let strike = plan.strike;
+    let strike = sig.optionStrike ?? plan.strike;
     let optionType: 'CE' | 'PE' = plan.optionType;
 
     if (hasRealOption) {
@@ -1038,7 +1056,7 @@ export const McxBbTabContent: React.FC<McxBbTabContentProps> = ({ autoRefresh = 
       instrumentType = 'FUTURES';
     } else {
       premium = estimateOptionPremium(plan);
-      instrumentSymbol = `${sig.symbol} ${plan.strike} ${plan.optionType ?? ''}`;
+      instrumentSymbol = `${sig.symbol} ${sig.optionStrike ?? plan.strike} ${plan.optionType ?? ''}`;
       instrumentType = 'OPTION';
     }
 
@@ -1306,6 +1324,7 @@ export const McxBbTabContent: React.FC<McxBbTabContentProps> = ({ autoRefresh = 
                   setFundModal({ strategyKey: 'MCX_BB', creditAmount: credit, sig: s, plan: p, premium: prem, lotSize: lotSz, multiplier: mult, confidence: conf });
                 }}
                 isFunded={fundedScripCodes.has(sig.scripCode)}
+                onNavigateToScrip={(sc) => navigate(`/stock/${sc}`)}
               />
             ))}
           </div>

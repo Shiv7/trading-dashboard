@@ -13,13 +13,15 @@ public final class StrategyNameResolver {
 
     public static final List<String> ALL_STRATEGY_KEYS = List.of(
             "FUDKII", "FUKAA", "FUDKOI", "PIVOT_CONFLUENCE", "MICROALPHA", "MERE", "QUANT",
+            "RETEST",
             "MCX_BB", "MCX_BBT1", // DEPRECATED — kept for normalize() and historical data
             "MCX_BB_15", "MCX_BB_30", "NSE_BB_30"
     );
 
-    /** Active strategies shown on dashboard (excludes deprecated MCX_BB / MCX_BBT1) */
+    /** Active strategies shown on dashboard (excludes deprecated MCX_BB / MCX_BBT1 and suspended PIVOT_CONFLUENCE) */
     public static final List<String> ACTIVE_STRATEGY_KEYS = List.of(
-            "FUDKII", "FUKAA", "FUDKOI", "PIVOT_CONFLUENCE", "MICROALPHA", "MERE", "QUANT",
+            "FUDKII", "FUKAA", "FUDKOI", "MICROALPHA", "MERE", "QUANT",
+            "RETEST",
             "MCX_BB_15", "MCX_BB_30", "NSE_BB_30"
     );
 
@@ -31,6 +33,7 @@ public final class StrategyNameResolver {
             Map.entry("MICROALPHA", "MICROALPHA"),
             Map.entry("MERE", "MERE"),
             Map.entry("QUANT", "QUANT"),
+            Map.entry("RETEST", "Retest"),
             Map.entry("MCX_BB", "MCX-BB"),
             Map.entry("MCX_BBT1", "MCX-BBT+1"),
             Map.entry("MCX_BB_15", "MCX-BB-15"),
@@ -56,6 +59,7 @@ public final class StrategyNameResolver {
         if (upper.contains("PIVOT"))  return "PIVOT_CONFLUENCE";
         if (upper.contains("MICRO"))  return "MICROALPHA";
         if (upper.contains("MERE"))   return "MERE"; // MERE_SCALP, MERE_SWING, MERE_POSITIONAL → MERE
+        if (upper.contains("RETEST")) return "RETEST";
         if (upper.contains("QUANT"))  return "QUANT";
         if (upper.contains("MCX_BBT1") || upper.contains("MCXBBT1") || upper.contains("MCX-BBT1")) return "MCX_BBT1";
         if (upper.contains("MCX_BB_15") || upper.contains("MCXBB15") || upper.contains("MCX-BB-15")) return "MCX_BB_15";

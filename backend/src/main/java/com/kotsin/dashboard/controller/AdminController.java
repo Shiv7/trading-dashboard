@@ -2,6 +2,7 @@ package com.kotsin.dashboard.controller;
 
 import com.kotsin.dashboard.model.dto.auth.UserResponse;
 import com.kotsin.dashboard.model.entity.User;
+import com.kotsin.dashboard.service.SlippageBackfillService;
 import com.kotsin.dashboard.service.UserProfileService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -18,9 +19,11 @@ import java.util.Map;
 public class AdminController {
 
     private final UserProfileService profileService;
+    private final SlippageBackfillService slippageBackfillService;
 
-    public AdminController(UserProfileService profileService) {
+    public AdminController(UserProfileService profileService, SlippageBackfillService slippageBackfillService) {
         this.profileService = profileService;
+        this.slippageBackfillService = slippageBackfillService;
     }
 
     @GetMapping("/users")
@@ -60,6 +63,19 @@ public class AdminController {
             return ResponseEntity.ok(Map.of("message", "User deleted"));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/backfill-slippage")
+    public ResponseEntity<?> backfillSlippage() {
+        try {
+            int count = slippageBackfillService.backfillAll();
+            return ResponseEntity.ok(Map.of(
+                    "message", "Slippage backfill complete",
+                    "tradesUpdated", count
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 }

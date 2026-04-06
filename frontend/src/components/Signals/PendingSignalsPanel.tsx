@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { tradingSignalsApi, type TradingSignal } from '../../services/api'
+import { isAnyMarketOpen } from '../../utils/tradingUtils'
 import SignalConfirmationModal from './SignalConfirmationModal'
 
 interface PendingSignalsPanelProps {
@@ -29,7 +30,7 @@ export default function PendingSignalsPanel({ onSignalConfirmed }: PendingSignal
   useEffect(() => {
     loadSignals()
     // Refresh every 5 seconds
-    const interval = setInterval(loadSignals, 5000)
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadSignals() }, 5000)
     return () => clearInterval(interval)
   }, [loadSignals])
 

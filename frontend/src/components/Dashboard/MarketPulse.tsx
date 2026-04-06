@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { indicatorsApi } from '../../services/api'
+import { isAnyMarketOpen } from '../../utils/tradingUtils'
 import type { IPUSignal, VCPSignal } from '../../types'
 
 interface MarketPulseProps {
@@ -31,7 +32,7 @@ export default function MarketPulse({ limit = 5 }: MarketPulseProps) {
     loadData()
 
     // Refresh every 30 seconds
-    const interval = setInterval(loadData, 30000)
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadData() }, 30000)
     return () => clearInterval(interval)
   }, [limit])
 

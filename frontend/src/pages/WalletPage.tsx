@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw, BarChart2, BookOpen, Briefcase, SlidersHorizontal, X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import WalletCard from '../components/Wallet/WalletCard'
 import PositionCard from '../components/Wallet/PositionCard'
 import WalletPnLTab from '../components/Wallet/WalletPnLTab'
@@ -106,7 +107,7 @@ export default function WalletPage() {
     loadWallet()
     let interval: ReturnType<typeof setInterval> | null = null
     if (autoRefresh) {
-      interval = setInterval(loadWallet, 30000)
+      interval = setInterval(() => { if (isAnyMarketOpen()) loadWallet() }, 30000)
     }
     return () => {
       if (interval) clearInterval(interval)

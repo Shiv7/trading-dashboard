@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Signal } from '../../types'
 import TradeModal from '../Trading/TradeModal'
+import ConvictionBadge from '../ConvictionBadge'
 
 interface SignalCardProps {
   signal: Signal
@@ -23,6 +24,10 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
   const [tradeModalOpen, setTradeModalOpen] = useState(false)
   const isBullish = signal.direction === 'BULLISH'
   const isMasterArch = signal.isMasterArch || signal.signalSource === 'MASTER_ARCH'
+  // Extract NSE symbol from companyName (e.g., "LUPIN LIMITED" → "LUPIN")
+  const nseSymbol = (signal as Record<string, unknown>).symbol as string
+    || signal.companyName?.split(/[\s(]/)[0]?.toUpperCase()
+    || ''
 
   const formatCurrency = (value: number) => {
     if (!value) return '-'
@@ -177,6 +182,9 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
           </button>
         </div>
       )}
+
+      {/* Institutional Conviction Badge */}
+      {nseSymbol && <ConvictionBadge symbol={nseSymbol} />}
     </Link>
 
     {/* Trade Modal */}

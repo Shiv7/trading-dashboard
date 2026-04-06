@@ -10,7 +10,7 @@ import SignupPage from './pages/SignupPage'
 import DashboardPage from './pages/DashboardPage'
 import WalletPage from './pages/WalletPage'
 import TradesPage from './pages/TradesPage'
-import ScoresPage from './pages/ScoresPage'
+import MarketPulsePage from './pages/MarketPulsePage'
 import SignalsPage from './pages/SignalsPage'
 import StockDetailPage from './pages/StockDetailPage'
 import QuantScoresPage from './pages/QuantScoresPage'
@@ -26,6 +26,8 @@ import PnLDashboardPage from './pages/PnLDashboardPage'
 import OrderManagementPage from './pages/OrderManagementPage'
 import StrategyWalletsPage from './pages/StrategyWalletsPage'
 import MLShadowPage from './pages/MLShadowPage'
+import LivePage from './pages/LivePage'
+import GreekTrailingPage from './pages/GreekTrailingPage'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -83,6 +85,16 @@ function App() {
 
         {/* Protected Routes */}
         <Route
+          path="/live"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <LivePage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/dashboard"
           element={
             <ProtectedRoute>
@@ -113,11 +125,11 @@ function App() {
           }
         />
         <Route
-          path="/scores"
+          path="/market-pulse"
           element={
             <ProtectedRoute>
               <Layout>
-                <ScoresPage />
+                <MarketPulsePage />
               </Layout>
             </ProtectedRoute>
           }
@@ -268,6 +280,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <MLShadowPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/greek-trailing"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <GreekTrailingPage />
               </Layout>
             </ProtectedRoute>
           }

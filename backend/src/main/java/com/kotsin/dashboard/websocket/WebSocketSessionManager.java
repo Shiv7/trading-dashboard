@@ -393,6 +393,14 @@ public class WebSocketSessionManager {
     }
 
     /**
+     * Broadcast market pulse macro data (GIFT Nifty, VIX, A/D, indices)
+     */
+    public void broadcastMarketPulse(Object payload) {
+        log.debug("Broadcasting market pulse update");
+        messagingTemplate.convertAndSend("/topic/market-pulse", payload);
+    }
+
+    /**
      * Register a subscription for a scripCode
      */
     public void registerSubscription(String sessionId, String scripCode) {

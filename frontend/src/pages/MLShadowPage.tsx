@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8085/api'
 const ML_BASE = `${API_BASE}/ml`
@@ -251,7 +252,7 @@ export default function MLShadowPage() {
 
   useEffect(() => {
     refresh()
-    const interval = setInterval(refresh, 30000)
+    const interval = setInterval(() => { if (isAnyMarketOpen()) refresh() }, 30000)
     return () => clearInterval(interval)
   }, [refresh])
 

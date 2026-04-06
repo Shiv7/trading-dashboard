@@ -216,10 +216,10 @@ export default function ScripFinder({
 
             {/* View All Link */}
             <div
-              onClick={() => { navigate('/scores'); setIsOpen(false) }}
+              onClick={() => { navigate('/market-pulse'); setIsOpen(false) }}
               className="px-4 py-2 bg-slate-700/30 text-center text-sm text-blue-400 hover:text-blue-300 cursor-pointer"
             >
-              View all scores →
+              View Market Pulse →
             </div>
           </div>
         )}

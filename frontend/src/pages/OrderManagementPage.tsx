@@ -1,102 +1,139 @@
-import { useEffect, useState, useMemo } from 'react'
-import { useDashboardStore } from '../store/dashboardStore'
-import { tradesApi, walletApi } from '../services/api'
+import { useEffect, useState, useMemo, useCallback } from 'react'
+import { strategyWalletsApi } from '../services/api'
+import type { StrategyWalletTrade } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
+import { computeAnalytics, fmtINR } from '../utils/tradeAnalytics'
 import OrderHistoryRow from '../components/OrderHistory/OrderHistoryRow'
 import type { UnifiedOrder } from '../components/OrderHistory/OrderHistoryRow'
-import type { Trade, Position } from '../types'
 import WalletSelector from '../components/Trading/WalletSelector'
 import TradeModal from '../components/Trading/TradeModal'
 
 type FilterMode = 'all' | 'open' | 'closed'
+type TimePeriod = 'TODAY' | '1W' | '1M' | 'QTR' | '1Y' | 'ALL'
+
+const PNL_RESET_DATE_IST = '2026-03-19'
+
+function getPnlResetTimestamp(): number {
+  const [y, m, d] = PNL_RESET_DATE_IST.split('-').map(Number)
+  const istOffset = 5.5 * 60 * 60 * 1000
+  return new Date(Date.UTC(y, m - 1, d) - istOffset).getTime()
+}
+
+function periodToRange(key: TimePeriod): { from?: number; to?: number } {
+  const now = new Date()
+  const istOffset = 5.5 * 60 * 60 * 1000
+  const istNow = new Date(now.getTime() + istOffset)
+  const todayIST = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate()) - istOffset)
+  const resetTs = getPnlResetTimestamp()
+  const clamp = (ts: number) => Math.max(ts, resetTs)
+
+  switch (key) {
+    case 'TODAY': return { from: clamp(todayIST.getTime()) }
+    case '1W': return { from: clamp(todayIST.getTime() - 7 * 86400000) }
+    case '1M': return { from: clamp(todayIST.getTime() - 30 * 86400000) }
+    case 'QTR': {
+      const q = istNow.getUTCMonth()
+      const qm = q - (q % 3)
+      const qs = new Date(Date.UTC(istNow.getUTCFullYear(), qm, 1) - istOffset)
+      return { from: clamp(qs.getTime()) }
+    }
+    case '1Y': return { from: clamp(todayIST.getTime() - 365 * 86400000) }
+    case 'ALL':
+    default: return { from: resetTs }
+  }
+}
+
+const PERIOD_LABELS: Record<TimePeriod, string> = {
+  TODAY: 'Today', '1W': '1 Week', '1M': '1 Month', QTR: 'Quarter', '1Y': '1 Year', ALL: 'All Time'
+}
 
 export default function OrderManagementPage() {
   const [walletType, setWalletType] = useState<'PAPER' | 'REAL'>('PAPER')
-  const [apiTrades, setApiTrades] = useState<Trade[]>([])
-  const [apiPositions, setApiPositions] = useState<Position[]>([])
+  const [apiTrades, setApiTrades] = useState<StrategyWalletTrade[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterMode>('all')
   const [tradeModalOpen, setTradeModalOpen] = useState(false)
+  const [timePeriod, setTimePeriod] = useState<TimePeriod>('TODAY')
 
-  const wsTrades = useDashboardStore((s) => s.trades)
-  const wsPositions = useDashboardStore((s) => s.wallet?.positions)
+  const loadTrades = useCallback(async (period: TimePeriod) => {
+    setLoading(true)
+    try {
+      const range = periodToRange(period)
+      const trades = await strategyWalletsApi.getWeeklyTrades({ limit: 5000, ...range }).catch(() => [])
+      setApiTrades(trades)
+    } catch (error) {
+      console.error('Error loading orders:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    async function load() {
-      try {
-        const [trades, positions] = await Promise.all([
-          tradesApi.getTrades(500).catch(() => []),
-          walletApi.getPositions().catch(() => []),
-        ])
-        setApiTrades(trades)
-        setApiPositions(positions)
-      } catch (error) {
-        console.error('Error loading orders:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-    load()
-  }, [])
+    loadTrades(timePeriod)
+  }, [timePeriod, loadTrades])
 
   useEffect(() => {
     const interval = setInterval(() => {
-      walletApi.getPositions().then(setApiPositions).catch(() => {})
-    }, 10000)
+      if (isAnyMarketOpen()) {
+        const range = periodToRange(timePeriod)
+        strategyWalletsApi.getWeeklyTrades({ limit: 5000, ...range }).then(setApiTrades).catch(() => {})
+      }
+    }, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [timePeriod])
 
   const orders = useMemo(() => {
-    const tradeMap = new Map<string, Trade>()
-    apiTrades.forEach((t) => tradeMap.set(t.signalId || t.tradeId, t))
-    wsTrades.forEach((t) => tradeMap.set(t.signalId || t.tradeId, t))
-
-    const positionMap = new Map<string, Position>()
-    apiPositions.forEach((p) => positionMap.set(p.signalId || p.positionId, p))
-    if (wsPositions) {
-      wsPositions.forEach((p) => positionMap.set(p.signalId || p.positionId, p))
-    }
-
     const unified = new Map<string, UnifiedOrder>()
 
-    positionMap.forEach((pos, key) => {
-      if (pos.quantity <= 0) return
-      unified.set(key, {
-        id: pos.positionId,
-        signalId: pos.signalId || pos.positionId,
-        scripCode: pos.scripCode,
-        companyName: pos.companyName || pos.scripCode,
-        strategy: pos.strategy || 'Unknown',
-        side: pos.side,
-        isOpen: true,
-        entryPrice: pos.avgEntryPrice,
-        target1: pos.target1,
-        trailingStop: pos.trailingStop ?? undefined,
-        pnl: pos.unrealizedPnl,
-        pnlPercent: pos.unrealizedPnlPercent,
-        entryTime: pos.openedAt,
-        serial: 0,
-      })
-    })
-
-    tradeMap.forEach((trade, key) => {
+    // Closed trades from strategy-wallets — same source as PnL page
+    apiTrades.forEach((t) => {
+      const key = t.tradeId
       if (unified.has(key)) return
-      const isOpen = trade.status === 'ACTIVE'
+      const side = t.side || (t.direction === 'BULLISH' ? 'LONG' : t.direction === 'BEARISH' ? 'SHORT' : 'LONG')
       unified.set(key, {
-        id: trade.tradeId,
-        signalId: trade.signalId || trade.tradeId,
-        scripCode: trade.scripCode,
-        companyName: trade.companyName || trade.scripCode,
-        strategy: trade.strategy || 'Unknown',
-        side: trade.side,
-        isOpen,
-        entryPrice: trade.entryPrice,
-        exitPrice: trade.exitPrice ?? undefined,
-        target1: trade.target1,
-        trailingStop: trade.trailingStop ?? undefined,
-        pnl: trade.pnl,
-        pnlPercent: trade.pnlPercent,
-        entryTime: trade.entryTime,
-        exitTime: trade.exitTime ?? undefined,
+        id: t.tradeId,
+        signalId: t.tradeId,
+        scripCode: t.scripCode,
+        companyName: t.companyName || t.scripCode,
+        strategy: t.strategy || 'Unknown',
+        side,
+        direction: t.direction,
+        isOpen: false,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice,
+        stopLoss: t.stopLoss ?? t.equitySl ?? undefined,
+        target1: t.target1 ?? t.equityT1 ?? undefined,
+        target2: t.target2 ?? t.equityT2 ?? undefined,
+        target3: t.target3 ?? t.equityT3 ?? undefined,
+        target4: t.target4 ?? t.equityT4 ?? undefined,
+        pnl: t.pnl,
+        pnlPercent: t.pnlPercent,
+        entryTime: t.entryTime,
+        exitTime: t.exitTime,
+        exitReason: t.exitReason,
+        quantity: t.quantity,
+        exchange: t.exchange,
+        instrumentType: t.instrumentType ?? undefined,
+        instrumentSymbol: t.instrumentSymbol ?? undefined,
+        totalCharges: t.totalCharges ?? undefined,
+        estimatedEntrySlippage: t.estimatedEntrySlippage ?? undefined,
+        estimatedEntrySlippageTotal: t.estimatedEntrySlippageTotal ?? undefined,
+        estimatedSlippagePct: t.estimatedSlippagePct ?? undefined,
+        slippageTier: t.slippageTier ?? undefined,
+        exitSlippagePerUnit: t.exitSlippagePerUnit ?? undefined,
+        exitSlippageTotal: t.exitSlippageTotal ?? undefined,
+        grossPnl: t.grossPnl ?? undefined,
+        chargesBrokerage: t.chargesBrokerage ?? undefined,
+        chargesStt: t.chargesStt ?? undefined,
+        chargesExchange: t.chargesExchange ?? undefined,
+        chargesGst: t.chargesGst ?? undefined,
+        chargesSebi: t.chargesSebi ?? undefined,
+        chargesStamp: t.chargesStamp ?? undefined,
+        rMultiple: t.rMultiple ?? undefined,
+        riskReward: t.riskReward ?? undefined,
+        durationMinutes: t.durationMinutes ?? undefined,
+        executionMode: t.executionMode,
+        capitalEmployed: t.capitalEmployed,
         serial: 0,
       })
     })
@@ -106,10 +143,9 @@ export default function OrderManagementPage() {
       const tb = b.entryTime ? new Date(b.entryTime).getTime() : 0
       return tb - ta
     })
-
     sorted.forEach((o, i) => { o.serial = i + 1 })
     return sorted
-  }, [apiTrades, apiPositions, wsTrades, wsPositions])
+  }, [apiTrades])
 
   const displayOrders = useMemo(() => {
     if (filter === 'open') return orders.filter((o) => o.isOpen)
@@ -117,9 +153,12 @@ export default function OrderManagementPage() {
     return orders
   }, [orders, filter])
 
+  // Use same computeAnalytics as PnL page for consistent numbers
+  const analytics = useMemo(() => computeAnalytics(apiTrades), [apiTrades])
   const openCount = orders.filter((o) => o.isOpen).length
   const closedCount = orders.filter((o) => !o.isOpen).length
-  const totalPnl = orders.reduce((sum, o) => sum + (o.pnl || 0), 0)
+  const totalPnl = analytics?.totalPnl ?? 0
+  const totalCharges = apiTrades.filter(t => t.exitTime).reduce((sum, t) => sum + (t.totalCharges ?? 0), 0)
 
   if (loading) {
     return (
@@ -145,8 +184,8 @@ export default function OrderManagementPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-display font-bold text-white">Order Management</h1>
-            <p className="text-sm text-slate-400 mt-1">Track and manage all your trades</p>
+            <h1 className="text-2xl font-display font-bold text-white">Order Book</h1>
+            <p className="text-sm text-slate-400 mt-1">Full trade history with charges, slippage, and analytics</p>
           </div>
           <div className="flex items-center gap-3">
             <WalletSelector value={walletType} onChange={setWalletType} compact />
@@ -179,8 +218,25 @@ export default function OrderManagementPage() {
           </div>
         </div>
 
+        {/* Time Period Tabs */}
+        <div className="flex gap-1 bg-slate-800/50 rounded-lg p-1 w-fit">
+          {(Object.keys(PERIOD_LABELS) as TimePeriod[]).map((p) => (
+            <button
+              key={p}
+              onClick={() => setTimePeriod(p)}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                timePeriod === p
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+              }`}
+            >
+              {PERIOD_LABELS[p]}
+            </button>
+          ))}
+        </div>
+
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="card text-center">
             <div className="text-2xl font-bold text-white font-mono">{orders.length}</div>
             <div className="text-xs text-slate-400">Total Orders</div>
@@ -195,9 +251,13 @@ export default function OrderManagementPage() {
           </div>
           <div className="card text-center">
             <div className={`text-2xl font-bold font-mono ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {(totalPnl ?? 0) >= 0 ? '+' : ''}{(totalPnl ?? 0).toFixed(2)}
+              {fmtINR(totalPnl)}
             </div>
-            <div className="text-xs text-slate-400">Total P&L</div>
+            <div className="text-xs text-slate-400">Net P&L</div>
+          </div>
+          <div className="card text-center">
+            <div className="text-2xl font-bold text-amber-400 font-mono">{fmtINR(totalCharges)}</div>
+            <div className="text-xs text-slate-400">Total Charges</div>
           </div>
         </div>
 
@@ -224,22 +284,24 @@ export default function OrderManagementPage() {
 
         {/* Table */}
         <div className="card">
+          <div className="text-xs text-slate-500 mb-3">Click any row to expand details (SL, targets, slippage, R-multiple, duration)</div>
           {displayOrders.length > 0 ? (
-            <div className="table-container">
-              <table className="table">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
                 <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Security</th>
-                    <th>Strategy</th>
-                    <th>Type</th>
-                    <th>Target</th>
-                    <th>Trailing SL</th>
-                    <th>Entry Price</th>
-                    <th>Exit Price</th>
-                    <th>P&L</th>
-                    <th>Entry Time</th>
-                    <th>Exit Time</th>
+                  <tr className="border-b border-slate-700">
+                    <th className="text-left py-2 px-3 text-slate-400">#</th>
+                    <th className="text-left py-2 px-3 text-slate-400">Security</th>
+                    <th className="text-left py-2 px-3 text-slate-400">Strategy</th>
+                    <th className="text-left py-2 px-3 text-slate-400">Side</th>
+                    <th className="text-right py-2 px-3 text-slate-400">Qty</th>
+                    <th className="text-right py-2 px-3 text-slate-400">Entry</th>
+                    <th className="text-right py-2 px-3 text-slate-400">Exit</th>
+                    <th className="text-right py-2 px-3 text-slate-400">Gross</th>
+                    <th className="text-right py-2 px-3 text-slate-400">Charges</th>
+                    <th className="text-right py-2 px-3 text-slate-400">Net P&L</th>
+                    <th className="text-left py-2 px-3 text-slate-400">Entry Time</th>
+                    <th className="text-left py-2 px-3 text-slate-400">Exit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -251,21 +313,22 @@ export default function OrderManagementPage() {
             </div>
           ) : (
             <div className="text-center text-slate-500 py-12">
-              <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              <p>No {walletType.toLowerCase()} orders found</p>
+              <p>No {filter === 'all' ? '' : filter} orders found</p>
               <p className="text-xs mt-1 text-slate-600">Place a trade to see your order history</p>
             </div>
           )}
         </div>
       </div>
 
+      {/* Trade Modal */}
       <TradeModal
         isOpen={tradeModalOpen}
         onClose={() => setTradeModalOpen(false)}
         scripCode=""
+        companyName=""
         currentPrice={0}
+        direction="NEUTRAL"
+        quantScore={0}
       />
     </>
   )

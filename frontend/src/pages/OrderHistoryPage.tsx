@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import { tradesApi, walletApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import OrderHistoryRow from '../components/OrderHistory/OrderHistoryRow'
 import type { UnifiedOrder } from '../components/OrderHistory/OrderHistoryRow'
 import type { Trade, Position } from '../types'
@@ -43,7 +44,7 @@ export default function OrderHistoryPage() {
   // Periodic position refresh for resilience (10s)
   useEffect(() => {
     const interval = setInterval(() => {
-      walletApi.getPositions().then(setApiPositions).catch(() => {})
+      if (isAnyMarketOpen()) walletApi.getPositions().then(setApiPositions).catch(() => {})
     }, 10000)
     return () => clearInterval(interval)
   }, [])

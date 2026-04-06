@@ -65,6 +65,7 @@ export interface Position {
   delta?: number;
   deltaFallbackReason?: string;  // null = real BS delta, non-null = why fallback to 0.5
   // Trade execution metadata
+  tradeLabel?: string;    // e.g. "FUT FALLBACK due to Illiquid Opt"
   exitReason?: string;    // "1% DD", "SL-EQ", "SL-OP", "T1-OP", "T2-EQ", "EOD", etc.
   confidence?: number;
   equityLtp?: number;     // live equity/futures price for dual display
@@ -78,6 +79,34 @@ export interface Position {
   chargesStamp?: number;
   // Per-target exit history
   exitHistory?: ExitEvent[];
+  // Slippage estimation
+  estimatedEntrySlippageTotal?: number;
+  estimatedSlippagePct?: number;
+  // Recalibration metadata (from RecalibrationService)
+  recalDelta?: number;
+  recalGamma?: number;
+  recalCount?: number;
+  lastRecalReason?: string;
+  lastRecalTime?: string;
+  recalTimePhase?: string;
+  currentSl?: number;
+  // Greek trailing state
+  greekTrailingActive?: boolean;
+  hardFloorSl?: number;
+  greekTrail?: {
+    status?: string;
+    peakDelta?: number;
+    highWatermark?: number;
+    currentDelta?: number;
+    currentGamma?: number;
+    currentTheta?: number;
+    trailStopPrice?: number;
+    currentTrailPct?: number;
+    thetaBurnRate?: number;
+    deltaAccelRatio?: number;
+    dte?: number;
+    exitReason?: string;
+  };
 }
 
 export interface ExitEvent {

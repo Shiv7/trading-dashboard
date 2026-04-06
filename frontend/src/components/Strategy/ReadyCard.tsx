@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown, ChevronRight, TrendingUp, TrendingDown, Clock
 } from 'lucide-react';
@@ -17,6 +18,7 @@ interface ReadyCardProps {
 }
 
 export const ReadyCard: React.FC<ReadyCardProps> = ({ snapshot, setup, isSample }) => {
+  const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
   const config = getStrategyConfig(setup.strategyId);
   const isLong = setup.direction === 'LONG';
@@ -64,9 +66,9 @@ export const ReadyCard: React.FC<ReadyCardProps> = ({ snapshot, setup, isSample 
   const contextLine = contextParts.join(' · ');
 
   return (
-    <div className={`bg-slate-800 rounded-lg overflow-hidden ${
+    <div className={`bg-slate-800 rounded-lg overflow-hidden cursor-pointer ${
       isSample ? 'border-2 border-dashed border-yellow-500/60' : 'border-2 border-green-500/40'
-    } shadow-[0_0_15px_rgba(34,197,94,0.1)]`}>
+    } shadow-[0_0_15px_rgba(34,197,94,0.1)]`} onClick={() => navigate(`/stock/${snapshot.scripCode}`)}>
       {isSample && (
         <div className="bg-yellow-500/10 px-3 py-1 text-[10px] text-yellow-400 font-medium text-center">
           SAMPLE CARD
@@ -166,7 +168,7 @@ export const ReadyCard: React.FC<ReadyCardProps> = ({ snapshot, setup, isSample 
       <div className="border-t border-gray-800">
         <div
           className="px-3 py-2 cursor-pointer hover:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-400"
-          onClick={() => setExpanded(!expanded)}
+          onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
         >
           {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           Active Setup — all conditions passed

@@ -1,6 +1,7 @@
 package com.kotsin.dashboard.controller;
 
 import com.kotsin.dashboard.model.dto.StrategyWalletDTO;
+import com.kotsin.dashboard.service.SlippageBackfillService;
 import com.kotsin.dashboard.service.StrategyWalletsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,7 @@ import java.util.Map;
 public class StrategyWalletsController {
 
     private final StrategyWalletsService strategyWalletsService;
+    private final SlippageBackfillService slippageBackfillService;
     @Qualifier("executionRestTemplate")
     private final RestTemplate restTemplate;
 
@@ -150,6 +152,19 @@ public class StrategyWalletsController {
         } catch (RestClientException e) {
             log.error("ERR [STRATEGY-WALLETS] Failed to proxy transactions for {}: {}", strategy, e.getMessage());
             return ResponseEntity.ok(List.of());
+        }
+    }
+
+    @PostMapping("/backfill-slippage")
+    public ResponseEntity<?> backfillSlippage() {
+        try {
+            int count = slippageBackfillService.backfillAll();
+            return ResponseEntity.ok(Map.of(
+                    "message", "Slippage backfill complete",
+                    "tradesUpdated", count
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 }

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import type { Position } from '../../types'
 import PositionActions from '../Trading/PositionActions'
 import { getStrategyBadgeClass } from '../../utils/strategyColors'
+import { estimateSlippage, estimateSlippagePct } from '../../utils/slippageUtils'
 
 interface PositionCardProps {
   position: Position
@@ -26,6 +27,15 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
     : 'EQ'
   const exitedQty = position.exitHistory?.reduce((sum, ev) => sum + (ev.qty || 0), 0) || 0
   const originalQty = position.quantity + exitedQty
+
+  // Estimated slippage: prefer backend orderbook-aware estimate
+  const exchCode = (position.exchange || 'N').charAt(0).toUpperCase()
+  const estSlippage = (position.estimatedEntrySlippageTotal != null && position.estimatedEntrySlippageTotal > 0)
+    ? position.estimatedEntrySlippageTotal
+    : estimateSlippage(position.avgEntryPrice, originalQty, exchCode)
+  const estSlipPct = (position.estimatedSlippagePct != null && position.estimatedSlippagePct > 0)
+    ? position.estimatedSlippagePct
+    : estimateSlippagePct(position.avgEntryPrice, originalQty, exchCode)
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-IN', {
@@ -110,9 +120,26 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
                 {position.instrumentType === 'OPTION' ? 'OPT' : position.instrumentType === 'FUTURES' ? 'FUT' : position.instrumentType}
               </span>
             )}
+            {position.tradeLabel && (
+              <span className="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-semibold tracking-wide bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                {position.tradeLabel}
+              </span>
+            )}
             {position.executionMode === 'MANUAL' && (
               <span className="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide bg-slate-500/15 text-slate-400 border border-slate-500/30">
                 MANUAL
+              </span>
+            )}
+            {position.greekTrailingActive && (
+              <span className="inline-flex items-center gap-1 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                GreekTrail
+              </span>
+            )}
+            {(position.recalCount ?? 0) > 0 && (
+              <span className="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                    title={`Last: ${position.lastRecalReason || 'unknown'}`}>
+                Recal {position.recalCount}x
               </span>
             )}
           </div>
@@ -127,6 +154,11 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
             }`}>{instrumentLabel}</span>
             <span className="text-slate-500">@</span>
             <span className="text-white">{position.avgEntryPrice.toFixed(2)}/-</span>
+            {estSlippage > 0 && (
+              <span className={`ml-1 text-[9px] ${estSlipPct > 1 ? 'text-amber-500/80' : 'text-slate-500'}`} title={`Est. round-trip slippage ~₹${estSlippage.toFixed(0)} (${estSlipPct.toFixed(1)}%)`}>
+                slip ₹{estSlippage < 1000 ? estSlippage.toFixed(0) : (estSlippage/1000).toFixed(1) + 'K'}
+              </span>
+            )}
             {position.delta != null && position.delta > 0 && position.delta < 1 && (
               position.deltaFallbackReason ? (
                 <span className="ml-1 sm:ml-2 text-amber-500" title={position.deltaFallbackReason}>
@@ -173,50 +205,99 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
               <div className="text-white font-medium font-mono text-[11px] sm:text-xs">{(position.equityLtp ?? 0).toFixed(2)}</div>
             </div>
           </div>
-          {/* SL + T1-T4 row — 3+2 grid on mobile, 5-col on sm+ */}
-          <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 sm:gap-1.5">
-            <div className={`rounded p-1 sm:p-1.5 ${position.slHit ? 'bg-red-500/20 border border-red-500/40' : 'bg-red-500/10'}`}>
-              <div className="text-red-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
-                SL {position.slHit && <span className="text-[9px]">&#10007;</span>}
+          {/* Greek Trail live targets (when active, replaces static T2-T4) */}
+          {position.greekTrailingActive && position.greekTrail ? (
+            <div className="space-y-1">
+              <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+                <div className="bg-emerald-500/15 rounded p-1 sm:p-1.5 border border-emerald-500/20">
+                  <div className="text-emerald-300 text-[10px]">Trail Stop</div>
+                  <div className="text-white font-bold font-mono text-[11px]">{(position.greekTrail.trailStopPrice ?? 0).toFixed(2)}</div>
+                </div>
+                <div className="bg-red-500/15 rounded p-1 sm:p-1.5 border border-red-500/20">
+                  <div className="text-red-300 text-[10px]">Hard Floor</div>
+                  <div className="text-white font-bold font-mono text-[11px]">{(position.hardFloorSl ?? position.currentSl ?? 0).toFixed(2)}</div>
+                </div>
+                <div className="bg-cyan-500/10 rounded p-1 sm:p-1.5">
+                  <div className="text-cyan-300 text-[10px]">HWM</div>
+                  <div className="text-white font-medium font-mono text-[11px]">{(position.greekTrail.highWatermark ?? 0).toFixed(2)}</div>
+                </div>
+                <div className="bg-purple-500/10 rounded p-1 sm:p-1.5">
+                  <div className="text-purple-300 text-[10px]">Trail %</div>
+                  <div className="text-white font-medium font-mono text-[11px]">{((position.greekTrail.currentTrailPct ?? 0) * 100).toFixed(1)}%</div>
+                </div>
               </div>
-              <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
-                {fmtDual(position.equitySl, position.optionSl) ?? (position.stopLoss ?? 0).toFixed(2)}
+              <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
+                <div className="bg-slate-700/30 rounded p-1">
+                  <div className="text-slate-400 text-[9px]">{'\u03B4'} Now/Peak</div>
+                  <div className="text-white font-mono text-[10px]">{(position.greekTrail.currentDelta ?? 0).toFixed(3)}/{(position.greekTrail.peakDelta ?? 0).toFixed(3)}</div>
+                </div>
+                <div className="bg-slate-700/30 rounded p-1">
+                  <div className="text-slate-400 text-[9px]">{'\u03B3'} Gamma</div>
+                  <div className="text-white font-mono text-[10px]">{(position.greekTrail.currentGamma ?? 0).toFixed(4)}</div>
+                </div>
+                <div className="bg-slate-700/30 rounded p-1">
+                  <div className="text-slate-400 text-[9px]">{'\u03B8'} Burn/day</div>
+                  <div className={`font-mono text-[10px] ${(position.greekTrail.thetaBurnRate ?? 0) > 0.03 ? 'text-amber-400' : 'text-white'}`}>
+                    {((position.greekTrail.thetaBurnRate ?? 0) * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="bg-slate-700/30 rounded p-1">
+                  <div className="text-slate-400 text-[9px]">DTE</div>
+                  <div className={`font-mono text-[10px] ${(position.greekTrail.dte ?? 99) <= 2 ? 'text-red-400' : 'text-white'}`}>
+                    {position.greekTrail.dte ?? 'DM'}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[10px] text-emerald-500/70 italic">Greek Trailing active — dynamic SL/targets</div>
+            </div>
+          ) : (
+            <>
+            {/* SL + T1-T4 row — 3+2 grid on mobile, 5-col on sm+ */}
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1 sm:gap-1.5">
+              <div className={`rounded p-1 sm:p-1.5 ${position.slHit ? 'bg-red-500/20 border border-red-500/40' : 'bg-red-500/10'}`}>
+                <div className="text-red-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
+                  SL {position.slHit && <span className="text-[9px]">&#10007;</span>}
+                </div>
+                <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
+                  {fmtDual(position.equitySl, position.currentSl ?? position.optionSl) ?? (position.stopLoss ?? 0).toFixed(2)}
+                </div>
+              </div>
+              <div className={`rounded p-1 sm:p-1.5 ${position.t1Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
+                <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
+                  T1 {position.t1Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
+                </div>
+                <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
+                  {fmtDual(position.equityT1, position.optionT1) ?? (position.target1 ?? 0).toFixed(2)}
+                </div>
+              </div>
+              <div className={`rounded p-1 sm:p-1.5 ${position.t2Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
+                <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
+                  T2 {position.t2Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
+                </div>
+                <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
+                  {fmtDual(position.equityT2, position.optionT2) ?? (position.target2 ?? 0).toFixed(2)}
+                </div>
+              </div>
+              <div className={`rounded p-1 sm:p-1.5 ${position.t3Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
+                <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
+                  T3 {position.t3Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
+                </div>
+                <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
+                  {fmtDual(position.equityT3, position.optionT3) ?? (position.target3 ?? 0).toFixed(2)}
+                </div>
+              </div>
+              <div className={`rounded p-1 sm:p-1.5 ${position.t4Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
+                <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
+                  T4 {position.t4Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
+                </div>
+                <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
+                  {fmtDual(position.equityT4, position.optionT4) ?? (position.target4 ?? 0).toFixed(2)}
+                </div>
               </div>
             </div>
-            <div className={`rounded p-1 sm:p-1.5 ${position.t1Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
-              <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
-                T1 {position.t1Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
-              </div>
-              <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
-                {fmtDual(position.equityT1, position.optionT1) ?? (position.target1 ?? 0).toFixed(2)}
-              </div>
-            </div>
-            <div className={`rounded p-1 sm:p-1.5 ${position.t2Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
-              <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
-                T2 {position.t2Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
-              </div>
-              <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
-                {fmtDual(position.equityT2, position.optionT2) ?? (position.target2 ?? 0).toFixed(2)}
-              </div>
-            </div>
-            <div className={`rounded p-1 sm:p-1.5 ${position.t3Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
-              <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
-                T3 {position.t3Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
-              </div>
-              <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
-                {fmtDual(position.equityT3, position.optionT3) ?? (position.target3 ?? 0).toFixed(2)}
-              </div>
-            </div>
-            <div className={`rounded p-1 sm:p-1.5 ${position.t4Hit ? 'bg-green-500/20 border border-green-500/40' : 'bg-emerald-500/10'}`}>
-              <div className="text-emerald-400 flex items-center gap-0.5 text-[10px] sm:text-xs">
-                T4 {position.t4Hit && <span className="text-green-400 text-[9px]">&#10003;</span>}
-              </div>
-              <div className="text-white font-medium font-mono text-[10px] sm:text-[11px] truncate">
-                {fmtDual(position.equityT4, position.optionT4) ?? (position.target4 ?? 0).toFixed(2)}
-              </div>
-            </div>
-          </div>
-          <div className="text-[10px] text-slate-500 italic">Equity/Option levels</div>
+            <div className="text-[10px] text-slate-500 italic">Equity/Option levels{(position.recalCount ?? 0) > 0 ? ` | Recal ${position.recalCount}x (${position.lastRecalReason ?? ''})` : ''}</div>
+            </>
+          )}
         </div>
       ) : (
         /* Standard levels grid for non-strategy or futures trades */
@@ -349,6 +430,15 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
                   <span className="text-slate-400 font-medium">Total Charges</span>
                   <span className="text-red-400 font-mono font-medium">-{formatCurrency(charges)}</span>
                 </div>
+                {estSlippage > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-amber-500/80">Est. Slippage</span>
+                    <span className="text-amber-500/80 font-mono text-[11px]">
+                      ~{formatCurrency(estSlippage)}
+                      <span className="text-[9px] ml-1">({estSlipPct.toFixed(1)}%)</span>
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-slate-600/50 pt-1 mt-1">
                   <span className="text-white font-semibold">Net P&L</span>
                   <span className={`font-mono font-semibold ${pnlColor}`}>{formatCurrency(displayPnl)}</span>

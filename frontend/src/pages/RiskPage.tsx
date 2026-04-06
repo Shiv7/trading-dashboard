@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { riskApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import type { PortfolioRiskSummary } from '../types'
 import LiveMonitorTab from '../components/Risk/LiveMonitorTab'
 import TradeIntelligenceTab from '../components/Risk/TradeIntelligenceTab'
@@ -140,7 +141,7 @@ export default function RiskPage() {
 
   useEffect(() => {
     loadPortfolio()
-    const interval = setInterval(loadPortfolio, 10000)
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadPortfolio() }, 10000)
     return () => clearInterval(interval)
   }, [loadPortfolio])
 

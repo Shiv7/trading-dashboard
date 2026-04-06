@@ -4,6 +4,7 @@ import SockJS from 'sockjs-client'
 import { useDashboardStore } from '../store/dashboardStore'
 import type { QuantScore, PatternSignal } from '../types'
 import { walletApi, scoresApi, quantScoresApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:8085/ws'
 
@@ -91,7 +92,7 @@ export function useWebSocket() {
   }, [updateWallet, updateScore, bulkUpdateQuantScores])
 
   const connect = useCallback(() => {
-    if (clientRef.current?.connected) return
+    if (clientRef.current?.connected || clientRef.current?.active) return
 
     const client = new Client({
       webSocketFactory: () => new SockJS(WS_URL),
@@ -508,9 +509,24 @@ export function useWebSocket() {
     return null
   }, [])
 
+  // Connect/disconnect based on market hours — check every 60s
   useEffect(() => {
-    connect()
-    return () => disconnect()
+    const manage = () => {
+      if (isAnyMarketOpen()) {
+        if (!clientRef.current?.connected) connect()
+      } else {
+        if (clientRef.current?.connected) {
+          console.log('Market closed — disconnecting WebSocket')
+          disconnect()
+        }
+      }
+    }
+    manage() // initial check
+    const interval = setInterval(manage, 60_000)
+    return () => {
+      clearInterval(interval)
+      disconnect()
+    }
   }, [connect, disconnect])
 
   // Helper to clear parse errors

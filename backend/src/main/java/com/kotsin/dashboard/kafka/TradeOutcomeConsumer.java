@@ -194,7 +194,7 @@ public class TradeOutcomeConsumer {
                         : !strategyField.isEmpty() ? strategyField
                         : signalType;
         String strategy = com.kotsin.dashboard.service.StrategyNameResolver.normalize(rawStrategy);
-        strategy = com.kotsin.dashboard.service.StrategyNameResolver.displayName(strategy);
+        // Use canonical key, not display name — display names are for UI rendering only
 
         return TradeDTO.builder()
                 .tradeId(root.path("tradeId").asText(root.path("signalId").asText()))
@@ -273,7 +273,8 @@ public class TradeOutcomeConsumer {
             String rawSource = root.path("signalSource").asText("");
             if (rawSource.isEmpty()) rawSource = signalType;
             String signalSource = com.kotsin.dashboard.service.StrategyNameResolver.normalize(rawSource);
-            signalSource = com.kotsin.dashboard.service.StrategyNameResolver.displayName(signalSource);
+            // Store canonical key, not display name — display names are for UI only
+            // (was: signalSource = StrategyNameResolver.displayName(signalSource))
 
             Document doc = new Document()
                     .append("signalId", trade.getSignalId())
@@ -327,7 +328,9 @@ public class TradeOutcomeConsumer {
                     .append("totalCharges", root.path("totalCharges").asDouble(0))
                     // MAE/MFE tracking
                     .append("maxAdverseExcursion", optionalJsonDouble(root, "maxAdverseExcursion"))
-                    .append("maxFavorableExcursion", optionalJsonDouble(root, "maxFavorableExcursion"));
+                    .append("maxFavorableExcursion", optionalJsonDouble(root, "maxFavorableExcursion"))
+                    // ML Shadow correlation ID for outcome linkage
+                    .append("shadowLogId", root.path("shadowLogId").asText(null));
 
             // Store times as Date objects for MongoDB queries
             if (trade.getEntryTime() != null) {

@@ -185,7 +185,11 @@ public class PerformanceAnalyticsService {
     }
 
     private PerformanceMetrics calculateMetrics() {
-        List<TradeDTO> trades = new ArrayList<>(allTrades.values());
+        // Only include trades from active strategies (single source of truth: StrategyNameResolver)
+        Set<String> activeKeys = new HashSet<>(StrategyNameResolver.ACTIVE_STRATEGY_KEYS);
+        List<TradeDTO> trades = allTrades.values().stream()
+                .filter(t -> activeKeys.contains(t.getStrategy()))
+                .collect(Collectors.toCollection(ArrayList::new));
 
         if (trades.isEmpty()) {
             return PerformanceMetrics.empty();
@@ -463,6 +467,8 @@ public class PerformanceAnalyticsService {
                 .build());
         }
         for (var entry : bySource.entrySet()) {
+            // Skip strategies not in active list
+            if (!ALL_STRATEGIES.contains(entry.getKey())) continue;
             List<TradeDTO> sourceTrades = entry.getValue();
             int w = (int) sourceTrades.stream().filter(this::isWin).count();
             int l = (int) sourceTrades.stream().filter(this::isLoss).count();
@@ -719,10 +725,12 @@ public class PerformanceAnalyticsService {
     }
 
     private List<StrategyDetail> calculateStrategyDetails(List<TradeDTO> trades) {
-        // Group by strategy + exchange
+        // Group by strategy + exchange — only active strategies
+        Set<String> activeKeys = new HashSet<>(StrategyNameResolver.ACTIVE_STRATEGY_KEYS);
         Map<String, Map<String, List<TradeDTO>>> stratExch = new HashMap<>();
         for (TradeDTO t : trades) {
             String strategy = t.getStrategy() != null && !t.getStrategy().isEmpty() ? t.getStrategy() : "UNKNOWN";
+            if (!activeKeys.contains(strategy)) continue;
             String exchange = inferExchange(t);
             stratExch.computeIfAbsent(strategy, k -> new HashMap<>())
                      .computeIfAbsent(exchange, k -> new ArrayList<>())

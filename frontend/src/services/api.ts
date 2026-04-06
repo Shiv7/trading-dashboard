@@ -131,6 +131,8 @@ export const signalsApi = {
   getSignalById: (signalId: string) => fetchJson<Signal>(`/signals/${signalId}`),
   getSignalsForStock: (scripCode: string, limit = 50) =>
     fetchJson<Signal[]>(`/signals/stock/${scripCode}?limit=${limit}`),
+  getBestSignal: (scripCode: string) =>
+    fetchJson<Record<string, unknown>>(`/signals/best/${scripCode}`),
 }
 
 // Scores API
@@ -274,6 +276,68 @@ export const tradingModeApi = {
 
   disableLive: () =>
     postJson<{ liveTradingEnabled: boolean; mode: string }>('/trading-mode/disable-live', {}),
+}
+
+// Market Pulse API
+export interface MacroSnapshot {
+  giftNiftyPrice: number
+  giftNiftyChange: number
+  giftNiftyChangePct: number
+  giftNiftyOvernightChangePct: number
+  giftNiftyOpen: number
+  giftNiftyHigh: number
+  giftNiftyLow: number
+  giftNiftyPrevClose: number
+  indiaVix: number
+  vixRegime: string
+  dowChangePct: number
+  sp500ChangePct: number
+  nasdaqChangePct: number
+  advanceDecline: {
+    advances: number
+    declines: number
+    unchanged: number
+    ratio: number
+  }
+  timestamp: number
+}
+
+export interface BlockDeal {
+  date: string; symbol: string; name: string; clientName: string
+  buySell: string; quantity: number; price: number; valueCr: number
+  remarks: string | null; _date: string; _lastFetchEpoch?: number
+}
+export interface BulkDeal {
+  date: string; symbol: string; securityName: string; clientName: string
+  buySell: string; quantity: number; price: number; valueCr: number; _date: string; _lastFetchEpoch?: number
+}
+export interface FiiDiiDay {
+  _date: string
+  FII?: { category: string; date: string; buyValue: number; sellValue: number; netValue: number }
+  DII?: { category: string; date: string; buyValue: number; sellValue: number; netValue: number }
+}
+export interface CorporateEvent {
+  symbol: string; company: string; purpose: string; description: string; date: string
+}
+export interface ConvictionData {
+  symbol: string; conviction: number; color: string; events: string[]; inference: string
+}
+
+export interface DeliveryData {
+  date?: string
+  sectors?: Record<string, { deliveryPct: number; totalTurnoverLacs: number; stockCount: number }>
+  topDelivery?: { symbol: string; deliveryPct: number; turnoverLacs: number }[]
+  timestamp?: number
+}
+
+export const marketPulseApi = {
+  getSnapshot: () => fetchJson<MacroSnapshot>('/market-pulse'),
+  getBlockDeals: () => fetchJson<BlockDeal[]>('/market-pulse/block-deals'),
+  getBulkDeals: () => fetchJson<BulkDeal[]>('/market-pulse/bulk-deals'),
+  getFiiDii: () => fetchJson<FiiDiiDay[]>('/market-pulse/fii-dii'),
+  getCorporateEvents: () => fetchJson<CorporateEvent[]>('/market-pulse/corporate-events'),
+  getConviction: (symbol: string) => fetchJson<ConvictionData>(`/market-pulse/conviction/${symbol}`),
+  getDeliveryData: () => fetchJson<DeliveryData>('/market-pulse/delivery-data'),
 }
 
 // Performance Analytics API
@@ -879,6 +943,22 @@ export interface StrategyWalletTrade {
   durationMinutes?: number | null
   // Transaction charges (Zerodha round-trip)
   totalCharges?: number | null
+  // Slippage — entry
+  estimatedEntrySlippage?: number | null
+  estimatedEntrySlippageTotal?: number | null
+  estimatedSlippagePct?: number | null
+  slippageTier?: string | null
+  // Slippage — exit
+  exitSlippagePerUnit?: number | null
+  exitSlippageTotal?: number | null
+  // Gross P&L + charge breakdown
+  grossPnl?: number | null
+  chargesBrokerage?: number | null
+  chargesStt?: number | null
+  chargesExchange?: number | null
+  chargesGst?: number | null
+  chargesSebi?: number | null
+  chargesStamp?: number | null
   // Signal-level metrics (for correlation analytics)
   atr?: number | null
   volumeSurge?: number | null
@@ -982,6 +1062,52 @@ export const greeksApi = {
     Object.entries(params).forEach(([k, v]) => { if (v !== undefined) q.set(k, String(v)) })
     return fetchJson<GreeksResult>(`/greeks/compute?${q}`)
   },
+}
+
+// ===== GREEK TRAILING API (monitoring + control) =====
+export interface GreekTrailState {
+  positionKey: string
+  scripCode: string
+  companyName: string
+  optionType: string
+  strike: number
+  exchange: string
+  strategy: string
+  status: string // TRAILING, EXITED, etc.
+  // Delta
+  currentDelta: number
+  deltaAtT1: number
+  peakDelta: number
+  deltaAccelRatio: number
+  // Premium
+  currentPremium: number
+  highWatermark: number
+  trailStopPrice: number
+  currentTrailPct: number
+  // Greeks
+  currentGamma: number
+  currentIV: number
+  thetaBurnRate: number
+  // Time
+  dte: number
+  t1HitTime: number // epoch ms
+  exitTime?: number
+  exitReason?: string
+  // P&L
+  entryPremium: number
+  exitPremium?: number
+  estimatedPnl?: number
+  lotSize?: number
+}
+
+export const greekTrailingApi = {
+  getActive: () => fetchJson<GreekTrailState[]>('/greek-trailing/active'),
+  forceExit: (positionKey: string) =>
+    postJson<{ success: boolean; message: string }>(
+      `/greek-trailing/force-exit/${encodeURIComponent(positionKey)}`, {}),
+  disable: () =>
+    postJson<{ success: boolean; message: string; trailsKilled: number }>(
+      '/greek-trailing/disable', {}),
 }
 
 // Export helpers for use in other service files

@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target, Briefcase, Plus, X, ChevronDown } from 'lucide-react'
 import { strategyWalletsApi, walletApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
 import type { Position } from '../types'
 import PositionCard from '../components/Wallet/PositionCard'
 import FundTopUpModal from '../components/Wallet/FundTopUpModal'
 import { STRATEGY_COLORS } from '../utils/strategyColors'
+import { estimateSlippage, estimateSlippagePct, formatSlippage } from '../utils/slippageUtils'
 // ─── Types ───────────────────────────────────────────────
 type SortField = 'exitTime' | 'pnl' | 'pnlPercent' | 'companyName' | 'strategy'
 
@@ -14,7 +16,7 @@ type SectionFilterTag =
   | 'NSE' | 'MCX' | 'CURRENCY'
   | 'OPTIONS' | 'FUT' | 'EQUITY'
   | 'PROFIT' | 'LOSS'
-  | 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'MICROALPHA' | 'MERE' | 'QUANT'
+  | 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'RETEST' | 'MICROALPHA' | 'MERE' | 'QUANT'
   | 'MCX_BB_15' | 'MCX_BB_30' | 'NSE_BB_30'
   | 'MOST_RECENT'
 
@@ -48,9 +50,9 @@ const SECTION_FILTER_GROUPS: { label: string; tags: { key: SectionFilterTag; lab
       { key: 'FUDKII', label: 'FUDKII', color: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
       { key: 'FUKAA', label: 'FUKAA', color: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' },
       { key: 'FUDKOI', label: 'FUDKOI', color: 'bg-pink-500/15 text-pink-400 border-pink-500/30' },
-      { key: 'PIVOT', label: 'PIVOT', color: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
       { key: 'MICROALPHA', label: 'MICRO', color: 'bg-lime-500/15 text-lime-400 border-lime-500/30' },
-      { key: 'MERE', label: 'MERE', color: 'bg-violet-500/15 text-violet-400 border-violet-500/30' },
+      { key: 'RETEST', label: 'RETEST', color: 'bg-violet-500/15 text-violet-400 border-violet-500/30' },
+      { key: 'MERE', label: 'MERE', color: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30' },
       { key: 'QUANT', label: 'QUANT', color: 'bg-rose-500/15 text-rose-400 border-rose-500/30' },
       { key: 'MCX_BB_15', label: 'MCX-BB-15', color: 'bg-lime-500/15 text-lime-400 border-lime-500/30' },
       { key: 'MCX_BB_30', label: 'MCX-BB-30', color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
@@ -102,7 +104,8 @@ function getStrategyTag(strategy?: string): SectionFilterTag | null {
   if (s.includes('FUDKOI')) return 'FUDKOI'
   if (s.includes('FUDKII')) return 'FUDKII'
   if (s.includes('FUKAA')) return 'FUKAA'
-  if (s.includes('PIVOT')) return 'PIVOT'
+  if (s.includes('RETEST')) return 'RETEST'
+  // PIVOT suspended 2026-04-02 — historical PIVOT trades will show without strategy filter
   if (s.includes('MICRO')) return 'MICROALPHA'
   if (s.includes('MERE')) return 'MERE'
   if (s.includes('QUANT')) return 'QUANT'
@@ -124,7 +127,7 @@ function matchesSectionFilters(
   const exchangeTags: SectionFilterTag[] = ['NSE', 'MCX', 'CURRENCY']
   const instrumentTags: SectionFilterTag[] = ['OPTIONS', 'FUT', 'EQUITY']
   const pnlTags: SectionFilterTag[] = ['PROFIT', 'LOSS']
-  const strategyTags: SectionFilterTag[] = ['FUKAA', 'FUDKOI', 'FUDKII', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30']
+  const strategyTags: SectionFilterTag[] = ['FUKAA', 'FUDKOI', 'FUDKII', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30']
 
   const activeExchange = exchangeTags.filter(t => active.has(t))
   const activeInstrument = instrumentTags.filter(t => active.has(t))
@@ -344,6 +347,15 @@ function TradeDetailDrawer({ trade, onClose }: { trade: StrategyWalletTrade; onC
   const sc = STRATEGY_COLORS[trade.strategy] || STRATEGY_COLORS['FUDKII']
   const displayName = getTradeDisplayName(trade)
 
+  const exchCode = (trade.exchange || 'N').charAt(0).toUpperCase()
+  // Prefer backend orderbook-aware slippage; fall back to static tick model
+  const tradeSlippage = (trade.estimatedEntrySlippageTotal != null && trade.estimatedEntrySlippageTotal > 0)
+    ? trade.estimatedEntrySlippageTotal
+    : estimateSlippage(trade.entryPrice, trade.quantity, exchCode)
+  const tradeSlipPct = (trade.estimatedSlippagePct != null && trade.estimatedSlippagePct > 0)
+    ? trade.estimatedSlippagePct
+    : estimateSlippagePct(trade.entryPrice, trade.quantity, exchCode)
+
   const hasDualLegs = trade.equitySl != null || trade.optionSl != null
     || trade.equityT1 != null || trade.optionT1 != null
 
@@ -444,11 +456,25 @@ function TradeDetailDrawer({ trade, onClose }: { trade: StrategyWalletTrade; onC
                   <span className="text-slate-400">Charges</span>
                   <span className="text-red-400">-{formatINR(trade.totalCharges ?? 0)}</span>
                 </div>
+                {tradeSlippage > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-amber-500/80">Est. Slippage</span>
+                    <span className="text-amber-500/80">~{formatSlippage(tradeSlippage)} <span className="text-[10px]">({tradeSlipPct.toFixed(1)}%)</span></span>
+                  </div>
+                )}
                 <div className="flex justify-between pt-1 border-t border-slate-700/40">
                   <span className="text-slate-300 font-medium">Net P&L</span>
                   <span className={`font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
                     {positive ? '+' : ''}{formatINR(trade.pnl)}
                   </span>
+                </div>
+              </div>
+            )}
+            {(trade.totalCharges ?? 0) === 0 && tradeSlippage > 0 && (
+              <div className="mt-3 pt-2 border-t border-slate-700/50 text-xs font-mono">
+                <div className="flex justify-between">
+                  <span className="text-amber-500/80">Est. Slippage</span>
+                  <span className="text-amber-500/80">~{formatSlippage(tradeSlippage)} <span className="text-[10px]">({tradeSlipPct.toFixed(1)}%)</span></span>
                 </div>
               </div>
             )}
@@ -664,7 +690,7 @@ export default function StrategyWalletsPage() {
     loadData()
     let interval: ReturnType<typeof setInterval> | null = null
     if (autoRefresh) {
-      interval = setInterval(loadData, 5000)
+      interval = setInterval(() => { if (isAnyMarketOpen()) loadData() }, 5000)
     }
     return () => { if (interval) clearInterval(interval) }
   }, [loadData, autoRefresh])
@@ -789,8 +815,8 @@ export default function StrategyWalletsPage() {
         <div className="overflow-x-auto pb-2 -mx-1.5 sm:-mx-4 px-1.5 sm:px-4 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
           <div className="flex gap-2 sm:gap-4" style={{ minWidth: 'max-content' }}>
           {(summaries.length > 0 ? summaries : Array.from({ length: 10 }, (_, i) => ({
-            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT_CONFLUENCE', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30'][i],
-            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'PIVOT', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30'][i],
+            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30'][i],
+            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30'][i],
             initialCapital: 1000000, currentCapital: 1000000, totalPnl: 0, totalPnlPercent: 0,
             totalTrades: 0, wins: 0, losses: 0, winRate: 0, mcxUsedMargin: 0,
           }))).map(s => {
@@ -873,6 +899,20 @@ export default function StrategyWalletsPage() {
                 <div className="mt-1 text-[10px] sm:text-xs text-slate-500 font-mono tabular-nums">
                   Avail.cap <span className="text-slate-400">{formatINR(s.availableMargin ?? 0)}</span>
                 </div>
+                {/* Aggregate Est. Slippage for this strategy */}
+                {(() => {
+                  const stratTrades = trades.filter(t => t.strategy === s.strategy || t.strategy === s.displayName)
+                  if (stratTrades.length === 0) return null
+                  const totalSlip = stratTrades.reduce((sum, t) => {
+                    const ex = (t.exchange || 'N').charAt(0).toUpperCase()
+                    return sum + estimateSlippage(t.entryPrice, t.quantity, ex)
+                  }, 0)
+                  return totalSlip > 0 ? (
+                    <div className="mt-0.5 text-[10px] text-amber-500/70 font-mono tabular-nums">
+                      Est.slip <span className="text-amber-500/80">~{formatSlippage(totalSlip)}</span>
+                    </div>
+                  ) : null
+                })()}
 
                 {/* MCX Capital */}
                 {(s.mcxUsedMargin ?? 0) > 0 && (
@@ -1135,6 +1175,14 @@ export default function StrategyWalletsPage() {
                           <div className={`text-[10px] font-mono ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
                             {positive ? '+' : ''}{t.pnlPercent.toFixed(2)}%
                           </div>
+                          {(() => {
+                            const ex = (t.exchange || 'N').charAt(0).toUpperCase()
+                            const sp = estimateSlippagePct(t.entryPrice, t.quantity, ex)
+                            const slipAmt = estimateSlippage(t.entryPrice, t.quantity, ex)
+                            return slipAmt > 0 ? (
+                              <div className={`text-[9px] font-mono ${sp > 1 ? 'text-amber-500/70' : 'text-slate-600'}`}>~slip ₹{slipAmt < 1000 ? Math.round(slipAmt) : (slipAmt/1000).toFixed(1) + 'K'}</div>
+                            ) : null
+                          })()}
                         </div>
                       </div>
                       {/* Row 2: Entry/Exit prices + times */}

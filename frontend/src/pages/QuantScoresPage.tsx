@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { quantScoresApi } from '../services/api'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import type { QuantScore, QuantScoreStats } from '../types'
 import TradeModal from '../components/Trading/TradeModal'
 import { useDashboardStore } from '../store/dashboardStore'
@@ -67,7 +68,7 @@ export default function QuantScoresPage() {
 
   useEffect(() => {
     loadData()
-    const interval = setInterval(loadData, 30000) // Fallback polling every 30s
+    const interval = setInterval(() => { if (isAnyMarketOpen()) loadData() }, 30000) // Fallback polling every 30s
     return () => clearInterval(interval)
   }, [])
 

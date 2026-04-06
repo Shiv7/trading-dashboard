@@ -2,6 +2,7 @@ import { ReactNode, useState, useEffect, useMemo } from 'react'
 import { NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { useInitialState } from '../../hooks/useInitialState'
+import { isAnyMarketOpen } from '../../utils/tradingUtils'
 import { useDashboardStore } from '../../store/dashboardStore'
 import { useAuth } from '../../context/AuthContext'
 import NotificationPanel from './NotificationPanel'
@@ -18,6 +19,7 @@ interface LayoutProps {
 
 // Sidebar nav items
 const sidebarItems = [
+  { to: '/live', label: 'Live', icon: <><circle cx="12" cy="12" r="3" strokeWidth={1.5} fill="currentColor" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16.24 7.76a6 6 0 010 8.49m-8.48-.01a6 6 0 010-8.49m11.31-2.82a10 10 0 010 14.14m-14.14 0a10 10 0 010-14.14" /></> },
   { to: '/dashboard', label: 'Dashboard', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /> },
   { to: '/watchlist', label: 'Watchlist', icon: <><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></> },
   { to: '/orders', label: 'Orders', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /> },
@@ -28,8 +30,8 @@ const sidebarItems = [
   { to: '/risk', label: 'Risk', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /> },
   { to: '/quant-scores', label: 'Quant Score', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /> },
   { to: '/performance', label: 'Performance', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" /> },
-  { to: '/scores', label: 'Scores', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" /> },
   { to: '/patterns', label: 'Patterns', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" /> },
+  { to: '/market-pulse', label: 'Market Pulse', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6" /> },
   { to: '/strategy', label: 'Strategy', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /> },
   { to: '/wallets', label: 'Wallets', icon: <><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" /></> },
   { to: '/ml-shadow', label: 'ML Shadow', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /> },
@@ -78,7 +80,8 @@ export default function Layout({ children }: LayoutProps) {
     return `${Math.floor(diffMin / 60)}h ago`
   }, [now, lastDataReceived])
 
-  const isStale = !connected && (now - lastDataReceived > 60000)
+  const marketOpen = isAnyMarketOpen()
+  const isStale = marketOpen && !connected && (now - lastDataReceived > 60000)
 
   const toggleSound = () => {
     const newState = !soundEnabled
@@ -229,11 +232,11 @@ export default function Layout({ children }: LayoutProps) {
 
               <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-slate-800/50 rounded-lg">
                 <button
-                  onClick={() => !connected && reconnect()}
-                  className={`p-1 rounded transition-colors ${connected ? 'text-emerald-400' : 'text-red-400 hover:bg-slate-700'}`}
-                  title={connected ? 'Connected' : 'Disconnected - click to retry'}
+                  onClick={() => !connected && marketOpen && reconnect()}
+                  className={`p-1 rounded transition-colors ${connected ? 'text-emerald-400' : !marketOpen ? 'text-slate-500' : 'text-red-400 hover:bg-slate-700'}`}
+                  title={connected ? 'Connected' : !marketOpen ? 'Market closed' : 'Disconnected - click to retry'}
                 >
-                  <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'}`} />
+                  <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400' : !marketOpen ? 'bg-slate-500' : 'bg-red-400 animate-pulse'}`} />
                 </button>
                 <div className={`px-1 text-xs font-medium ${getRegimeColor()}`}>{getRegimeLabel()}</div>
                 <span className="text-[10px] text-slate-500 ml-1" title="Last data received">{lastUpdatedLabel}</span>
@@ -289,8 +292,8 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         </header>
 
-        {/* Reconnecting Banner */}
-        {!connected && (reconnecting || wsError) && (
+        {/* Reconnecting Banner — only during market hours */}
+        {marketOpen && !connected && (reconnecting || wsError) && (
           <div className={`px-4 py-2 text-center text-sm ${wsError ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'}`}>
             {wsError ? (
               <span>{wsError} — <button onClick={reconnect} className="underline font-medium hover:text-white">Retry</button></span>

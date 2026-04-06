@@ -21,6 +21,7 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/ml")
+@CrossOrigin(origins = "*")
 public class MLShadowProxyController {
 
     private final RestTemplate mlRestTemplate;
@@ -118,6 +119,24 @@ public class MLShadowProxyController {
     @GetMapping("/shadow/comparison")
     public ResponseEntity<?> shadowComparison(@RequestParam(defaultValue = "100") int limit) {
         return proxyGet(execRestTemplate, execUrl + "/api/ml/shadow/comparison?limit=" + limit);
+    }
+
+    @PostMapping("/shadow/record-outcome")
+    public ResponseEntity<?> recordOutcome(@RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = execRestTemplate.postForObject(
+                    execUrl + "/api/ml/shadow/record-outcome", body, Map.class);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.warn("ML proxy record-outcome failed: {}", e.getMessage());
+            return ResponseEntity.ok(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/shadow/backfill-outcomes")
+    public ResponseEntity<?> backfillOutcomes() {
+        return proxyPost(execRestTemplate, execUrl + "/api/ml/shadow/backfill-outcomes");
     }
 
     @GetMapping("/shadow/daily-report")

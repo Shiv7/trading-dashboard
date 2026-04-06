@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import type { Wallet } from '../../types'
 import { formatTimeAgo } from '../../utils/formatTime'
+import { estimateSlippage, formatSlippage } from '../../utils/slippageUtils'
 
 interface WalletCardProps {
   wallet: Wallet | null
@@ -61,6 +62,17 @@ export default function WalletCard({ wallet, dateLabel }: WalletCardProps) {
 
   const pnlColor = wallet.totalPnl >= 0 ? 'num-positive' : 'num-negative'
   const dayPnlColor = wallet.dayPnl >= 0 ? 'num-positive' : 'num-negative'
+
+  // Aggregate estimated slippage across all positions (open + today's closed)
+  const aggSlippage = useMemo(() => {
+    if (!wallet.positions || wallet.positions.length === 0) return 0
+    return wallet.positions.reduce((sum, p) => {
+      const exchCode = (p.exchange || 'N').charAt(0).toUpperCase()
+      const exitedQty = p.exitHistory?.reduce((s, ev) => s + (ev.qty || 0), 0) || 0
+      const originalQty = p.quantity + exitedQty
+      return sum + estimateSlippage(p.avgEntryPrice, originalQty, exchCode)
+    }, 0)
+  }, [wallet.positions])
 
   return (
     <div className="card">
@@ -125,6 +137,14 @@ export default function WalletCard({ wallet, dateLabel }: WalletCardProps) {
           </div>
         </div>
       </div>
+
+      {/* Est. Slippage summary */}
+      {aggSlippage > 0 && (
+        <div className="mt-2 sm:mt-3 flex items-center justify-end gap-1.5 text-[10px]">
+          <span className="text-slate-500">Est. Slippage (all trades):</span>
+          <span className="text-amber-500/80 font-mono">~{formatSlippage(aggSlippage)}</span>
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-slate-700/50 grid grid-cols-4 gap-2 sm:gap-4 lg:gap-6 text-center">
