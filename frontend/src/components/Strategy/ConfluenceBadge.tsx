@@ -121,20 +121,20 @@ export default function ConfluenceBadge({
         {/* SL Confluence Score */}
         {slScore != null && slScore > 0 && (
           <div className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
-            SL zone: <span className={`font-bold ${slScore >= 10 ? 'text-emerald-400' : slScore >= 5 ? 'text-blue-400' : 'text-slate-300'}`}>
+            SL zone score: <span className={`font-bold ${slScore >= 10 ? 'text-emerald-400' : slScore >= 5 ? 'text-blue-400' : 'text-slate-300'}`}>
               {slScore.toFixed(1)}
             </span>
-            {slScore >= 10 ? ' strong' : slScore >= 5 ? ' moderate' : ' weak'}
+            {slScore >= 10 ? ' strong support' : slScore >= 5 ? ' moderate support' : ' weak support'}
           </div>
         )}
 
         {/* T1 Confluence Score */}
         {t1Score != null && t1Score > 0 && (
           <div className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
-            T1 zone: <span className={`font-bold ${t1Score >= 10 ? 'text-emerald-400' : t1Score >= 5 ? 'text-blue-400' : 'text-slate-300'}`}>
+            T1 zone score: <span className={`font-bold ${t1Score >= 10 ? 'text-emerald-400' : t1Score >= 5 ? 'text-blue-400' : 'text-slate-300'}`}>
               {t1Score.toFixed(1)}
             </span>
-            {t1Score >= 10 ? ' strong target' : t1Score >= 5 ? ' moderate' : ' weak — may not hold'}
+            {t1Score >= 10 ? ' strong target' : t1Score >= 5 ? ' moderate target' : ' weak — may not hold'}
           </div>
         )}
 

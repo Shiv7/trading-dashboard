@@ -7,7 +7,6 @@ import { useNavigate } from 'react-router-dom';
 import { fetchJson, strategyWalletsApi, strategyTradesApi, marketDataApi, greeksApi } from '../../services/api';
 import type { StrategyTradeRequest } from '../../types/orders';
 import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, isNseNoTradeWindow, checkStalePriceAdjustment, isAnyMarketOpen } from '../../utils/tradingUtils';
-import ConvictionBadge from '../ConvictionBadge';
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
@@ -1012,16 +1011,15 @@ const FudkiiTradingCard: React.FC<{
           <div>
             <h3 className="text-lg font-semibold text-white leading-tight flex items-center gap-2">
               {sig.symbol || sig.companyName || sig.scripCode}
-              <ConvictionBadge symbol={sig.symbol || ''} compact />
             </h3>
-            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500">
+            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 whitespace-nowrap overflow-hidden text-ellipsis">
               <span>{sig.exchange || 'NSE'}</span>
               <span className="text-slate-700">&bull;</span>
               <span>{formatTriggerTime(sig)}</span>
               {displayInstrumentName && (
                 <>
                   <span className="text-slate-700">&bull;</span>
-                  <span className="text-slate-400 font-medium">{displayInstrumentName}</span>
+                  <span className="text-slate-400 font-medium truncate">{displayInstrumentName}</span>
                   <LiquiditySourceBadge source={sig.liquiditySource} />
                 </>
               )}

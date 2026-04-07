@@ -10,7 +10,6 @@ import { getOTMStrike, mapToOptionLevels, computeSlotSizing, SlotWalletState, is
 import type { StalePriceResult } from '../../utils/tradingUtils';
 import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
-import ConvictionBadge from '../ConvictionBadge';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
 import ConfluenceBadge from './ConfluenceBadge';
 import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
@@ -780,7 +779,6 @@ const FukaaCard: React.FC<{
           <div>
             <h3 className="text-lg font-semibold text-white leading-tight flex items-center gap-2">
               {displayName}
-              <ConvictionBadge symbol={trigger.symbol || ''} compact />
             </h3>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs text-slate-500">

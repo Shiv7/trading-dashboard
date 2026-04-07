@@ -298,6 +298,12 @@ export interface MacroSnapshot {
     declines: number
     unchanged: number
     ratio: number
+    ratioLabel: string
+    foAdvances: number
+    foDeclines: number
+    foUnchanged: number
+    foRatio: number
+    foRatioLabel: string
   }
   timestamp: number
 }

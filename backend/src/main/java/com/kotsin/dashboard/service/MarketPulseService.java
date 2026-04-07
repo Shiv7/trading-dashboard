@@ -352,7 +352,7 @@ public class MarketPulseService {
     }
 
     private AdvanceDecline computeAdvanceDecline() {
-        // Read A/D from Redis — scraped from NSE NIFTY TOTAL MARKET (750 scrips) by FastAnalytics
+        // Read A/D from Redis — NIFTY TOTAL MARKET (750 scrips) + F&O (213 scrips) by FastAnalytics
         try {
             String raw = redis.opsForValue().get("market-pulse:advance-decline");
             if (raw != null) {
@@ -361,9 +361,21 @@ public class MarketPulseService {
                 int declines = node.path("declines").asInt(0);
                 int unchanged = node.path("unchanged").asInt(0);
                 double ratio = node.path("ratio").asDouble(1.0);
+                String ratioLabel = node.path("ratioLabel").asText("0:0");
+
+                // F&O breadth
+                JsonNode fo = node.path("fo");
+                int foAdv = fo.path("advances").asInt(0);
+                int foDec = fo.path("declines").asInt(0);
+                int foUnch = fo.path("unchanged").asInt(0);
+                double foRatio = fo.path("ratio").asDouble(1.0);
+                String foRatioLabel = fo.path("ratioLabel").asText("0:0");
+
                 return AdvanceDecline.builder()
                         .advances(advances).declines(declines).unchanged(unchanged)
-                        .ratio(ratio)
+                        .ratio(ratio).ratioLabel(ratioLabel)
+                        .foAdvances(foAdv).foDeclines(foDec).foUnchanged(foUnch)
+                        .foRatio(foRatio).foRatioLabel(foRatioLabel)
                         .build();
             }
         } catch (Exception e) {
@@ -702,5 +714,12 @@ public class MarketPulseService {
         @Builder.Default private int declines = 0;
         @Builder.Default private int unchanged = 0;
         @Builder.Default private double ratio = 1.0;
+        @Builder.Default private String ratioLabel = "0:0";
+        // F&O-only breadth (213 scrips)
+        @Builder.Default private int foAdvances = 0;
+        @Builder.Default private int foDeclines = 0;
+        @Builder.Default private int foUnchanged = 0;
+        @Builder.Default private double foRatio = 1.0;
+        @Builder.Default private String foRatioLabel = "0:0";
     }
 }

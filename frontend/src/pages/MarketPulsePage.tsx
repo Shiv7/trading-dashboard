@@ -166,13 +166,15 @@ export default function MarketPulsePage() {
     dxyPrice: 0, dxyChangePct: 0, usVixPrice: 0, usVixChangePct: 0,
     crudeOilPrice: 0, crudeOilChangePct: 0, brentOilPrice: 0, brentOilChangePct: 0,
     goldPrice: 0, goldChangePct: 0, usdInrPrice: 0, usdInrChangePct: 0,
-    advanceDecline: { advances: 0, declines: 0, unchanged: 0, ratio: 1 },
+    advanceDecline: { advances: 0, declines: 0, unchanged: 0, ratio: 1, ratioLabel: '0:0', foAdvances: 0, foDeclines: 0, foUnchanged: 0, foRatio: 1, foRatioLabel: '0:0' },
     timestamp: 0,
   }
 
   const ad = s.advanceDecline
   const adTotal = ad.advances + ad.declines + ad.unchanged
   const adAdvPct = adTotal > 0 ? (ad.advances / adTotal) * 100 : 50
+  const foTotal = ad.foAdvances + ad.foDeclines + ad.foUnchanged
+  const foAdvPct = foTotal > 0 ? (ad.foAdvances / foTotal) * 100 : 50
 
 
   // Filtered bulk deals
@@ -592,27 +594,31 @@ export default function MarketPulsePage() {
     const ad = s.advanceDecline
     const fiiBearish = fiiNetWeek < -3000
     const fiiBullish = fiiNetWeek > 3000
-    if (ad && (ad.advances > 0 || ad.declines > 0)) {
-      const adRatio = ad.advances / (ad.declines || 1)
+    // Use F&O breadth for insights (more relevant to our trading universe)
+    const useAdv = ad.foAdvances > 0 ? ad.foAdvances : ad.advances
+    const useDec = ad.foDeclines > 0 ? ad.foDeclines : ad.declines
+    const useLabel = ad.foRatioLabel || ad.ratioLabel || 'DM'
+    if (useAdv > 0 || useDec > 0) {
+      const adRatio = useAdv / (useDec || 1)
       const breadthBullish = adRatio > 1.5
       const breadthBearish = adRatio < 0.7
 
       if (breadthBullish && fiiBearish) {
         inferences.push({
-          icon: '🔀', label: 'DIVERGENCE: Strong Breadth vs FII Selling',
-          detail: `Market breadth is positive (A/D: ${ad.advances}:${ad.declines} = ${adRatio.toFixed(1)}x) despite FII outflows of ${f(Math.abs(fiiNetWeek))} Cr. Domestic buying is powering advances across ${ad.advances} stocks even as foreign money exits. This divergence typically resolves with: (a) FII selling exhaustion → rally accelerates, or (b) breadth collapse follows FII lead → correction ahead. Watch DII flows for resolution signal.`,
+          icon: '🔀', label: 'DIVERGENCE: Strong F&O Breadth vs FII Selling',
+          detail: `F&O breadth is positive (${useAdv}:${useDec} = ${useLabel}) despite FII outflows of ${f(Math.abs(fiiNetWeek))} Cr. Domestic buying is powering advances across ${useAdv} F&O stocks even as foreign money exits. This divergence typically resolves with: (a) FII selling exhaustion → rally accelerates, or (b) breadth collapse follows FII lead → correction ahead. Watch DII flows for resolution signal.`,
           sentiment: 'neutral'
         })
       } else if (breadthBearish && fiiBullish) {
         inferences.push({
-          icon: '🔀', label: 'DIVERGENCE: Weak Breadth vs FII Buying',
-          detail: `Narrow market (A/D: ${ad.advances}:${ad.declines} = ${adRatio.toFixed(1)}x) despite FII inflows of +${f(fiiNetWeek)} Cr. FII money flowing into select large-caps while broader market declines — classic "index up, portfolio down" scenario. FII buying is concentrated, not broad — risky for late entries.`,
+          icon: '🔀', label: 'DIVERGENCE: Weak F&O Breadth vs FII Buying',
+          detail: `Narrow F&O market (${useAdv}:${useDec} = ${useLabel}) despite FII inflows of +${f(fiiNetWeek)} Cr. FII money flowing into select large-caps while broader F&O declines — classic "index up, portfolio down" scenario. FII buying is concentrated, not broad — risky for late entries.`,
           sentiment: 'bearish'
         })
       } else if (breadthBullish && fiiBullish) {
         inferences.push({
-          icon: '✅', label: 'ALIGNED: Strong Breadth + FII Buying',
-          detail: `Broad-based advance (A/D: ${ad.advances}:${ad.declines} = ${adRatio.toFixed(1)}x) backed by FII inflows of +${f(fiiNetWeek)} Cr. Breadth and flows aligned — strongest conviction signal for continuation.`,
+          icon: '✅', label: 'ALIGNED: Strong F&O Breadth + FII Buying',
+          detail: `Broad-based F&O advance (${useAdv}:${useDec} = ${useLabel}) backed by FII inflows of +${f(fiiNetWeek)} Cr. Breadth and flows aligned — strongest conviction signal for continuation.`,
           sentiment: 'bullish'
         })
       }
@@ -770,11 +776,16 @@ export default function MarketPulsePage() {
       })
     }
     const adR = s.advanceDecline
-    if (adR?.advances) {
-      const ratio = adR.advances / (adR.declines || 1)
+    if (adR?.foAdvances || adR?.foDeclines) {
       parts.push({
-        text: `Advance:Decline Breadth ${ratio.toFixed(1)}:1`,
-        color: ratio > 1 ? 'text-emerald-400' : 'text-red-400'
+        text: `F&O Breadth ${adR.foRatioLabel || 'DM'}`,
+        color: adR.foRatio > 1 ? 'text-emerald-400' : 'text-red-400'
+      })
+    }
+    if (adR?.advances) {
+      parts.push({
+        text: `NIFTY Breadth ${adR.ratioLabel || 'DM'}`,
+        color: adR.ratio > 1 ? 'text-emerald-400' : 'text-red-400'
       })
     }
     return parts
@@ -836,17 +847,31 @@ export default function MarketPulsePage() {
         </div>
 
         <div className="rounded-xl border border-slate-600/30 bg-slate-700/50 p-4">
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">ADVANCE / DECLINE{nseOpen && adTotal > 0 && <LiveDot />}</div>
+          <div className="text-[13px] font-semibold text-slate-400 mb-2">ADVANCE / DECLINE{nseOpen && adTotal > 0 && <LiveDot />}</div>
+          {/* F&O Breadth — primary */}
+          <div className="text-[11px] font-semibold text-amber-400 mb-0.5">F&O ({foTotal})</div>
           <div className="flex items-baseline gap-1.5">
-            <span className="text-lg font-bold text-emerald-400">{ad.advances}</span>
+            <span className="text-lg font-bold text-emerald-400">{ad.foAdvances}</span>
             <span className="text-slate-500">/</span>
-            <span className="text-lg font-bold text-red-400">{ad.declines}</span>
+            <span className="text-lg font-bold text-red-400">{ad.foDeclines}</span>
+            <span className="text-sm font-semibold text-slate-300 ml-1">{ad.foRatioLabel || 'DM'}</span>
           </div>
-          <div className="h-1.5 rounded-full bg-slate-600 overflow-hidden mt-2">
+          <div className="h-1.5 rounded-full bg-slate-600 overflow-hidden mt-1">
+            <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all"
+              style={{ width: `${foAdvPct}%` }} />
+          </div>
+          {/* NIFTY Total Market Breadth — secondary */}
+          <div className="text-[11px] font-semibold text-blue-400 mt-2 mb-0.5">NIFTY ({adTotal})</div>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-sm font-bold text-emerald-400">{ad.advances}</span>
+            <span className="text-slate-500">/</span>
+            <span className="text-sm font-bold text-red-400">{ad.declines}</span>
+            <span className="text-xs font-semibold text-slate-300 ml-1">{ad.ratioLabel || 'DM'}</span>
+          </div>
+          <div className="h-1 rounded-full bg-slate-600 overflow-hidden mt-1">
             <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all"
               style={{ width: `${adAdvPct}%` }} />
           </div>
-          <div className="text-[13px] text-slate-400 mt-1">Ratio: {fmtNum(ad.ratio)}</div>
         </div>
 
         <div className={`rounded-xl border p-4 ${signBg(s.dowChangePct)}`}>

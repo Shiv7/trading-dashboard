@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { API_BASE } from '../../services/api';
-import ConvictionBadge from '../ConvictionBadge';
 import { LiquiditySourceBadge } from './SignalBadges';
 
 interface RetestSignal {
@@ -150,7 +149,6 @@ export function RetestTabContent({ autoRefresh = true }: RetestTabContentProps) 
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-white">{sig.companyName || sig.symbol}</span>
-                    <ConvictionBadge symbol={sig.symbol || ''} compact />
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
                       isBull ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                              : 'bg-red-500/15 text-red-400 border border-red-500/30'
