@@ -57,6 +57,9 @@ interface RetestSignal {
   cachedAt?: number;
   // Liquidity source
   liquiditySource?: string;
+  // Quality (GOOD/EXCELLENT for intermediate cards)
+  retestQuality?: string;
+  triggered?: boolean;
 }
 
 interface RetestTabContentProps {
@@ -153,6 +156,18 @@ export function RetestTabContent({ autoRefresh = true }: RetestTabContentProps) 
                       isBull ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                              : 'bg-red-500/15 text-red-400 border border-red-500/30'
                     }`}>{sig.direction}</span>
+
+                    {/* Quality badge for intermediate/triggered cards */}
+                    {sig.triggered ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                        TRIGGERED
+                      </span>
+                    ) : sig.retestQuality && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold border ${
+                        sig.retestQuality === 'EXCELLENT' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      }`}>{sig.retestQuality}</span>
+                    )}
 
                     {/* RT Score Badge */}
                     {sig.rtScore != null && (

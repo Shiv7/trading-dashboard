@@ -88,23 +88,30 @@ public class RetestConsumer {
 
             Map<String, Object> data = parseRetest(root);
             boolean triggered = Boolean.TRUE.equals(data.get("triggered"));
+            String retestQuality = (String) data.getOrDefault("retestQuality", "");
 
-            if (triggered) {
+            // Accept triggered signals AND EXCELLENT intermediate cards (15m sustained)
+            if (triggered || "EXCELLENT".equals(retestQuality)) {
                 String direction = (String) data.get("direction");
                 String companyName = (String) data.get("companyName");
                 String retestSource = (String) data.get("retestSource");
 
-                log.info("RETEST TRIGGER: {} ({}) direction={} level={} source={} RT={} label={} [signals today: {}]",
+                log.info("RETEST {}: {} ({}) direction={} level={} source={} RT={} label={} quality={} [signals today: {}]",
+                        triggered ? "TRIGGER" : "CARD",
                         companyName, scripCode, direction,
                         data.get("retestLevel"), retestSource,
                         data.get("rtScore"), data.getOrDefault("rtScoreLabel", ""),
+                        retestQuality,
                         todaySignalHistory.size());
 
                 long cachedAtMs = System.currentTimeMillis();
                 data.put("cachedAt", cachedAtMs);
                 data.put("signalSource", "RETEST");
 
-                activeTriggers.put(scripCode, data);
+                // Triggered signals go to active triggers; intermediate cards go to allLatest only
+                if (triggered) {
+                    activeTriggers.put(scripCode, data);
+                }
                 allLatest.put(scripCode, data);
 
                 long epoch = data.containsKey("triggerTimeEpoch")
@@ -157,6 +164,9 @@ public class RetestConsumer {
         // RT Score
         if (root.has("rtScore")) data.put("rtScore", root.path("rtScore").asDouble(0));
         if (root.has("rtScoreLabel")) data.put("rtScoreLabel", root.path("rtScoreLabel").asText(""));
+
+        // Quality (GOOD/EXCELLENT for intermediate cards, empty for triggered)
+        if (root.has("retestQuality")) data.put("retestQuality", root.path("retestQuality").asText(""));
 
         // Narrative
         if (root.has("narrative")) data.put("narrative", root.path("narrative").asText(""));
