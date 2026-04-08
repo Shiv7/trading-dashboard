@@ -385,6 +385,14 @@ public class FUDKIIConsumer implements OptionSwapAware {
         if (root.has("vixCoupling")) data.put("vixCoupling", root.path("vixCoupling").asDouble(0.8));
         if (root.has("giftNiftyOvernightChangePct")) data.put("giftNiftyOvernightChangePct", root.path("giftNiftyOvernightChangePct").asDouble(0));
 
+        // Conviction Matrix fields (from enrichWithConviction in StreamingCandle)
+        if (root.has("convictionTier")) data.put("convictionTier", root.path("convictionTier").asText(""));
+        if (root.has("convictionReason")) data.put("convictionReason", root.path("convictionReason").asText(""));
+        if (root.has("enhancedKiiRaw")) data.put("enhancedKiiRaw", root.path("enhancedKiiRaw").asDouble(0));
+        if (root.has("enhancedKii")) data.put("enhancedKii", root.path("enhancedKii").asDouble(0));
+        if (root.has("priceChangeATR")) data.put("priceChangeATR", root.path("priceChangeATR").asDouble(0));
+        if (root.has("previousClose")) data.put("previousClose", root.path("previousClose").asDouble(0));
+
         // Greek enrichment from OptionDataEnricher (Black-Scholes computed)
         data.put("greekEnriched", root.path("greekEnriched").asBoolean(false));
         if (root.has("greekDelta")) data.put("greekDelta", root.path("greekDelta").asDouble(0));

@@ -77,6 +77,13 @@ interface FudkiiSignal {
   gqsCandleOpposesGap?: boolean;
   gqsGapRecoveryPct?: number;
   kiiLabel?: string;
+  // Conviction Matrix
+  convictionTier?: string;
+  convictionReason?: string;
+  enhancedKii?: number;
+  enhancedKiiRaw?: number;
+  priceChangeATR?: number;
+  previousClose?: number;
   volumeLabel?: string;
   oiChangeLabel?: string;
   oiBuildupLabel?: string;
@@ -861,12 +868,20 @@ const FudkiiTradingCard: React.FC<{
     ? 'border-green-500/20 hover:border-green-500/40'
     : 'border-red-500/20 hover:border-red-500/40';
 
-  // KII
+  // KII + Conviction Tier
   const kiiScore = computeKiiScore(sig);
   const effectiveKii = sig.effectiveKii && sig.effectiveKii > 0 ? Math.round(sig.effectiveKii) : kiiScore;
   const rawKii = sig.rawKii && sig.rawKii > 0 ? Math.round(sig.rawKii) : kiiScore;
   const kiiBarPct = Math.min(100, (effectiveKii / 150) * 100);
   const kiiBarColor = effectiveKii >= 80 ? 'bg-green-500' : effectiveKii >= 50 ? 'bg-amber-500' : 'bg-red-500';
+
+  // Conviction tier from kiiLabel (prepended by producer: "S3 | High Vol | ...")
+  const convictionTier = sig.convictionTier || (sig.kiiLabel?.substring(0, 2).match(/^S[1-6]$/) ? sig.kiiLabel.substring(0, 2) : '');
+  const tierColorMap: Record<string, string> = {
+    S1: 'bg-green-500', S2: 'bg-blue-500', S3: 'bg-amber-500',
+    S4: 'bg-orange-500', S5: 'bg-slate-500', S6: 'bg-red-500'
+  };
+  const tierBg = tierColorMap[convictionTier] || 'bg-slate-600';
 
   // KII deflation text
   const volDeflation = sig.gapFactor != null && sig.gapFactor < 0.99 ? Math.round((1 - sig.gapFactor) * 100) : 0;
@@ -921,7 +936,9 @@ const FudkiiTradingCard: React.FC<{
 
   const sizing = (instrumentMode === 'NONE')
     ? { lots: 0, quantity: 0, disabled: true, insufficientFunds: false, creditAmount: 0, allocPct: 0, slotsUsed: 0, maxSlots: 0, exchangeFull: false }
-    : computeSlotSizing(kiiScore > 100 ? 80 : kiiScore > 50 ? 65 : 50, walletState, premium, lotSize, multiplier,
+    : computeSlotSizing(
+        ({ S1: 90, S2: 80, S3: 65, S4: 50, S5: 30, S6: 10 } as Record<string, number>)[convictionTier] ?? (kiiScore > 100 ? 80 : kiiScore > 50 ? 65 : 50),
+        walletState, premium, lotSize, multiplier,
         (sig.exchange || 'N').substring(0, 1).toUpperCase(), sig.riskReward ?? 2.0, 50);
 
   // Cross-instrumental levels — prefer confluence option levels when available
@@ -1043,10 +1060,15 @@ const FudkiiTradingCard: React.FC<{
           </div>
         </div>
 
-        {/* ── KII BAR ── */}
+        {/* ── KII BAR + CONVICTION TIER ── */}
         <div className="mt-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-slate-500 font-medium w-6">KII</span>
+            {convictionTier && (
+              <span className={`${tierBg} text-white text-[10px] font-bold px-1.5 py-0.5 rounded`}>
+                {convictionTier}
+              </span>
+            )}
             <div className="flex-1 h-[6px] rounded-full bg-slate-700/60 overflow-hidden">
               <div className={`h-full rounded-full ${kiiBarColor} transition-all`} style={{ width: `${kiiBarPct}%` }} />
             </div>
@@ -1586,8 +1608,14 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
     switch (sortField) {
       case 'strength':
         return computeStrength(b.sig, b.plan) - computeStrength(a.sig, a.plan) || getEpoch(b.sig) - getEpoch(a.sig);
-      case 'confidence':
+      case 'confidence': {
+        // Sort by conviction tier first (S1 < S2 < ... < S6), then by KII within tier
+        const tierP = (t: string) => ({ S1: 0, S2: 1, S3: 2, S4: 3, S5: 4, S6: 5 }[t] ?? 6);
+        const ta = tierP(a.sig.convictionTier || (a.sig.kiiLabel?.substring(0, 2).match(/^S[1-6]$/) ? a.sig.kiiLabel.substring(0, 2) : ''));
+        const tb = tierP(b.sig.convictionTier || (b.sig.kiiLabel?.substring(0, 2).match(/^S[1-6]$/) ? b.sig.kiiLabel.substring(0, 2) : ''));
+        if (ta !== tb) return ta - tb;
         return computeKiiScore(b.sig) - computeKiiScore(a.sig) || getEpoch(b.sig) - getEpoch(a.sig);
+      }
       case 'rr':
         return b.plan.rr - a.plan.rr || getEpoch(b.sig) - getEpoch(a.sig);
       case 'time':
@@ -1969,7 +1997,8 @@ export const FudkiiTabContent: React.FC<FudkiiTabContentProps> = ({ autoRefresh 
                 positionsByExchange: data?.positionsByExchange ?? { N: 0, M: 0, C: 0 },
               };
               setWalletState(newWallet);
-              const mappedConf = ctx.kiiScore > 100 ? 80 : ctx.kiiScore > 50 ? 65 : 50;
+              const ctxTier = ctx.sig?.convictionTier || (ctx.sig?.kiiLabel?.substring(0, 2).match(/^S[1-6]$/) ? ctx.sig.kiiLabel.substring(0, 2) : '');
+              const mappedConf = ({ S1: 90, S2: 80, S3: 65, S4: 50, S5: 30, S6: 10 } as Record<string, number>)[ctxTier] ?? (ctx.kiiScore > 100 ? 80 : ctx.kiiScore > 50 ? 65 : 50);
               const newSizing = computeSlotSizing(mappedConf, newWallet, ctx.premium, ctx.lotSize, ctx.multiplier, 'N', 2.0, 50);
               if (!newSizing.disabled && newSizing.lots > 0) {
                 setFundedScripCodes(prev => new Set(prev).add(ctx.sig.scripCode));
