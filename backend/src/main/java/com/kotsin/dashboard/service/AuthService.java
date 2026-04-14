@@ -43,6 +43,7 @@ public class AuthService {
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .displayName(request.getDisplayName() != null ? request.getDisplayName() : request.getUsername())
                 .role("TRADER")
+                .allowedPages(new java.util.ArrayList<>())
                 .enabled(true)
                 .preferences(User.UserPreferences.builder()
                         .timezone("Asia/Kolkata")

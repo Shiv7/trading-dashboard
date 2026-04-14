@@ -71,7 +71,10 @@ public class UserProfileService {
         return userRepository.findAll(pageable);
     }
 
-    public UserResponse updateUserRole(String userId, String role) {
+    public UserResponse updateUserRole(String userId, String role, String callerUserId) {
+        if (userId.equals(callerUserId) && !"ADMIN".equals(role)) {
+            throw new IllegalArgumentException("Cannot change your own admin role");
+        }
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
         user.setRole(role);
@@ -79,6 +82,28 @@ public class UserProfileService {
         userRepository.save(user);
         log.info("Updated role for user {} to {}", user.getUsername(), role);
         return UserResponse.fromUser(user);
+    }
+
+    public UserResponse updateAllowedPages(String userId, java.util.List<String> pages) {
+        java.util.Set<String> valid = com.kotsin.dashboard.security.SidebarPage.allKeys();
+        for (String p : pages) {
+            if (!valid.contains(p)) {
+                throw new IllegalArgumentException("Unknown page key: " + p);
+            }
+        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        user.setAllowedPages(new java.util.ArrayList<>(pages));
+        user.setUpdatedAt(java.time.LocalDateTime.now());
+        userRepository.save(user);
+        log.info("Updated allowedPages for user {} to {}", user.getUsername(), pages);
+        return UserResponse.fromUser(user);
+    }
+
+    public java.util.List<String> getAllowedPages(String userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        return user.getAllowedPages() != null ? user.getAllowedPages() : java.util.List.of();
     }
 
     public UserResponse toggleUserEnabled(String userId, boolean enabled) {
