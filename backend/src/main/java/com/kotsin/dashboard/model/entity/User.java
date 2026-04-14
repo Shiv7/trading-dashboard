@@ -36,6 +36,9 @@ public class User {
     @Builder.Default
     private boolean enabled = true;
 
+    @Builder.Default
+    private java.util.List<String> allowedPages = new java.util.ArrayList<>();
+
     private UserPreferences preferences;
 
     private BrokerConfig brokerConfig;

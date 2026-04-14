@@ -20,6 +20,7 @@ public class UserResponse {
     private String createdAt;
     private String lastLoginAt;
     private User.UserPreferences preferences;
+    private java.util.List<String> allowedPages;
 
     public static UserResponse fromUser(User user) {
         return UserResponse.builder()
@@ -32,6 +33,7 @@ public class UserResponse {
                 .createdAt(user.getCreatedAt() != null ? user.getCreatedAt().toString() : null)
                 .lastLoginAt(user.getLastLoginAt() != null ? user.getLastLoginAt().toString() : null)
                 .preferences(user.getPreferences())
+                .allowedPages(user.getAllowedPages() != null ? user.getAllowedPages() : java.util.List.of())
                 .build();
     }
 }
