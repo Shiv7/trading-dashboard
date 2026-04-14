@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { adminApi, type UserProfile } from '../services/api'
+import UserPermissionsDrawer from '../components/Admin/UserPermissionsDrawer'
 
 export default function AdminPage() {
   const [users, setUsers] = useState<UserProfile[]>([])
@@ -7,6 +8,7 @@ export default function AdminPage() {
   const [totalElements, setTotalElements] = useState(0)
   const [page, setPage] = useState(0)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null)
 
   const loadUsers = async () => {
     setLoading(true)
@@ -130,6 +132,12 @@ export default function AdminPage() {
                   {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '-'}
                 </td>
                 <td className="px-6 py-4 text-right">
+                  <button
+                    onClick={() => setPermissionsUser(u)}
+                    className="text-amber-400 hover:text-amber-300 text-sm transition-colors mr-3"
+                  >
+                    Permissions
+                  </button>
                   {u.role !== 'ADMIN' && (
                     <button onClick={() => handleDelete(u.id, u.username)}
                       className="text-red-400 hover:text-red-300 text-sm transition-colors">
@@ -159,6 +167,12 @@ export default function AdminPage() {
           </div>
         )}
       </div>
+
+      <UserPermissionsDrawer
+        user={permissionsUser}
+        onClose={() => setPermissionsUser(null)}
+        onSaved={() => { loadUsers(); showMessage('success', 'Permissions updated'); }}
+      />
     </div>
   )
 }
