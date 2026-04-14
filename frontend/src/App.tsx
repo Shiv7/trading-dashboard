@@ -33,6 +33,7 @@ import { HotStocksPage } from './pages/HotStocksPage'
 import { HotStocksDetailPage } from './pages/HotStocksDetailPage'
 import PivotBossPage from './pages/PivotBossPage'
 import PivotBossAnalyticsPage from './pages/PivotBossAnalyticsPage'
+import NoAccessPage from './pages/NoAccessPage'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -90,9 +91,19 @@ function App() {
 
         {/* Protected Routes */}
         <Route
-          path="/live"
+          path="/no-access"
           element={
             <ProtectedRoute>
+              <Layout>
+                <NoAccessPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/live"
+          element={
+            <ProtectedRoute requiredPage="dashboard">
               <Layout>
                 <LivePage />
               </Layout>
@@ -102,7 +113,7 @@ function App() {
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="dashboard">
               <Layout>
                 <DashboardPage />
               </Layout>
@@ -112,7 +123,7 @@ function App() {
         <Route
           path="/positions"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="positions">
               <Layout>
                 <WalletPage />
               </Layout>
@@ -122,7 +133,7 @@ function App() {
         <Route
           path="/trades"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="trades">
               <Layout>
                 <TradesPage />
               </Layout>
@@ -132,7 +143,7 @@ function App() {
         <Route
           path="/insights"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="insights">
               <Layout>
                 <InsightsPage />
               </Layout>
@@ -143,7 +154,7 @@ function App() {
         <Route
           path="/command-center"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="insights">
               <Layout>
                 <InsightsPage />
               </Layout>
@@ -153,7 +164,7 @@ function App() {
         <Route
           path="/market-intelligence"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="insights">
               <Layout>
                 <InsightsPage />
               </Layout>
@@ -163,7 +174,7 @@ function App() {
         <Route
           path="/market-pulse"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="market-pulse">
               <Layout>
                 <MarketPulsePage />
               </Layout>
@@ -173,7 +184,7 @@ function App() {
         <Route
           path="/hot-stocks"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="hot-stocks">
               <Layout>
                 <HotStocksPage />
               </Layout>
@@ -183,7 +194,7 @@ function App() {
         <Route
           path="/research/:symbol"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="hot-stocks">
               <Layout>
                 <HotStocksDetailPage />
               </Layout>
@@ -193,7 +204,7 @@ function App() {
         <Route
           path="/quant-scores"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="quant-scores">
               <Layout>
                 <QuantScoresPage />
               </Layout>
@@ -203,7 +214,7 @@ function App() {
         <Route
           path="/signals"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="signals">
               <Layout>
                 <SignalsPage />
               </Layout>
@@ -223,7 +234,7 @@ function App() {
         <Route
           path="/performance"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="performance">
               <Layout>
                 <PerformancePage />
               </Layout>
@@ -233,7 +244,7 @@ function App() {
         <Route
           path="/patterns"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="patterns">
               <Layout>
                 <PatternsPage />
               </Layout>
@@ -243,7 +254,7 @@ function App() {
         <Route
           path="/risk"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="risk">
               <Layout>
                 <RiskPage />
               </Layout>
@@ -253,7 +264,7 @@ function App() {
         <Route
           path="/strategy"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="strategy">
               <Layout>
                 <StrategyTransparencyPage />
               </Layout>
@@ -293,7 +304,7 @@ function App() {
         <Route
           path="/watchlist"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="watchlist">
               <Layout>
                 <WatchlistPage />
               </Layout>
@@ -303,7 +314,7 @@ function App() {
         <Route
           path="/pnl"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="pnl">
               <Layout>
                 <PnLDashboardPage />
               </Layout>
@@ -313,7 +324,7 @@ function App() {
         <Route
           path="/wallets"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="wallets">
               <Layout>
                 <StrategyWalletsPage />
               </Layout>
@@ -323,7 +334,7 @@ function App() {
         <Route
           path="/orders"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="orders">
               <Layout>
                 <OrderManagementPage />
               </Layout>
@@ -333,7 +344,7 @@ function App() {
         <Route
           path="/ml-shadow"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="ml-shadow">
               <Layout>
                 <MLShadowPage />
               </Layout>
@@ -343,7 +354,7 @@ function App() {
         <Route
           path="/greek-trailing"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredPage="greek-trailing">
               <Layout>
                 <GreekTrailingPage />
               </Layout>

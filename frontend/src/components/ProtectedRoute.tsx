@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 interface ProtectedRouteProps {
   children: React.ReactNode
   requireRole?: 'ADMIN' | 'TRADER' | 'VIEWER'
+  requiredPage?: string
 }
 
 const ROLE_HIERARCHY: Record<string, number> = {
@@ -12,7 +13,7 @@ const ROLE_HIERARCHY: Record<string, number> = {
   ADMIN: 3,
 }
 
-export default function ProtectedRoute({ children, requireRole }: ProtectedRouteProps) {
+export default function ProtectedRoute({ children, requireRole, requiredPage }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, user } = useAuth()
   const location = useLocation()
 
@@ -36,6 +37,13 @@ export default function ProtectedRoute({ children, requireRole }: ProtectedRoute
     const requiredLevel = ROLE_HIERARCHY[requireRole] || 0
     if (userLevel < requiredLevel) {
       return <Navigate to="/dashboard" replace />
+    }
+  }
+
+  if (requiredPage && user && user.role !== 'ADMIN') {
+    const allowed = user.allowedPages ?? []
+    if (!allowed.includes(requiredPage)) {
+      return <Navigate to="/no-access" replace />
     }
   }
 
