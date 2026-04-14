@@ -1,6 +1,8 @@
 package com.kotsin.dashboard.controller;
 
 import com.kotsin.dashboard.model.dto.TradeDTO;
+import com.kotsin.dashboard.model.entity.TradeFill;
+import com.kotsin.dashboard.repository.TradeFillRepository;
 import com.kotsin.dashboard.service.StrategyNameResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +29,24 @@ import java.util.Map;
 public class TradesController {
 
     private final MongoTemplate mongoTemplate;
+    private final TradeFillRepository tradeFillRepository;
+
+    /**
+     * Per-tranche fill history for a single trade. Returns an ordered timeline of every
+     * partial fill (T1/T2/T3/T4/SL/TRAILING/MANUAL/etc) including fill price, qty, timestamp
+     * and cumulative P&L after that fill.
+     *
+     * Empty list (not 404) for trades that predate the trade-fills logging pipeline or
+     * where Kafka was transiently unavailable — the reconciliation job will flag gaps.
+     */
+    @GetMapping("/{tradeId}/fills")
+    public ResponseEntity<List<TradeFill>> getFills(@PathVariable String tradeId) {
+        List<TradeFill> fills = tradeFillRepository.findByTradeIdOrderByFillTimeMsAsc(tradeId);
+        if (fills == null || fills.isEmpty()) {
+            fills = tradeFillRepository.findBySignalIdOrderByFillTimeMsAsc(tradeId);
+        }
+        return ResponseEntity.ok(fills != null ? fills : new ArrayList<>());
+    }
 
     /**
      * Get all trades

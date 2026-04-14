@@ -7,7 +7,7 @@
  *   MICROALPHA = purple, MERE = rose, QUANT = cyan, MANUAL = slate
  */
 
-export type StrategyKey = 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'PIVOT_CONFLUENCE' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'RETEST' | 'MCX-BB' | 'MCX-BBT+1' | 'MCX_BB' | 'MCX_BBT1' | 'MCX_BB_15' | 'MCX-BB-15' | 'MCX_BB_30' | 'MCX-BB-30' | 'NSE_BB_30' | 'NSE-BB-30' | 'MANUAL'
+export type StrategyKey = 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'PIVOT' | 'PIVOT_CONFLUENCE' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'RETEST' | 'HOTSTOCKS' | 'MCX-BB' | 'MCX-BBT+1' | 'MCX_BB' | 'MCX_BBT1' | 'MCX_BB_15' | 'MCX-BB-15' | 'MCX_BB_30' | 'MCX-BB-30' | 'NSE_BB_30' | 'NSE-BB-30' | 'MANUAL'
 export type StrategyFilter = 'ALL' | StrategyKey
 
 export interface StrategyColorSet {
@@ -30,6 +30,7 @@ export const STRATEGY_COLORS: Record<string, StrategyColorSet> = {
   MERE:             { border: 'border-rose-500/40',   bg: 'bg-rose-500/10',   text: 'text-rose-400',   accent: 'from-rose-500 to-rose-600',   badgeBg: 'bg-rose-500/15',   badgeText: 'text-rose-400',   badgeBorder: 'border-rose-500/30' },
   QUANT:            { border: 'border-cyan-500/40',   bg: 'bg-cyan-500/10',   text: 'text-cyan-400',   accent: 'from-cyan-500 to-cyan-600',   badgeBg: 'bg-cyan-500/15',   badgeText: 'text-cyan-400',   badgeBorder: 'border-cyan-500/30' },
   RETEST:           { border: 'border-indigo-500/40', bg: 'bg-indigo-500/10', text: 'text-indigo-400', accent: 'from-indigo-500 to-indigo-600', badgeBg: 'bg-indigo-500/15', badgeText: 'text-indigo-400', badgeBorder: 'border-indigo-500/30' },
+  HOTSTOCKS:        { border: 'border-pink-500/40',   bg: 'bg-pink-500/10',   text: 'text-pink-400',   accent: 'from-pink-500 to-pink-600',   badgeBg: 'bg-pink-500/15',   badgeText: 'text-pink-400',   badgeBorder: 'border-pink-500/30' },
   'MCX-BB':         { border: 'border-emerald-500/40', bg: 'bg-emerald-500/10', text: 'text-emerald-400', accent: 'from-emerald-500 to-emerald-600', badgeBg: 'bg-emerald-500/15', badgeText: 'text-emerald-400', badgeBorder: 'border-emerald-500/30' },
   'MCX-BBT+1':      { border: 'border-cyan-500/40',    bg: 'bg-cyan-500/10',    text: 'text-cyan-400',    accent: 'from-cyan-500 to-teal-600',    badgeBg: 'bg-cyan-500/15',    badgeText: 'text-cyan-400',    badgeBorder: 'border-cyan-500/30' },
   // Aliases for canonical keys (backward compat)

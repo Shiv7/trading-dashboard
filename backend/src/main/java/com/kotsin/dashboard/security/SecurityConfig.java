@@ -57,7 +57,9 @@ public class SecurityConfig {
                 .requestMatchers("/api/risk/**").permitAll()
                 .requestMatchers("/api/market-data/**").permitAll()
                 .requestMatchers("/api/market-pulse/**").permitAll()
+                .requestMatchers("/api/hot-stocks/**").permitAll()
                 .requestMatchers("/api/greeks/**").permitAll()
+                .requestMatchers("/api/greek-trailing/**").permitAll()
                 .requestMatchers("/api/pnl/**").permitAll()
                 .requestMatchers("/api/wallets/**").permitAll()
                 .requestMatchers("/api/state/**").permitAll()
@@ -67,6 +69,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/alerts/**").permitAll()
                 .requestMatchers("/api/analysis/**").permitAll()
                 .requestMatchers("/api/slippage/**").permitAll()
+                .requestMatchers("/api/stock/**").permitAll()
                 // Admin-only
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // All other API endpoints require authentication

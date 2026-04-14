@@ -20,7 +20,7 @@ export default function ActivePositionBar({ position, onClose, className = '' }:
         : 0
 
     return (
-        <div className={`fixed bottom-0 left-0 right-0 z-50 ${className}`}>
+        <div className={`hidden lg:block fixed bottom-0 left-0 right-0 z-50 ${className}`}>
             <div className="bg-slate-900/95 border-t border-slate-700 backdrop-blur-sm px-6 py-3">
                 <div className="max-w-7xl mx-auto flex items-center justify-between">
                     {/* Left: Position Info */}

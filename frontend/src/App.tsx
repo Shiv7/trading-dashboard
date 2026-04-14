@@ -11,6 +11,7 @@ import DashboardPage from './pages/DashboardPage'
 import WalletPage from './pages/WalletPage'
 import TradesPage from './pages/TradesPage'
 import MarketPulsePage from './pages/MarketPulsePage'
+import InsightsPage from './pages/InsightsPage'
 import SignalsPage from './pages/SignalsPage'
 import StockDetailPage from './pages/StockDetailPage'
 import QuantScoresPage from './pages/QuantScoresPage'
@@ -28,6 +29,10 @@ import StrategyWalletsPage from './pages/StrategyWalletsPage'
 import MLShadowPage from './pages/MLShadowPage'
 import LivePage from './pages/LivePage'
 import GreekTrailingPage from './pages/GreekTrailingPage'
+import { HotStocksPage } from './pages/HotStocksPage'
+import { HotStocksDetailPage } from './pages/HotStocksDetailPage'
+import PivotBossPage from './pages/PivotBossPage'
+import PivotBossAnalyticsPage from './pages/PivotBossAnalyticsPage'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -125,11 +130,62 @@ function App() {
           }
         />
         <Route
+          path="/insights"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <InsightsPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        {/* Legacy redirects — old routes render the new merged page */}
+        <Route
+          path="/command-center"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <InsightsPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/market-intelligence"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <InsightsPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/market-pulse"
           element={
             <ProtectedRoute>
               <Layout>
                 <MarketPulsePage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/hot-stocks"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <HotStocksPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/research/:symbol"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <HotStocksDetailPage />
               </Layout>
             </ProtectedRoute>
           }
@@ -290,6 +346,26 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <GreekTrailingPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/pivotboss"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <PivotBossPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/pivotboss-analytics"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <PivotBossAnalyticsPage />
               </Layout>
             </ProtectedRoute>
           }

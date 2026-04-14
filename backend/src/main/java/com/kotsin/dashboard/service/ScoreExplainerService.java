@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -25,6 +26,39 @@ public class ScoreExplainerService {
 
     // In-memory cache for latest scores (updated by Kafka consumer)
     private final Map<String, FamilyScoreDTO> latestScores = new HashMap<>();
+
+    /**
+     * Bootstrap search pool from ScripGroup (MongoDB) so search works even when
+     * the family-score Kafka topic is empty (which is the current state).
+     * Creates stub FamilyScoreDTO entries with just identity fields (scripCode,
+     * companyName). If real scores arrive later via Kafka, they overwrite the stubs.
+     */
+    @PostConstruct
+    public void bootstrapFromScripGroup() {
+        try {
+            var docs = mongoTemplate.getCollection("ScripGroup").find().into(new java.util.ArrayList<>());
+            int loaded = 0;
+            for (var doc : docs) {
+                String scripCode = doc.getString("_id");
+                if (scripCode == null || scripCode.isEmpty()) continue;
+                String companyName = doc.getString("companyName");
+                if (companyName == null) companyName = scripCode;
+                // Only populate if no real score already exists (don't overwrite Kafka data)
+                if (!latestScores.containsKey(scripCode)) {
+                    FamilyScoreDTO stub = new FamilyScoreDTO();
+                    stub.setScripCode(scripCode);
+                    stub.setCompanyName(companyName);
+                    stub.setDirection("NEUTRAL");
+                    latestScores.put(scripCode, stub);
+                    loaded++;
+                }
+            }
+            log.info("[SEARCH] Bootstrapped {} stocks from ScripGroup into search pool (total: {})",
+                loaded, latestScores.size());
+        } catch (Exception e) {
+            log.warn("[SEARCH] Failed to bootstrap from ScripGroup: {}", e.getMessage());
+        }
+    }
 
     /**
      * Update cached score (called by Kafka consumer)

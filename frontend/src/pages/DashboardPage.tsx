@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useDashboardStore } from '../store/dashboardStore'
-import { walletApi, scoresApi, signalsApi, tradesApi } from '../services/api'
+import { walletApi, scoresApi, signalsApi, tradesApi, liveTradesApi } from '../services/api'
 import type { Wallet, FamilyScore, Signal, TradeStats } from '../types'
 import { TradingModeToggle, WalletHeader } from '../components/Company'
 import PositionCard from '../components/Wallet/PositionCard'
@@ -29,12 +29,17 @@ export default function DashboardPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [walletData, scoresData, signalsData, statsData] = await Promise.all([
+        const [walletData, scoresData, signalsData, statsData, liveData] = await Promise.all([
           walletApi.getWallet().catch(() => null),
           scoresApi.getTopScores(50).catch(() => []),
           signalsApi.getSignals(0, 20, undefined, true).catch(() => ({ content: [] })),
           tradesApi.getTradeStats().catch(() => null),
+          liveTradesApi.getLiveData().catch(() => ({ active: [], exited: [] })),
         ])
+        // Override wallet positions with live data (strategy:targets + trade_outcomes)
+        if (walletData && liveData) {
+          walletData.positions = [...liveData.active, ...liveData.exited]
+        }
         setWallet(walletData)
         setAllScores(scoresData)
         setRecentSignals(signalsData.content)

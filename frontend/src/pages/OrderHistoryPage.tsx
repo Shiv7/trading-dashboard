@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
-import { tradesApi, walletApi } from '../services/api'
+import { tradesApi, liveTradesApi } from '../services/api'
 import { isAnyMarketOpen } from '../utils/tradingUtils'
 import OrderHistoryRow from '../components/OrderHistory/OrderHistoryRow'
 import type { UnifiedOrder } from '../components/OrderHistory/OrderHistoryRow'
@@ -26,12 +26,12 @@ export default function OrderHistoryPage() {
   useEffect(() => {
     async function load() {
       try {
-        const [trades, positions] = await Promise.all([
+        const [trades, liveData] = await Promise.all([
           tradesApi.getTrades(500).catch(() => []),
-          walletApi.getPositions().catch(() => []),
+          liveTradesApi.getLiveData().catch(() => ({ active: [], exited: [] })),
         ])
         setApiTrades(trades)
-        setApiPositions(positions)
+        setApiPositions([...liveData.active, ...liveData.exited])
       } catch (error) {
         console.error('Error loading order history:', error)
       } finally {
@@ -44,7 +44,8 @@ export default function OrderHistoryPage() {
   // Periodic position refresh for resilience (10s)
   useEffect(() => {
     const interval = setInterval(() => {
-      if (isAnyMarketOpen()) walletApi.getPositions().then(setApiPositions).catch(() => {})
+      if (isAnyMarketOpen()) liveTradesApi.getLiveData()
+        .then(d => setApiPositions([...d.active, ...d.exited])).catch(() => {})
     }, 10000)
     return () => clearInterval(interval)
   }, [])

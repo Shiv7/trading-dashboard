@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   RefreshCw, Filter, Activity, Eye, BarChart2,
-  Zap, CheckCircle2, Volume2, TrendingUp
+  Zap, CheckCircle2, Volume2, TrendingUp, ExternalLink
 } from 'lucide-react';
 import { isAnyMarketOpen } from '../utils/tradingUtils';
 import { StrategyCard, OpportunitiesPanel, FudkiiTabContent, FukaaTabContent, FudkoiTabContent, PivotTabContent, MicroAlphaTabContent, MereTabContent, McxBb30TabContent, McxBb15TabContent, NseBb30TabContent, RetestTabContent } from '../components/Strategy';
@@ -13,7 +14,7 @@ import {
 import { fetchJson } from '../services/api';
 
 type FilterState = 'ALL' | 'WATCHING' | 'READY' | 'POSITIONED';
-type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'retest' | 'pivot' | 'microalpha' | 'mere' | 'mcxbb15' | 'mcxbb30' | 'nsebb30';
+type TabType = 'overview' | 'fudkii' | 'fukaa' | 'fudkoi' | 'retest' | 'pivot' | 'microalpha' | 'mere' | 'hotstocks' | 'mcxbb15' | 'mcxbb30' | 'nsebb30';
 
 export const StrategyTransparencyPage: React.FC = () => {
   const [states, setStates] = useState<InstrumentStateSnapshot[]>([]);
@@ -144,6 +145,7 @@ export const StrategyTransparencyPage: React.FC = () => {
               { id: 'retest' as TabType, label: 'RETEST', shortLabel: 'RETEST', icon: RefreshCw, accent: 'text-violet-400' },
               { id: 'mere' as TabType, label: 'MERE', shortLabel: 'MERE', icon: TrendingUp, accent: 'text-emerald-400' },
               { id: 'microalpha' as TabType, label: 'MICROALPHA', shortLabel: 'MA', icon: Activity, accent: 'text-cyan-400' },
+              { id: 'hotstocks' as TabType, label: 'HOTSTOCKS', shortLabel: 'HS', icon: TrendingUp, accent: 'text-pink-400' },
               // PIVOT suspended 2026-04-02
               // { id: 'pivot' as TabType, label: 'PIVOT', shortLabel: 'PIVOT', icon: Target, accent: 'text-purple-400' },
               { id: 'mcxbb15' as TabType, label: 'MCX-BB-15', shortLabel: 'BB-15', icon: TrendingUp, accent: 'text-lime-400' },
@@ -216,6 +218,10 @@ export const StrategyTransparencyPage: React.FC = () => {
 
         {activeTab === 'mere' && (
           <MereTabContent autoRefresh={autoRefresh} />
+        )}
+
+        {activeTab === 'hotstocks' && (
+          <HotStocksTabContent />
         )}
 
         {activeTab === 'mcxbb15' && (
@@ -301,6 +307,164 @@ const OverviewTab: React.FC<{
       </div>
     </div>
   </div>
+  );
+};
+
+// HotStocks Tab — two sections:
+//   1. Tomorrow's Candidates — top v2-scored picks from /hot-stocks
+//   2. Open Positions — current HOTSTOCKS positions from /wallet/positions
+const HotStocksTabContent: React.FC = () => {
+  const [positions, setPositions] = useState<any[]>([]);
+  const [candidates, setCandidates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const [posData, candData]: any = await Promise.all([
+          fetchJson('/wallet/positions'),
+          fetchJson('/hot-stocks'),
+        ]);
+        if (!alive) return;
+        const posArr = Array.isArray(posData) ? posData : (posData?.positions || []);
+        setPositions(posArr.filter((p: any) => {
+          const s = (p.strategy || p.signalSource || p.signalId || '').toString().toUpperCase();
+          return s === 'HOTSTOCKS' || s.includes('HOTSTOCK');
+        }));
+        const candArr = (candData?.fno || []).concat(candData?.nonFno || []);
+        setCandidates(candArr);
+      } catch (e: any) {
+        if (!alive) return;
+        setError(e?.message || 'Failed to load HotStocks data');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    load();
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-pink-500/10 border border-pink-500/30 rounded-xl p-4 flex items-center justify-between">
+        <div>
+          <div className="text-pink-400 font-semibold text-sm">HOTSTOCKS Strategy</div>
+          <div className="text-xs text-slate-400 mt-1">
+            Daily-refreshed F&amp;O leaderboard. Enrichment runs at 5:45 AM IST every weekday.
+          </div>
+        </div>
+        <Link
+          to="/hot-stocks"
+          className="flex items-center gap-1.5 text-pink-400 hover:text-pink-300 text-xs font-medium px-3 py-2 bg-pink-500/10 hover:bg-pink-500/20 rounded-lg transition-colors"
+        >
+          Full Page <ExternalLink className="w-3.5 h-3.5" />
+        </Link>
+      </div>
+
+      {/* Tomorrow's Candidates — v2-scored top picks */}
+      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
+          <span>Tomorrow's Candidates ({candidates.length})</span>
+          <span className="text-[10px] text-slate-500 font-normal">v2 signed score • fresh from last enrichment</span>
+        </div>
+        {loading ? (
+          <div className="text-slate-400 text-xs">Loading…</div>
+        ) : candidates.length === 0 ? (
+          <div className="text-slate-500 italic text-xs">No candidates enriched yet — run 5:45 AM cron or <code>POST /api/hot-stocks/admin/run-enrichment</code></div>
+        ) : (
+          <div className="space-y-2">
+            {candidates.map((c: any) => {
+              const v2 = c.v2Score;
+              const tier = c.v2Tier || (c.fnoEligible ? 'FNO' : 'NON_FNO');
+              const net = c.v2NetInstitutionalCr ?? 0;
+              const oi = c.v2OiChange5dPct;
+              const c5 = c.change5dPct ?? 0;
+              const w52 = c.weekly52PositionPct ?? 0;
+              const clamps = c.v2Clamps || [];
+              return (
+                <div key={c.scripCode || c.symbol}
+                  className="flex items-center justify-between bg-slate-900/40 rounded-lg px-3 py-2 text-xs">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="font-semibold text-white truncate">{c.symbol}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      tier === 'FNO' ? 'bg-pink-500/20 text-pink-400' : 'bg-indigo-500/20 text-indigo-400'
+                    }`}>{tier}</span>
+                    {v2 != null && (
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        v2 >= 50 ? 'bg-emerald-500/20 text-emerald-300' :
+                        v2 >= 30 ? 'bg-emerald-500/10 text-emerald-400' :
+                        v2 <= -20 ? 'bg-red-500/20 text-red-400' : 'bg-slate-700/50 text-slate-400'
+                      }`}>{v2 >= 0 ? '+' : ''}{v2}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-[10px] text-slate-400 shrink-0">
+                    <span>P5d: <span className={c5 >= 0 ? 'text-emerald-400' : 'text-red-400'}>{c5 >= 0 ? '+' : ''}{c5.toFixed(1)}%</span></span>
+                    {oi != null && <span>OI: <span className={oi >= 0 ? 'text-emerald-400' : 'text-red-400'}>{oi >= 0 ? '+' : ''}{oi.toFixed(1)}%</span></span>}
+                    <span>52w: {w52.toFixed(0)}%</span>
+                    {net !== 0 && <span>Net: <span className={net >= 0 ? 'text-emerald-400' : 'text-red-400'}>{net >= 0 ? '+' : ''}{net.toFixed(0)}Cr</span></span>}
+                    {clamps.length > 0 && <span className="text-amber-400">⚠ {clamps.join(',')}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="text-sm font-semibold text-slate-200 mb-3">
+          Positions ({positions.length})
+          {positions.length > 0 && (
+            <span className="text-xs text-slate-400 font-normal ml-2">
+              {positions.filter(p => p.status === 'ACTIVE').length} active · {positions.filter(p => p.status !== 'ACTIVE').length} closed
+            </span>
+          )}
+        </div>
+        {loading ? (
+          <div className="text-slate-400 text-xs">Loading…</div>
+        ) : error ? (
+          <div className="text-red-400 text-xs">ERR {error}</div>
+        ) : positions.length === 0 ? (
+          <div className="text-slate-500 italic text-xs">No open HOTSTOCKS positions</div>
+        ) : (
+          <div className="space-y-2">
+            {positions.map((p: any) => {
+              const sym = p.companyName || p.underlyingSymbol || p.symbol || p.scripCode;
+              const entry = Number(p.avgEntryPrice ?? p.avgEntry ?? 0);
+              const cur = Number(p.currentPrice ?? 0);
+              const pnl = Number(p.unrealizedPnl ?? 0);
+              const pnlPct = Number(p.unrealizedPnlPercent ?? 0);
+              const qty = Number(p.quantity ?? p.qtyOpen ?? p.qty ?? 0);
+              const pnlPositive = pnl >= 0;
+              return (
+                <div
+                  key={p.positionId || p.scripCode || sym}
+                  className="flex items-center justify-between bg-slate-900/40 rounded-lg px-3 py-2 text-xs"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold text-white">{sym}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      p.status === 'ACTIVE'
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'bg-slate-500/20 text-slate-400'
+                    }`}>{p.status || 'UNKNOWN'}</span>
+                    <span className="text-slate-400">{qty}× @ {entry.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-300">{cur > 0 ? cur.toFixed(2) : '—'}</span>
+                    <span className={pnlPositive ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+                      {pnlPositive ? '+' : ''}{pnl.toFixed(0)} ({pnlPositive ? '+' : ''}{pnlPct.toFixed(2)}%)
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 

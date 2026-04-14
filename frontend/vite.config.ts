@@ -12,7 +12,7 @@ export default defineConfig({
   server: {
     port: 3001,
     host: '0.0.0.0',
-    allowedHosts: ['sinkot.in', 'localhost', '127.0.0.1', '15.207.173.82'],
+    allowedHosts: ['kotsin.in', 'sinkot.in', 'localhost', '127.0.0.1', '15.207.173.82'],
     proxy: {
       '/api': {
         target: 'http://localhost:8085',
@@ -22,6 +22,22 @@ export default defineConfig({
             console.error(`[PROXY ERROR] ${req.url}:`, err.message)
           })
         },
+      },
+      '/ws': {
+        target: 'http://localhost:8085',
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
+  preview: {
+    port: 3001,
+    host: '0.0.0.0',
+    allowedHosts: ['kotsin.in', 'sinkot.in', 'localhost', '127.0.0.1', '15.207.173.82'],
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8085',
+        changeOrigin: true,
       },
       '/ws': {
         target: 'http://localhost:8085',

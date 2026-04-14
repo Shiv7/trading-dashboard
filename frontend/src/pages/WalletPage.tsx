@@ -7,7 +7,7 @@ import PositionCard from '../components/Wallet/PositionCard'
 import WalletPnLTab from '../components/Wallet/WalletPnLTab'
 import WalletJournalTab from '../components/Wallet/WalletJournalTab'
 import { useDashboardStore } from '../store/dashboardStore'
-import { walletApi } from '../services/api'
+import { walletApi, liveTradesApi } from '../services/api'
 import type { Wallet, Position } from '../types'
 import TradeModal from '../components/Trading/TradeModal'
 
@@ -94,7 +94,14 @@ export default function WalletPage() {
 
   const loadWallet = async () => {
     try {
-      const data = await walletApi.getWallet()
+      const [data, liveData] = await Promise.all([
+        walletApi.getWallet(),
+        liveTradesApi.getLiveData().catch(() => ({ active: [], exited: [] })),
+      ])
+      // Override positions with live data (strategy:targets + trade_outcomes)
+      if (data && liveData) {
+        data.positions = [...liveData.active, ...liveData.exited]
+      }
       setWallet(data)
     } catch (error) {
       console.error('Error loading wallet:', error)

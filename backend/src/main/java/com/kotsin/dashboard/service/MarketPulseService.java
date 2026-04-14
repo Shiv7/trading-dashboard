@@ -117,6 +117,8 @@ public class MarketPulseService {
     private volatile double brentOilChangePct = 0;
     private volatile double goldPrice = 0;
     private volatile double goldChangePct = 0;
+    private volatile double silverPrice = 0;
+    private volatile double silverChangePct = 0;
     private volatile double usdInrPrice = 0;
     private volatile double usdInrChangePct = 0;
     // Previous prices for computing % change (producer sends raw prices, not %)
@@ -128,14 +130,74 @@ public class MarketPulseService {
     private volatile double indiaVix = 0;
     private volatile String vixRegime = "N/A";
 
-    public MarketPulseService(StringRedisTemplate redis, WebSocketSessionManager sessionManager) {
+    // per-asset lastUpdateEpochMs tracking for state classification
+    private volatile long giftNiftyLastUpdateMs = 0;
+    private volatile long sgxNiftyLastUpdateMs = 0;  // also used by giftNifty UI card
+    private volatile long indiaVixLastUpdateMs = 0;
+    private volatile long dowLastUpdateMs = 0;
+    private volatile long sp500LastUpdateMs = 0;
+    private volatile long nasdaqLastUpdateMs = 0;
+    private volatile long dxyLastUpdateMs = 0;
+    private volatile long usVixLastUpdateMs = 0;
+    private volatile long crudeLastUpdateMs = 0;
+    private volatile long brentLastUpdateMs = 0;
+    private volatile long goldLastUpdateMs = 0;
+    private volatile long silverLastUpdateMs = 0;
+    private volatile long usdInrLastUpdateMs = 0;
+    private volatile long niftyLastUpdateMs = 0;
+    private volatile long advanceDeclineLastUpdateMs = 0;
+
+    private final MarketStateClassifier stateClassifier;
+
+    public MarketPulseService(StringRedisTemplate redis,
+                              WebSocketSessionManager sessionManager,
+                              MarketStateClassifier stateClassifier) {
         this.redis = redis;
         this.sessionManager = sessionManager;
+        this.stateClassifier = stateClassifier;
     }
 
     @PostConstruct
     public void init() {
-        log.info("[MARKET-PULSE] Initializing — loading macro data from Redis");
+        log.info("[MARKET-PULSE] Initializing — restoring snapshot from Redis");
+        try {
+            String json = redis.opsForValue().get("market-pulse:snapshot");
+            if (json != null && !json.isBlank()) {
+                MacroSnapshot restored = mapper.readValue(json, MacroSnapshot.class);
+                if (restored != null) {
+                    latestSnapshot = restored;
+                    // Restore individual fields so LIVE_SCRAPE handler can compute deltas
+                    giftNiftyPrice = restored.getGiftNiftyPrice();
+                    sgxNiftyLastTrade = restored.getSgxNiftyLastTrade();
+                    dowPrice = restored.getDowPrice();
+                    sp500Price = restored.getSp500Price();
+                    nasdaqPrice = restored.getNasdaqPrice();
+                    dowChange = restored.getDowChangePct();
+                    sp500Change = restored.getSp500ChangePct();
+                    nasdaqChange = restored.getNasdaqChangePct();
+                    dxyPrice = restored.getDxyPrice();
+                    dxyChangePct = restored.getDxyChangePct();
+                    usVixPrice = restored.getUsVixPrice();
+                    usVixChangePct = restored.getUsVixChangePct();
+                    crudeOilPrice = restored.getCrudeOilPrice();
+                    crudeOilChangePct = restored.getCrudeOilChangePct();
+                    brentOilPrice = restored.getBrentOilPrice();
+                    brentOilChangePct = restored.getBrentOilChangePct();
+                    goldPrice = restored.getGoldPrice();
+                    goldChangePct = restored.getGoldChangePct();
+                    silverPrice = restored.getSilverPrice();
+                    silverChangePct = restored.getSilverChangePct();
+                    usdInrPrice = restored.getUsdInrPrice();
+                    usdInrChangePct = restored.getUsdInrChangePct();
+                    indiaVix = restored.getIndiaVix();
+                    vixRegime = restored.getVixRegime();
+                    log.info("[MARKET-PULSE] Snapshot restored: gift={} dow={} vix={}",
+                        sgxNiftyLastTrade, dowPrice, indiaVix);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[MARKET-PULSE] Snapshot restore failed: {}", e.getMessage());
+        }
         refreshFromRedis();
     }
 
@@ -150,38 +212,48 @@ public class MarketPulseService {
             // Separate SGX Nifty live scrape from full Kafka data
             String fetchType = root.path("fetchType").asText("");
             if ("LIVE_SCRAPE".equals(fetchType)) {
+                long now = System.currentTimeMillis();
                 double livePrice = root.path("lastPrice").asDouble(0);
                 if (livePrice > 10000 && livePrice < 50000) {
                     sgxNiftyLastTrade = livePrice;
-                    sgxNiftyLastTradeTimestamp = root.path("fetchTimeEpochMs").asLong(System.currentTimeMillis());
+                    sgxNiftyLastTradeTimestamp = root.path("fetchTimeEpochMs").asLong(now);
+                    sgxNiftyLastUpdateMs = now;
+                    giftNiftyLastUpdateMs = now;
                 }
                 // Also pick up US indices from live scrape
                 double liveDow = root.path("dowChangePct").asDouble(0);
                 double liveSp500 = root.path("sp500ChangePct").asDouble(0);
                 double liveNasdaq = root.path("nasdaqChangePct").asDouble(0);
-                if (liveDow != 0) dowChange = liveDow;
-                if (liveSp500 != 0) sp500Change = liveSp500;
-                if (liveNasdaq != 0) nasdaqChange = liveNasdaq;
+                if (liveDow != 0) { dowChange = liveDow; dowLastUpdateMs = now; }
+                if (liveSp500 != 0) { sp500Change = liveSp500; sp500LastUpdateMs = now; }
+                if (liveNasdaq != 0) { nasdaqChange = liveNasdaq; nasdaqLastUpdateMs = now; }
                 double liveDowPrice = root.path("dowJones").asDouble(0);
                 double liveSp500Price = root.path("sp500").asDouble(0);
                 double liveNasdaqPrice = root.path("nasdaq").asDouble(0);
-                if (liveDowPrice > 0) dowPrice = liveDowPrice;
-                if (liveSp500Price > 0) sp500Price = liveSp500Price;
-                if (liveNasdaqPrice > 0) nasdaqPrice = liveNasdaqPrice;
+                if (liveDowPrice > 0) { dowPrice = liveDowPrice; dowLastUpdateMs = now; }
+                if (liveSp500Price > 0) { sp500Price = liveSp500Price; sp500LastUpdateMs = now; }
+                if (liveNasdaqPrice > 0) { nasdaqPrice = liveNasdaqPrice; nasdaqLastUpdateMs = now; }
                 // Additional indicators
                 double v;
-                v = root.path("dxyPrice").asDouble(0); if (v > 0) dxyPrice = v;
-                v = root.path("dxyChangePct").asDouble(0); if (v != 0) dxyChangePct = v;
-                v = root.path("usVixPrice").asDouble(0); if (v > 0) usVixPrice = v;
-                v = root.path("usVixChangePct").asDouble(0); if (v != 0) usVixChangePct = v;
-                v = root.path("crudeOilPrice").asDouble(0); if (v > 0) crudeOilPrice = v;
-                v = root.path("crudeOilChangePct").asDouble(0); if (v != 0) crudeOilChangePct = v;
-                v = root.path("brentOilPrice").asDouble(0); if (v > 0) brentOilPrice = v;
-                v = root.path("brentOilChangePct").asDouble(0); if (v != 0) brentOilChangePct = v;
-                v = root.path("goldPrice").asDouble(0); if (v > 0) goldPrice = v;
-                v = root.path("goldChangePct").asDouble(0); if (v != 0) goldChangePct = v;
-                v = root.path("usdInrPrice").asDouble(0); if (v > 0) usdInrPrice = v;
-                v = root.path("usdInrChangePct").asDouble(0); if (v != 0) usdInrChangePct = v;
+                v = root.path("dxyPrice").asDouble(0); if (v > 0) { dxyPrice = v; dxyLastUpdateMs = now; }
+                v = root.path("dxyChangePct").asDouble(0); if (v != 0) { dxyChangePct = v; dxyLastUpdateMs = now; }
+                v = root.path("usVixPrice").asDouble(0); if (v > 0) { usVixPrice = v; usVixLastUpdateMs = now; }
+                v = root.path("usVixChangePct").asDouble(0); if (v != 0) { usVixChangePct = v; usVixLastUpdateMs = now; }
+                v = root.path("crudeOilPrice").asDouble(0); if (v > 0) { crudeOilPrice = v; crudeLastUpdateMs = now; }
+                v = root.path("crudeOilChangePct").asDouble(0); if (v != 0) { crudeOilChangePct = v; crudeLastUpdateMs = now; }
+                v = root.path("brentOilPrice").asDouble(0); if (v > 0) { brentOilPrice = v; brentLastUpdateMs = now; }
+                v = root.path("brentOilChangePct").asDouble(0); if (v != 0) { brentOilChangePct = v; brentLastUpdateMs = now; }
+                v = root.path("goldPrice").asDouble(0); if (v > 0) { goldPrice = v; goldLastUpdateMs = now; }
+                v = root.path("goldChangePct").asDouble(0); if (v != 0) { goldChangePct = v; goldLastUpdateMs = now; }
+                v = root.path("silverPrice").asDouble(0); if (v > 0) { silverPrice = v; silverLastUpdateMs = now; }
+                v = root.path("silverChangePct").asDouble(0); if (v != 0) { silverChangePct = v; silverLastUpdateMs = now; }
+                v = root.path("usdInrPrice").asDouble(0); if (v > 0) { usdInrPrice = v; usdInrLastUpdateMs = now; }
+                v = root.path("usdInrChangePct").asDouble(0); if (v != 0) { usdInrChangePct = v; usdInrLastUpdateMs = now; }
+                // Rebuild snapshot so the /api/market-pulse response reflects these LIVE_SCRAPE
+                // updates even on weekends / after hours when scheduledRefresh() would normally
+                // do the rebuild. Without this call, latestSnapshot stays at MacroSnapshot.empty()
+                // even though the individual fields are updated every 60s.
+                rebuildAndBroadcast();
                 return; // Don't overwrite OHLC/change fields from a live-only scrape
             }
             giftNiftyPrice = root.path("lastPrice").asDouble(giftNiftyPrice);
@@ -226,9 +298,11 @@ public class MarketPulseService {
 
     @Scheduled(fixedRate = 60000) // Every 60 seconds
     public void scheduledRefresh() {
-        // Global market data (DOW, Crude, Gold, etc.) is 24h on weekdays — always refresh
-        // India VIX is gated inside extractVixFromFudkii() to NSE hours only
-        if (!isWeekday()) return;
+        // Global market data (DOW, Crude, Gold, etc.) updates ~24×5 — always refresh.
+        // Weekends: sgxnifty.org scraper still shows last-trade values, and FastAnalytics
+        // keeps returning the last India VIX — we want to display those stale values with
+        // a "closed/stale" indicator on the UI, not zeros.
+        // NSE session-gated extractors (VIX, NIFTY) have their own internal hour checks.
         refreshFromRedis();
         rebuildAndBroadcast();
     }
@@ -280,6 +354,7 @@ public class MarketPulseService {
             }
 
             giftNiftyPrice = close;
+            niftyLastUpdateMs = System.currentTimeMillis();
             giftNiftyOpen = open;
             giftNiftyHigh = high;
             giftNiftyLow = low;
@@ -305,6 +380,7 @@ public class MarketPulseService {
                 double vix = node.path("vix").asDouble(0);
                 if (vix > 0) {
                     indiaVix = vix;
+                    indiaVixLastUpdateMs = System.currentTimeMillis();
                     vixRegime = classifyVixRegime(vix);
                     return;
                 }
@@ -338,6 +414,7 @@ public class MarketPulseService {
 
         if (latestVix > 0) {
             indiaVix = latestVix;
+            indiaVixLastUpdateMs = System.currentTimeMillis();
             vixRegime = latestVixRegime;
         }
     }
@@ -360,23 +437,33 @@ public class MarketPulseService {
                 int advances = node.path("advances").asInt(0);
                 int declines = node.path("declines").asInt(0);
                 int unchanged = node.path("unchanged").asInt(0);
-                double ratio = node.path("ratio").asDouble(1.0);
-                String ratioLabel = node.path("ratioLabel").asText("0:0");
+                int total = advances + declines + unchanged;
+                double ratio = declines > 0 ? (double) advances / declines : (advances > 0 ? 999.0 : 1.0);
+                String ratioLabel = advances + ":" + declines;
+
+                // Universe-size guard: NSE has ~2000 listed scrips; warn if upstream shrank
+                if (total > 0 && total < 1800) {
+                    log.warn("[MARKET-PULSE] A/D universe suspiciously small: total={} (expected ≥1800)", total);
+                }
 
                 // F&O breadth
                 JsonNode fo = node.path("fo");
                 int foAdv = fo.path("advances").asInt(0);
                 int foDec = fo.path("declines").asInt(0);
                 int foUnch = fo.path("unchanged").asInt(0);
-                double foRatio = fo.path("ratio").asDouble(1.0);
-                String foRatioLabel = fo.path("ratioLabel").asText("0:0");
+                double foRatio = foDec > 0 ? (double) foAdv / foDec : (foAdv > 0 ? 999.0 : 1.0);
+                String foRatioLabel = foAdv + ":" + foDec;
 
-                return AdvanceDecline.builder()
+                AdvanceDecline adResult = AdvanceDecline.builder()
                         .advances(advances).declines(declines).unchanged(unchanged)
                         .ratio(ratio).ratioLabel(ratioLabel)
                         .foAdvances(foAdv).foDeclines(foDec).foUnchanged(foUnch)
                         .foRatio(foRatio).foRatioLabel(foRatioLabel)
                         .build();
+                if (advances > 0 || declines > 0 || unchanged > 0) {
+                    advanceDeclineLastUpdateMs = System.currentTimeMillis();
+                }
+                return adResult;
             }
         } catch (Exception e) {
             log.warn("[MARKET-PULSE] Failed to read A/D from Redis: {}", e.getMessage());
@@ -388,6 +475,25 @@ public class MarketPulseService {
 
     private void rebuildAndBroadcast() {
         AdvanceDecline ad = computeAdvanceDecline();
+
+        MarketStateClassifier.Category NSE = MarketStateClassifier.Category.NSE_SESSION;
+        MarketStateClassifier.Category US = MarketStateClassifier.Category.US_SESSION;
+        MarketStateClassifier.Category GLOBAL = MarketStateClassifier.Category.GLOBAL_24X5;
+
+        AssetStatus giftNiftyAs = buildStatus(NSE, Math.max(giftNiftyLastUpdateMs, sgxNiftyLastUpdateMs));
+        AssetStatus indiaVixAs  = buildStatus(NSE, indiaVixLastUpdateMs);
+        AssetStatus niftyAs     = buildStatus(NSE, niftyLastUpdateMs);
+        AssetStatus adAs        = buildStatus(NSE, advanceDeclineLastUpdateMs);
+        AssetStatus dowAs       = buildStatus(US, dowLastUpdateMs);
+        AssetStatus sp500As     = buildStatus(US, sp500LastUpdateMs);
+        AssetStatus nasdaqAs    = buildStatus(US, nasdaqLastUpdateMs);
+        AssetStatus dxyAs       = buildStatus(US, dxyLastUpdateMs);
+        AssetStatus usVixAs     = buildStatus(US, usVixLastUpdateMs);
+        AssetStatus crudeAs     = buildStatus(GLOBAL, crudeLastUpdateMs);
+        AssetStatus brentAs     = buildStatus(GLOBAL, brentLastUpdateMs);
+        AssetStatus goldAs      = buildStatus(GLOBAL, goldLastUpdateMs);
+        AssetStatus silverAs    = buildStatus(GLOBAL, silverLastUpdateMs);
+        AssetStatus usdInrAs    = buildStatus(GLOBAL, usdInrLastUpdateMs);
 
         latestSnapshot = MacroSnapshot.builder()
                 .giftNiftyPrice(giftNiftyPrice)
@@ -416,15 +522,49 @@ public class MarketPulseService {
                 .brentOilChangePct(brentOilChangePct)
                 .goldPrice(goldPrice)
                 .goldChangePct(goldChangePct)
+                .silverPrice(silverPrice)
+                .silverChangePct(silverChangePct)
                 .usdInrPrice(usdInrPrice)
                 .usdInrChangePct(usdInrChangePct)
                 .sgxNiftyLastTrade(sgxNiftyLastTrade)
                 .sgxNiftyLastTradeTimestamp(sgxNiftyLastTradeTimestamp)
                 .advanceDecline(ad)
+                .giftNiftyStatus(giftNiftyAs)
+                .indiaVixStatus(indiaVixAs)
+                .dowStatus(dowAs)
+                .sp500Status(sp500As)
+                .nasdaqStatus(nasdaqAs)
+                .dxyStatus(dxyAs)
+                .usVixStatus(usVixAs)
+                .crudeStatus(crudeAs)
+                .brentStatus(brentAs)
+                .goldStatus(goldAs)
+                .silverStatus(silverAs)
+                .usdInrStatus(usdInrAs)
+                .niftyStatus(niftyAs)
+                .advanceDeclineStatus(adAs)
                 .timestamp(System.currentTimeMillis())
                 .build();
 
         sessionManager.broadcastMarketPulse(latestSnapshot);
+
+        // Persist so it survives dashboard restarts — avoids the empty-snapshot bug
+        try {
+            redis.opsForValue().set("market-pulse:snapshot",
+                mapper.writeValueAsString(latestSnapshot),
+                java.time.Duration.ofDays(7));
+        } catch (Exception e) {
+            log.debug("[MARKET-PULSE] snapshot persist failed: {}", e.getMessage());
+        }
+    }
+
+    private AssetStatus buildStatus(MarketStateClassifier.Category cat, long lastUpdateMs) {
+        MarketState state = stateClassifier.classify(cat, lastUpdateMs);
+        return AssetStatus.builder()
+            .state(state.name())
+            .subtitle(stateClassifier.subtitle(cat, state))
+            .lastUpdateMs(lastUpdateMs)
+            .build();
     }
 
     public MacroSnapshot getLatestSnapshot() {
@@ -691,12 +831,30 @@ public class MarketPulseService {
         private double brentOilChangePct;
         private double goldPrice;
         private double goldChangePct;
+        private double silverPrice;
+        private double silverChangePct;
         private double usdInrPrice;
         private double usdInrChangePct;
         private double sgxNiftyLastTrade;
         private long sgxNiftyLastTradeTimestamp;
         private AdvanceDecline advanceDecline;
         private long timestamp;
+
+        // Phase 1c — per-asset state classification
+        private AssetStatus giftNiftyStatus;
+        private AssetStatus indiaVixStatus;
+        private AssetStatus dowStatus;
+        private AssetStatus sp500Status;
+        private AssetStatus nasdaqStatus;
+        private AssetStatus dxyStatus;
+        private AssetStatus usVixStatus;
+        private AssetStatus crudeStatus;
+        private AssetStatus brentStatus;
+        private AssetStatus goldStatus;
+        private AssetStatus silverStatus;
+        private AssetStatus usdInrStatus;
+        private AssetStatus niftyStatus;
+        private AssetStatus advanceDeclineStatus;
 
         public static MacroSnapshot empty() {
             return MacroSnapshot.builder()
@@ -721,5 +879,13 @@ public class MarketPulseService {
         @Builder.Default private int foUnchanged = 0;
         @Builder.Default private double foRatio = 1.0;
         @Builder.Default private String foRatioLabel = "0:0";
+    }
+
+    @Data
+    @Builder
+    public static class AssetStatus {
+        private String state;     // MarketState enum name as string for JSON
+        private String subtitle;
+        private long lastUpdateMs;
     }
 }

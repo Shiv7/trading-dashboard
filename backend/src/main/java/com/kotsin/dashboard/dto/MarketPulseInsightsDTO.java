@@ -33,8 +33,13 @@ public class MarketPulseInsightsDTO {
         private String assRegime;       // "STRONG_RISK_ON", "MILD_RISK_ON", "NEUTRAL", etc.
 
         // Key numbers for sticky bar
-        private double niftyPrice;
+        private double niftyPrice;            // legacy: fallback to SGX when NSE unavailable
         private double niftyChangePct;
+        // Explicit Indian indices (Phase 4)
+        private double sgxNiftyPrice;          // GIFT / SGX Nifty futures (sgxnifty.org scrape)
+        private double sgxNiftyChangePct;
+        private double nifty50Price;           // NSE Nifty 50 last close (from Streaming Candle via hotstocks:v1:999920000)
+        private double nifty50ChangePct;
         private double indiaVix;
         private double crudePrice;
         private double crudeChangePct;
@@ -51,6 +56,45 @@ public class MarketPulseInsightsDTO {
         private double usVix;
         private double usVixChangePct;
 
+        // US Indices (scraped from sgxnifty.org, ingested via market-context-giftnifty Kafka)
+        private double sp500Price;
+        private double sp500ChangePct;
+        private double dowPrice;
+        private double dowChangePct;
+        private double nasdaqPrice;
+        private double nasdaqChangePct;
+
+        // Brent (in addition to WTI crudePrice)
+        private double brentPrice;
+        private double brentChangePct;
+
+        // European Indices (populated by Phase 2 GlobalIndicesPoller — yfinance via FastAnalytics)
+        private double ftsePrice;
+        private double ftseChangePct;
+        private double daxPrice;
+        private double daxChangePct;
+        private double cacPrice;
+        private double cacChangePct;
+
+        // Middle East Indices (Phase 2 — yfinance)
+        private double tasiPrice;        // Saudi Tadawul All Share (^TASI.SR)
+        private double tasiChangePct;
+        private double uaePrice;         // iShares MSCI UAE ETF (UAE) as composite proxy — yfinance has no direct ADX/DFM
+        private double uaeChangePct;
+
+        // Macro rates (Phase 5+6)
+        private double us10yYield;          // ^TNX percentage (e.g. 4.21)
+        private double us10yChangePct;
+        // Computed cross-market spreads & divergences
+        private double vixDivergence;       // indiaVix - usVix (positive = India fear > US fear)
+        private double brentWtiSpread;      // brent - crude (positive = supply tightness premium)
+        // FOMC / India CPI calendar awareness
+        private String nextFomcDate;        // ISO yyyy-MM-dd
+        private int daysUntilFomc;          // 0 = today, -1 = past, max ~999
+        private String nextCpiDate;         // ISO yyyy-MM-dd (Indian CPI)
+        private int daysUntilCpi;
+        private String calendarHint;        // e.g. "FOMC in 2 days · tighten stops" — empty when no near-term event
+
         // GIFT Nifty
         private double giftNiftyPrice;
         private double giftNiftyChangePct;
@@ -64,6 +108,15 @@ public class MarketPulseInsightsDTO {
         private String foRatioLabel;
 
         private long timestamp;
+
+        // Phase 4: per-card cross-indice inferences (key = card id, value = 1-line takeaway)
+        // Keys: "sgxNifty","nifty50","indiaVix","usdInr","nikkei","hangSeng","shanghai","kospi",
+        //       "dow","sp500","nasdaq","usVix","ftse","dax","cac","tasi","uae",
+        //       "crudeWti","brent","gold","silver","dxy","fii","dii"
+        private java.util.Map<String, String> cardInferences;
+
+        // Phase 4: holistic one-line summary across all markets (shown at bottom of Markets tab)
+        private String globalRead;
     }
 
     // ═══════ TIER 2: STRATEGY ALIGNMENT ═══════
@@ -156,9 +209,14 @@ public class MarketPulseInsightsDTO {
 
     @Data @Builder
     public static class AsianMarkets {
+        // Last-traded prices (populated by GlobalIndicesPoller from yfinance)
+        private double nikkeiPrice;
         private double nikkeiChangePct;
+        private double hangSengPrice;
         private double hangSengChangePct;
+        private double shanghaiPrice;
         private double shanghaiChangePct;
+        private double kospiPrice;
         private double kospiChangePct;
         private double assScore;
         private String regime;
@@ -219,7 +277,56 @@ public class MarketPulseInsightsDTO {
             private double otherSellCr;
             private int dealCount;
             private double deliveryPct;
-            private String signal;         // Plain language interpretation
+            private String signal;                  // Plain language interpretation (legacy 1-line)
+            // Phase 7: drill-down enrichment
+            private List<StockContribution> topStocks;   // top 3 contributors by abs(netCr)
+            private List<String> topClients;             // top 2 client names by abs(netCr)
+            private String inference;                    // richer 1-line takeaway with stock/client names
+            private String regime;                       // ACCUMULATION / DISTRIBUTION / MIXED / NEUTRAL
+            // Phase 7b: multi-day persistence (5-day window from Redis snapshots)
+            private int daysFlowing;                     // 1=today only; 2=2-day streak; 5=full-week sustained
+            private String streakDirection;              // "BUY" / "SELL" / "MIXED"
+            private String traderAction;                 // concrete retail action: BUY-DIPS / TRIM / AVOID / WAIT
+            // Phase 7c: 5-day cumulative context (so user sees both today's flow and the week's sum)
+            private double weekTotalCr;                  // sum of net Cr across all 5 trading days returned by the API
+            private String dataDate;                     // the latest deal date that today's netCr is computed from
+
+            @Data @Builder
+            public static class StockContribution {
+                private String symbol;
+                private double netCr;
+                private String side;       // BUY-NET / SELL-NET
+                private int dealCount;
+                // Phase 8d: churn detection
+                private double grossCr;          // sum of all buy + all sell across all clients
+                private double churnRatio;       // 0..1 — fraction of gross that was self-matched by individual clients
+                private String flowQuality;      // HIGH / MEDIUM / LOW / CHURN
+                private String dominantClient;   // top client by gross volume
+                // Phase 8c: FII vs DII alignment per stock
+                private double fiiNetCr;         // sum of FII clients' net Cr on this stock
+                private double diiNetCr;         // sum of DII clients' net Cr on this stock
+                private String fiiDiiAlignment;  // FII_DII_BUY / FII_DII_SELL / FII_SELL_DII_BUY (accum) / FII_BUY_DII_SELL (distrib) / FII_ONLY_BUY / FII_ONLY_SELL / DII_ONLY_BUY / DII_ONLY_SELL / NO_INST
+                // Phase 8a: 5-day daily flow rhythm
+                private List<Double> dailyCrTimeseries;  // oldest → newest (one entry per trading day in the API window)
+                private List<String> dailyDates;         // matching dates for the timeseries (yyyy-MM-dd)
+                private String pattern;                  // SYSTEMATIC / BLOCK_EXIT / PERSISTENT_BUYING / PERSISTENT_SELLING / CHOPPY / SINGLE_DAY / MIXED_2D
+            }
+
+            // Phase 8d: structured client flow (replaces opaque "NAME (+X Cr)" string)
+            @Data @Builder
+            public static class ClientFlowDetail {
+                private String name;
+                private String type;       // FII / DII / PROP_BROKER / OTHER
+                private double buyCr;
+                private double sellCr;
+                private double netCr;
+                private double churnRatio; // own self-match ratio (matched / gross for this client)
+            }
+
+            // Phase 8d: structured client flow list (kept alongside legacy topClients string list)
+            private List<ClientFlowDetail> topClientFlows;
+            // Phase 8d: ratio of sector gross flow that was self-matched by single clients (0..1)
+            private double sectorChurnRatio;
         }
 
         @Data @Builder
@@ -265,6 +372,56 @@ public class MarketPulseInsightsDTO {
             private double deliveryPct;
             private double turnoverLacs;
             private String signal;         // "High conviction", "Speculative", "Normal"
+        }
+    }
+
+    // 5h: Institutional Activity (Phase 5+6) — security-wise + fund-wise breakdown of today's deals
+    private InstitutionalActivity institutionalActivity;
+
+    @Data @Builder
+    public static class InstitutionalActivity {
+        private List<SecurityActivity> bySecurity;     // sorted by abs(netCr) desc
+        private List<ClientFlow> byClient;             // sorted by abs(netCr) desc
+        private int totalDealsCount;
+        private double totalDealValueCr;
+        private int accumulationCount;                 // # securities flagged as institutional accumulation
+        private int distributionCount;                 // # flagged as distribution
+        private String headlineSummary;                // 1-line takeaway across all today's activity
+        private String dataDate;                       // e.g., "10-Apr-2026"
+
+        @Data @Builder
+        public static class SecurityActivity {
+            private String symbol;
+            private String sector;
+            private double netCr;                      // total net (buy - sell) across all clients
+            private double fiiNetCr;
+            private double diiNetCr;
+            private double propNetCr;                  // proprietary brokers
+            private double otherNetCr;
+            private int dealCount;
+            private double topDealCr;                  // largest single deal
+            private double deliveryPct;                // from delivery-data.bySymbol
+            private double sectorDeliveryPct;          // sector median for comparison
+            private String topBuyer;                   // largest BUY-side client name
+            private String topSeller;                  // largest SELL-side client name
+            // Wyckoff divergence engine output
+            private String divergenceState;            // "ACCUMULATION", "DISTRIBUTION", "MIXED", "NEUTRAL"
+            private String divergenceConfidence;       // "STRONG", "MODERATE", "WEAK", "NONE"
+            private List<String> divergenceReasons;    // which validation gates passed
+            private String inference;                  // 1-line actionable takeaway
+        }
+
+        @Data @Builder
+        public static class ClientFlow {
+            private String name;
+            private String type;                       // FII, DII, PROP_BROKER, OTHER
+            private double buyCr;
+            private double sellCr;
+            private double netCr;
+            private int dealCount;
+            private List<String> topBuySymbols;        // up to 5
+            private List<String> topSellSymbols;       // up to 5
+            private String inference;                  // 1-line read of this fund's day
         }
     }
 

@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { marketPulseApi } from '../services/api'
 import type { MacroSnapshot, BlockDeal, BulkDeal, FiiDiiDay, CorporateEvent, DeliveryData } from '../services/api'
-import { isAnyMarketOpen, isExchangeOpen } from '../utils/tradingUtils'
+import { isAnyMarketOpen } from '../utils/tradingUtils'
 import ConvictionBadge from '../components/ConvictionBadge'
+import { StatePill } from '../components/MarketPulse/StatePill'
 
 /** Indian number format: 1,23,45,678 */
 const fmtIN = (n: number, decimals = 0): string => {
@@ -57,8 +58,6 @@ const signBg = (n: number) =>
 
 const signPrefix = (n: number) => (n > 0 ? '+' : '')
 
-const LiveDot = () => <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-
 function vixBadgeColor(vix: number): string {
   if (vix >= 30) return 'bg-red-500/20 text-red-400 border-red-500/30'
   if (vix >= 22) return 'bg-amber-500/20 text-amber-400 border-amber-500/30'
@@ -89,21 +88,6 @@ export default function MarketPulsePage() {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
   const toggleSection = (key: string) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }))
   const [dealTab, setDealTab] = useState<'block' | 'bulk'>('block')
-  const isWeekdayIST = () => {
-    const ist = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
-    const d = ist.getUTCDay();
-    return d >= 1 && d <= 5;
-  }
-  const [nseOpen, setNseOpen] = useState(isExchangeOpen('NSE'))
-  const [weekday, setWeekday] = useState(isWeekdayIST())
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setNseOpen(isExchangeOpen('NSE'))
-      setWeekday(isWeekdayIST())
-    }, 60000)
-    return () => clearInterval(t)
-  }, [])
 
   const loadAll = useCallback(async () => {
     try {
@@ -165,7 +149,7 @@ export default function MarketPulsePage() {
     dowChangePct: 0, sp500ChangePct: 0, nasdaqChangePct: 0,
     dxyPrice: 0, dxyChangePct: 0, usVixPrice: 0, usVixChangePct: 0,
     crudeOilPrice: 0, crudeOilChangePct: 0, brentOilPrice: 0, brentOilChangePct: 0,
-    goldPrice: 0, goldChangePct: 0, usdInrPrice: 0, usdInrChangePct: 0,
+    goldPrice: 0, goldChangePct: 0, silverPrice: 0, silverChangePct: 0, usdInrPrice: 0, usdInrChangePct: 0,
     advanceDecline: { advances: 0, declines: 0, unchanged: 0, ratio: 1, ratioLabel: '0:0', foAdvances: 0, foDeclines: 0, foUnchanged: 0, foRatio: 1, foRatioLabel: '0:0' },
     timestamp: 0,
   }
@@ -818,17 +802,20 @@ export default function MarketPulsePage() {
             ? (s.sgxNiftyLastTrade - prevClose) / prevClose * 100
             : s.giftNiftyChangePct;
           return (
-            <div className={`rounded-xl border p-4 ${signBg(changePct)}`}>
-              <div className="text-[13px] font-semibold text-slate-400 mb-1">
+            <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(changePct)}`}>
+              <div className="text-base font-semibold text-slate-400 mb-2">
                 {useSgx ? 'SGX NIFTY' : 'GIFT NIFTY'}
-                {useSgx && <LiveDot />}
+                <StatePill state={s.giftNiftyStatus?.state} />
               </div>
-              <div className="text-xl font-bold text-white">
+              <div className="text-3xl font-bold text-white tracking-tight">
                 {price > 0 ? fmtNum(price, 0) : 'DM'}
               </div>
-              <div className={`text-[15px] font-medium ${signColor(changePct)}`}>
+              <div className={`text-lg font-semibold ${signColor(changePct)}`}>
                 {signPrefix(changePct)}{fmtNum(changePct)}%
               </div>
+              {s.giftNiftyStatus?.state && s.giftNiftyStatus.state !== 'LIVE' && s.giftNiftyStatus.subtitle && (
+                <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.giftNiftyStatus.subtitle}</div>
+              )}
               {s.giftNiftyOvernightChangePct !== 0 && (
                 <div className={`text-[13px] mt-1 ${signColor(s.giftNiftyOvernightChangePct)}`}>
                   O/N: {signPrefix(s.giftNiftyOvernightChangePct)}{fmtNum(s.giftNiftyOvernightChangePct)}%
@@ -838,16 +825,19 @@ export default function MarketPulsePage() {
           );
         })()}
 
-        <div className={`rounded-xl border p-4 ${vixBadgeColor(s.indiaVix)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">INDIA VIX{nseOpen && s.indiaVix > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${vixBadgeColor(s.indiaVix)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">INDIA VIX<StatePill state={s.indiaVixStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">
             {s.indiaVix > 0 ? fmtNum(s.indiaVix) : 'DM'}
           </div>
           <div className="text-[13px] font-medium mt-1">{vixLabel(s.vixRegime, s.indiaVix)}</div>
+          {s.indiaVixStatus?.state && s.indiaVixStatus.state !== 'LIVE' && s.indiaVixStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.indiaVixStatus.subtitle}</div>
+          )}
         </div>
 
         <div className="rounded-xl border border-slate-600/30 bg-slate-700/50 p-4">
-          <div className="text-[13px] font-semibold text-slate-400 mb-2">ADVANCE / DECLINE{nseOpen && adTotal > 0 && <LiveDot />}</div>
+          <div className="text-[13px] font-semibold text-slate-400 mb-2">ADVANCE / DECLINE<StatePill state={s.advanceDeclineStatus?.state} /></div>
           {/* F&O Breadth — primary */}
           <div className="text-[11px] font-semibold text-amber-400 mb-0.5">F&O ({foTotal})</div>
           <div className="flex items-baseline gap-1.5">
@@ -872,72 +862,109 @@ export default function MarketPulsePage() {
             <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all"
               style={{ width: `${adAdvPct}%` }} />
           </div>
+          {s.advanceDeclineStatus?.state && s.advanceDeclineStatus.state !== 'LIVE' && s.advanceDeclineStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-1 italic">{s.advanceDeclineStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(s.dowChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">DOW JONES{weekday && s.dowPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.dowPrice > 0 ? fmtNum(s.dowPrice, 0) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.dowChangePct)}`}>{signPrefix(s.dowChangePct)}{fmtNum(s.dowChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(s.dowChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">DOW JONES<StatePill state={s.dowStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.dowPrice > 0 ? fmtNum(s.dowPrice, 0) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.dowChangePct)}`}>{signPrefix(s.dowChangePct)}{fmtNum(s.dowChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">US Session</div>
+          {s.dowStatus?.state && s.dowStatus.state !== 'LIVE' && s.dowStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.dowStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(s.sp500ChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">S&P 500{weekday && s.sp500Price > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.sp500Price > 0 ? fmtNum(s.sp500Price, 0) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.sp500ChangePct)}`}>{signPrefix(s.sp500ChangePct)}{fmtNum(s.sp500ChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(s.sp500ChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">S&P 500<StatePill state={s.sp500Status?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.sp500Price > 0 ? fmtNum(s.sp500Price, 0) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.sp500ChangePct)}`}>{signPrefix(s.sp500ChangePct)}{fmtNum(s.sp500ChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">US Session</div>
+          {s.sp500Status?.state && s.sp500Status.state !== 'LIVE' && s.sp500Status.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.sp500Status.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(s.nasdaqChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">NASDAQ{weekday && s.nasdaqPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.nasdaqPrice > 0 ? fmtNum(s.nasdaqPrice, 0) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.nasdaqChangePct)}`}>{signPrefix(s.nasdaqChangePct)}{fmtNum(s.nasdaqChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(s.nasdaqChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">NASDAQ<StatePill state={s.nasdaqStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.nasdaqPrice > 0 ? fmtNum(s.nasdaqPrice, 0) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.nasdaqChangePct)}`}>{signPrefix(s.nasdaqChangePct)}{fmtNum(s.nasdaqChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">US Session</div>
+          {s.nasdaqStatus?.state && s.nasdaqStatus.state !== 'LIVE' && s.nasdaqStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.nasdaqStatus.subtitle}</div>
+          )}
         </div>
       </div>
 
       {/* Global Indicators row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className={`rounded-xl border p-4 ${signBg(-s.dxyChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">DXY (USD){weekday && s.dxyPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.dxyPrice > 0 ? fmtNum(s.dxyPrice, 2) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(-s.dxyChangePct)}`}>{signPrefix(s.dxyChangePct)}{fmtNum(s.dxyChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(-s.dxyChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">DXY (USD)<StatePill state={s.dxyStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.dxyPrice > 0 ? fmtNum(s.dxyPrice, 2) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(-s.dxyChangePct)}`}>{signPrefix(s.dxyChangePct)}{fmtNum(s.dxyChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">{s.dxyChangePct > 0 ? 'Strong $ = EM pressure' : s.dxyChangePct < 0 ? 'Weak $ = EM tailwind' : ''}</div>
+          {s.dxyStatus?.state && s.dxyStatus.state !== 'LIVE' && s.dxyStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.dxyStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${s.usVixPrice > 25 ? 'bg-red-500/10 border-red-500/30' : s.usVixPrice > 18 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">US VIX (CBOE){weekday && s.usVixPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.usVixPrice > 0 ? fmtNum(s.usVixPrice, 1) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.usVixChangePct)}`}>{signPrefix(s.usVixChangePct)}{fmtNum(s.usVixChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${s.usVixPrice > 25 ? 'bg-red-500/10 border-red-500/30' : s.usVixPrice > 18 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">US VIX (CBOE)<StatePill state={s.usVixStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.usVixPrice > 0 ? fmtNum(s.usVixPrice, 1) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.usVixChangePct)}`}>{signPrefix(s.usVixChangePct)}{fmtNum(s.usVixChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">{s.usVixPrice > 25 ? 'High fear' : s.usVixPrice > 18 ? 'Elevated' : 'Calm'}</div>
+          {s.usVixStatus?.state && s.usVixStatus.state !== 'LIVE' && s.usVixStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.usVixStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(-s.crudeOilChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">CRUDE OIL (WTI){weekday && s.crudeOilPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.crudeOilPrice > 0 ? '$' + fmtNum(s.crudeOilPrice, 2) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.crudeOilChangePct)}`}>{signPrefix(s.crudeOilChangePct)}{fmtNum(s.crudeOilChangePct)}%</div>
-          <div className="text-[13px] text-slate-500 mt-1">{s.crudeOilChangePct > 2 ? 'Rising crude = inflation risk' : ''}</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(s.silverChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">SILVER<StatePill state={s.silverStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.silverPrice > 0 ? '$' + fmtNum(s.silverPrice, 2) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.silverChangePct)}`}>{signPrefix(s.silverChangePct)}{fmtNum(s.silverChangePct)}%</div>
+          <div className="text-[13px] text-slate-500 mt-1">{
+            s.silverPrice <= 0 ? ''
+            : s.silverChangePct > 2 ? 'Industrial demand surge'
+            : s.silverChangePct > 0.5 ? 'Mild bid — supportive'
+            : s.silverChangePct < -2 ? 'Risk-off pressure'
+            : s.silverChangePct < -0.5 ? 'Mild softening'
+            : 'Range-bound'
+          }</div>
+          {s.silverStatus?.state && s.silverStatus.state !== 'LIVE' && s.silverStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.silverStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(s.goldChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">GOLD{weekday && s.goldPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.goldPrice > 0 ? '$' + fmtNum(s.goldPrice, 1) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.goldChangePct)}`}>{signPrefix(s.goldChangePct)}{fmtNum(s.goldChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(s.goldChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">GOLD<StatePill state={s.goldStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.goldPrice > 0 ? '$' + fmtNum(s.goldPrice, 1) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.goldChangePct)}`}>{signPrefix(s.goldChangePct)}{fmtNum(s.goldChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">{s.goldChangePct > 1 ? 'Risk-off / safe haven' : ''}</div>
+          {s.goldStatus?.state && s.goldStatus.state !== 'LIVE' && s.goldStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.goldStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(-s.usdInrChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">USD/INR{weekday && s.usdInrPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.usdInrPrice > 0 ? '₹' + fmtNum(s.usdInrPrice, 2) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(-s.usdInrChangePct)}`}>{signPrefix(s.usdInrChangePct)}{fmtNum(s.usdInrChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(-s.usdInrChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">USD/INR<StatePill state={s.usdInrStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.usdInrPrice > 0 ? '₹' + fmtNum(s.usdInrPrice, 2) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(-s.usdInrChangePct)}`}>{signPrefix(s.usdInrChangePct)}{fmtNum(s.usdInrChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">{s.usdInrChangePct > 0.3 ? 'Rupee weakening = FII outflow' : s.usdInrChangePct < -0.3 ? 'Rupee strengthening' : ''}</div>
+          {s.usdInrStatus?.state && s.usdInrStatus.state !== 'LIVE' && s.usdInrStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.usdInrStatus.subtitle}</div>
+          )}
         </div>
 
-        <div className={`rounded-xl border p-4 ${signBg(-s.brentOilChangePct)}`}>
-          <div className="text-[13px] font-semibold text-slate-400 mb-1">BRENT CRUDE{weekday && s.brentOilPrice > 0 && <LiveDot />}</div>
-          <div className="text-xl font-bold text-white">{s.brentOilPrice > 0 ? '$' + fmtNum(s.brentOilPrice, 2) : 'DM'}</div>
-          <div className={`text-[15px] font-medium ${signColor(s.brentOilChangePct)}`}>{signPrefix(s.brentOilChangePct)}{fmtNum(s.brentOilChangePct)}%</div>
+        <div className={`rounded-xl border p-5 transition-all duration-150 hover:shadow-lg hover:shadow-slate-900/40 ${signBg(-s.brentOilChangePct)}`}>
+          <div className="text-base font-semibold text-slate-400 mb-2">BRENT CRUDE<StatePill state={s.brentStatus?.state} /></div>
+          <div className="text-3xl font-bold text-white tracking-tight">{s.brentOilPrice > 0 ? '$' + fmtNum(s.brentOilPrice, 2) : 'DM'}</div>
+          <div className={`text-lg font-semibold ${signColor(s.brentOilChangePct)}`}>{signPrefix(s.brentOilChangePct)}{fmtNum(s.brentOilChangePct)}%</div>
           <div className="text-[13px] text-slate-500 mt-1">India benchmark</div>
+          {s.brentStatus?.state && s.brentStatus.state !== 'LIVE' && s.brentStatus.subtitle && (
+            <div className="text-[10px] text-slate-500 mt-0.5 italic">{s.brentStatus.subtitle}</div>
+          )}
         </div>
       </div>
 
@@ -959,7 +986,7 @@ export default function MarketPulsePage() {
                 {item.isBadge ? (
                   <span className={`${item.badgeBg} ${item.color} text-[13px] px-2 py-0.5 rounded-md`}>{item.text}</span>
                 ) : (
-                  <span className={`text-[15px] font-medium ${item.color}`}>{item.text}</span>
+                  <span className={`text-lg font-semibold ${item.color}`}>{item.text}</span>
                 )}
               </span>
             ))}
@@ -967,47 +994,7 @@ export default function MarketPulsePage() {
         </div>
       )}
 
-      {/* ===== 4. PRE-MARKET WATCHLIST (HERO) ===== */}
-      {insights && insights.watchlist.length > 0 && (
-        <div>
-          <h2 className="text-[15px] font-semibold text-amber-400 uppercase tracking-wider mb-3">
-            Pre-Market Watchlist
-            <span className="ml-2 text-[13px] text-slate-400 font-normal normal-case">
-              for {(() => {
-                const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000)
-                const next = new Date(istNow)
-                next.setUTCDate(next.getUTCDate() + 1)
-                // Skip to Monday if Saturday(6) or Sunday(0)
-                while (next.getUTCDay() === 0 || next.getUTCDay() === 6) next.setUTCDate(next.getUTCDate() + 1)
-                const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-                return `${next.getUTCDate()} ${months[next.getUTCMonth()]}'${String(next.getUTCFullYear()).slice(2)}`
-              })()}
-            </span>
-          </h2>
-          <div className="flex gap-3 overflow-x-auto pb-2 custom-scrollbar">
-            {insights.watchlist.slice(0, 5).map((w, i) => (
-              <div key={w.symbol} className={`shrink-0 w-56 rounded-xl border p-4 ${
-                w.bias === 'BUY' ? 'bg-emerald-500/5 border-emerald-500/25' : 'bg-red-500/5 border-red-500/25'
-              }`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-[13px] text-slate-500 font-mono font-bold">#{i + 1}</span>
-                  <span className="text-lg font-bold text-white">{w.symbol}</span>
-                  <span className={`text-[13px] px-2 py-0.5 rounded-full font-bold ${
-                    w.bias === 'BUY' ? 'bg-emerald-500/25 text-emerald-400' : 'bg-red-500/25 text-red-400'
-                  }`}>{w.bias}</span>
-                </div>
-                <div className={`text-base font-bold mb-1 ${w.netCr > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {w.netCr > 0 ? '+' : ''}{fmtIN(w.netCr)} Cr
-                </div>
-                <div className="text-[13px] text-slate-500 mb-2">{w.sector}</div>
-                <p className="text-[13px] text-slate-400 leading-relaxed">
-                  {w.reasons.slice(0, 2).join('. ')}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Pre-Market Watchlist removed — superseded by /hot-stocks page (Phase 1a). */}
 
       {/* ===== 5. FLOW DASHBOARD ===== */}
       {insights && (

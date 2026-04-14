@@ -1,5 +1,6 @@
 package com.kotsin.dashboard.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.dto.MarketPulseInsightsDTO;
 import com.kotsin.dashboard.dto.MarketPulseInsightsDTO.*;
@@ -36,30 +37,90 @@ public class MarketPulseInsightsService {
 
     // ── Client Classification (mirrors FastAnalytics Python) ──
     private static final Pattern FII_PATTERN = Pattern.compile(
-        "goldman|morgan stanley|citi|jpmorgan|hsbc|ubs|barclays|nomura|clsa|fpi|foreign|europe|asia|global|singapore|mauritius|capital group|vanguard|blackrock|societe|deutsche|credit suisse|bnp|macquarie|aberdeen|schroders|merrill|pine oak|beacon stone",
+        "goldman|morgan stanley|citi|jpmorgan|hsbc|ubs|barclays|nomura|clsa|fpi|foreign|europe|asia|global|singapore|mauritius|capital group|vanguard|blackrock|societe|deutsche|credit suisse|bnp|macquarie|aberdeen|schroders|merrill|pine oak|beacon stone|alphamine|cayman|luxembourg|fii|fpi|abu dhabi|gic|temasek|tiger|sequoia|fidelity|wellington|t\\. rowe|invesco|jpm|fund.*ireland|fund.*delaware|emerging.*markets",
         Pattern.CASE_INSENSITIVE);
     private static final Pattern DII_PATTERN = Pattern.compile(
-        "mutual fund|kotak mahindra|hdfc mutual|sbi mutual|axis mutual|nippon india|birla sun|dsp mutual|franklin|idfc mutual|sundaram|canara robeco|invesco|mirae|quant mutual|union mutual|groww",
+        "mutual fund|kotak mahindra|hdfc mutual|sbi mutual|axis mutual|nippon india|birla sun|dsp mutual|franklin|idfc mutual|sundaram|canara robeco|invesco india|mirae|quant mutual|union mutual|groww|aditya birla|tata mutual|icici prudential|uti mutual|baroda bnp|edelweiss mutual|motilal oswal mutual|whiteoak|360 one|pgim india|hdfc life|sbi life|max life|life insurance|lic india|insurance.*comp|pension fund|nps trust",
         Pattern.CASE_INSENSITIVE);
     private static final Pattern PROP_BROKER_PATTERN = Pattern.compile(
         "jump trading|nk securities|junomoneta|microcurves|irage|musigma|elixir wealth|qicap|silverleaf|puma securities|pace stock|mathisys|arthkumbh|dipan mehta|dharmik.*kapu",
         Pattern.CASE_INSENSITIVE);
 
-    // ── Sector Keywords ──
-    private static final Map<String, Pattern> SECTOR_PATTERNS = Map.ofEntries(
-        Map.entry("Banking & Finance", Pattern.compile("bank|financ|hdfc|icici|kotak|axis|sbi|bajaj fin|indusind|pnb|federal|rbl|yes bank|muthoot|manappuram|shriram|chola", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Metals & Mining", Pattern.compile("metal|steel|tata steel|jsw|hindalco|vedanta|coal|nmdc|moil|nalco|sail|jindal", Pattern.CASE_INSENSITIVE)),
-        Map.entry("IT & Tech", Pattern.compile("tech|info|tcs|wipro|hcl|ltimind|mphasis|coforge|persist|cyient|kpit|tata elx", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Pharma & Health", Pattern.compile("pharma|drug|sun |cipla|lupin|dr.? reddy|divis|aurobindo|torrent|zydus|biocon|alkem", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Oil & Gas", Pattern.compile("reliance|oil|petro|gas|ongc|bpcl|hpcl|ioc|gail|adani.*gas", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Auto", Pattern.compile("auto|maruti|tata motor|mahindra|bajaj auto|hero|tvs|eicher|ashok ley", Pattern.CASE_INSENSITIVE)),
-        Map.entry("FMCG & Retail", Pattern.compile("fmcg|itc|hindustan.*uni|nestle|dabur|marico|colgate|britannia|godrej.*con", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Power & Energy", Pattern.compile("power|ntpc|adani.*power|tata.*power|nhpc|jsw.*energy|adani.*green", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Real Estate", Pattern.compile("real|dlf|godrej.*prop|prestige|oberoi|brigade|sobha|phoenix", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Infra & Cement", Pattern.compile("infra|highway|construct|larsen|l&t|cement|ultra|ambuja|shree|acc|dalmia", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Chemicals", Pattern.compile("chem|chemical|srf|pidilite|aarti|clean science|deepak|tata chem", Pattern.CASE_INSENSITIVE)),
-        Map.entry("Insurance", Pattern.compile("insur|lic|sbi life|hdfc life|icici.*lomb|star health", Pattern.CASE_INSENSITIVE))
+    // ── Sector Keywords (broadened in Phase 7 to catch more stocks; order matters: more specific first) ──
+    private static final Map<String, Pattern> SECTOR_PATTERNS = new java.util.LinkedHashMap<>() {{
+        put("Banking & Finance", Pattern.compile("bank|financ|hdfc|icici|kotak|axis|sbi(?!l)|bajaj fin|indusind|pnb|federal|rbl|yes bank|muthoot|manappuram|shriram|chola|bandhan|au small|capit|nbfc|sundaram fin|repco|cholamandalam|piramal", Pattern.CASE_INSENSITIVE));
+        put("Insurance", Pattern.compile("insur|lic |hdfc life|sbi life|max life|icici.*lomb|star health|niva|go digit|new india|united india|general insurance", Pattern.CASE_INSENSITIVE));
+        put("IT & Tech", Pattern.compile("tech|infosys|info edge|tcs|wipro|hcl|ltimind|l&t.*tech|mphasis|coforge|persist|cyient|kpit|tata elx|zensar|happiest|intellect|polycab|route mobile|tata communications|sasken|saksoft|onmobile|nazara|nykaa|paytm|policybazaar|map my india", Pattern.CASE_INSENSITIVE));
+        put("Pharma & Health", Pattern.compile("pharma|drug|sun pharma|cipla|lupin|dr.?reddy|divis|aurobindo|torrent pharma|zydus|biocon|alkem|gland|laurus|abbott|glaxo|pfizer|sanofi|natco|jubilant|piramal pharma|metropolis|thyrocare|fortis|apollo hosp|max healthcare|narayana|hospital|medplus|krishna inst", Pattern.CASE_INSENSITIVE));
+        put("Auto", Pattern.compile("auto|maruti|tata motor|m&m|mahindra(?! cie)|bajaj auto|hero moto|tvs motor|eicher|ashok ley|escorts|atul auto|force motor|cie auto|exide|amara raja|sona blw|samvardhana|motherson|bharat forge|sundaram fast|wabco|bosch|mrf|ceat|apollo tyre|jk tyre|balkrishna", Pattern.CASE_INSENSITIVE));
+        put("Oil & Gas", Pattern.compile("reliance|petro|crude|natural gas|ongc|bpcl|hpcl|ioc(?!l)|indianoil|gail|adani.*gas|gujarat gas|igl|mgl|petron|chennai petr|mangalore refin|aegis logistics", Pattern.CASE_INSENSITIVE));
+        put("Power & Energy", Pattern.compile("power|ntpc|adani.*power|tata.*power|nhpc|jsw.*energy|adani.*green|torrent power|cesc|reliance power|jp power|kalpataru power|ksk energy|sterlite power|inox wind|suzlon|orient green|borosil renewables", Pattern.CASE_INSENSITIVE));
+        put("Metals & Mining", Pattern.compile("metal|steel|tata steel|jsw steel|hindalco|vedanta|coal india|nmdc|moil|nalco|sail|jindal|jspl|hindustan zinc|hindustan copper|jindal stainless|welspun corp|apl apollo|ratnamani|mukand|maharashtra seamless", Pattern.CASE_INSENSITIVE));
+        put("FMCG & Retail", Pattern.compile("fmcg|itc(?!hl)|hindustan.*uni|nestle|dabur|marico|colgate|britannia|godrej.*con|godrej consumer|emami|gillette|honasa|patanjali|tata consumer|varun bever|dmart|trent|aditya birla fashion|shoppers stop|spencer|future retail|jubilant food|westlife|sapphire foods|devyani", Pattern.CASE_INSENSITIVE));
+        put("Real Estate", Pattern.compile("real|realty|dlf|godrej.*prop|prestige|oberoi realty|brigade|sobha|phoenix mills|macrotech|lodha|sunteck|kolte patil|nesco|signature global|raymond realty", Pattern.CASE_INSENSITIVE));
+        put("Infra & Cement", Pattern.compile("infra|highway|construct|larsen|l&t|cement|ultratech|ambuja|shree cement|acc|dalmia|jk cement|ramco cement|birla corp|nuvoco|orient cement|india cements|prism johnson|gmr|gvk|irb infra|kpil|ksb|ahluwalia|nbcc|hg infra|pnc infra", Pattern.CASE_INSENSITIVE));
+        put("Chemicals", Pattern.compile("chem|chemical|srf|pidilite|aarti|clean science|deepak|tata chem|navin fluo|gujarat fluo|alkyl amines|fine organic|laxmi organic|gujarat alkalies|guj narmada|punjab alkali|atul ltd|vinati|sumitomo chem|upl ltd|coromandel|chambal|gnfc|gsfc|rcf|deepak nitrite", Pattern.CASE_INSENSITIVE));
+        put("Telecom", Pattern.compile("airtel|bharti|vodafone|idea|vi |mtnl|bsnl|reliance jio|tata comm|tejas|hfcl|sterlite tech|gtl|indus tower", Pattern.CASE_INSENSITIVE));
+        put("Defence & PSU", Pattern.compile("hindustan aero|hal |bharat dynam|bdl |bharat electronics|bel |mishra dhatu|midhani|garden reach|cochin shipyard|mazagon dock|bharat heavy|bhel|paras defence|astra micro|data patterns|ideaforge", Pattern.CASE_INSENSITIVE));
+        put("Logistics & Shipping", Pattern.compile("logistics|delhivery|blue dart|tci express|gati|allcargo|container corp|concor|aegis log|sci |shipping corp|adani port|jsw infra|gujarat pipavav", Pattern.CASE_INSENSITIVE));
+        put("Media & Entertainment", Pattern.compile("media|zee |sun tv|pvr|inox leis|saregama|tips|eros|prime focus|pvr inox|network18|tv18|jagran|hathway|den networks", Pattern.CASE_INSENSITIVE));
+        put("Agri & Fertilizer", Pattern.compile("agri|fertili|coromandel|chambal fert|deepak fert|gsfc|gnfc|rcf |madras fert|paradeep|nfl |sumitomo|pi industries|insectic|rallis|bayer crop|godrej agro|kaveri seed|jain irri|ksb pump", Pattern.CASE_INSENSITIVE));
+        put("Capital Goods", Pattern.compile("capital good|abb|siemens|cummins|thermax|honeywell|grindwell|sks micro|ge india|disa india|elgi|ksb pump|kirloskar|hawkins|texmaco|isgec|triveni eng|action const|esab", Pattern.CASE_INSENSITIVE));
+    }};
+
+    // ── Phase 5+6: FOMC + India CPI calendar (2026 — hand-curated, refresh annually) ──
+    // FOMC dates: official Federal Reserve schedule
+    private static final List<String> FOMC_DATES_2026 = List.of(
+        "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+        "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16"
     );
+    // India CPI (release dates — typically 12th of each month, IST evening)
+    private static final List<String> INDIA_CPI_DATES_2026 = List.of(
+        "2026-01-12", "2026-02-12", "2026-03-12", "2026-04-13",
+        "2026-05-12", "2026-06-12", "2026-07-13", "2026-08-12",
+        "2026-09-14", "2026-10-12", "2026-11-12", "2026-12-14"
+    );
+
+    private static class CalendarEvent {
+        String iso;
+        int daysUntil;
+        CalendarEvent(String iso, int daysUntil) { this.iso = iso; this.daysUntil = daysUntil; }
+    }
+
+    private CalendarEvent nextEvent(List<String> dates) {
+        java.time.LocalDate today = java.time.LocalDate.now(IST);
+        for (String d : dates) {
+            try {
+                java.time.LocalDate dt = java.time.LocalDate.parse(d);
+                if (!dt.isBefore(today)) {
+                    return new CalendarEvent(d, (int) java.time.temporal.ChronoUnit.DAYS.between(today, dt));
+                }
+            } catch (Exception ignored) {}
+        }
+        return new CalendarEvent("", -1);
+    }
+
+    private String buildCalendarHint(CalendarEvent fomc, CalendarEvent cpi) {
+        StringBuilder sb = new StringBuilder();
+        if (fomc.daysUntil == 0) sb.append("⚠ FOMC TODAY · expect volatility · cut size 50%");
+        else if (fomc.daysUntil == 1) sb.append("⚠ FOMC tomorrow · tighten stops · cut size");
+        else if (fomc.daysUntil >= 2 && fomc.daysUntil <= 3) sb.append("FOMC in ").append(fomc.daysUntil).append("d · prep for vol spike");
+        if (cpi.daysUntil == 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append("⚠ India CPI today · RBI reaction risk");
+        } else if (cpi.daysUntil == 1) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append("India CPI tomorrow · watch headline & core");
+        } else if (cpi.daysUntil >= 2 && cpi.daysUntil <= 3) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append("India CPI in ").append(cpi.daysUntil).append("d");
+        }
+        return sb.toString();
+    }
+
+    private double round2(double v) {
+        return Math.round(v * 100.0) / 100.0;
+    }
 
     // ═══════════════════════════════════════════════════════════
     //  MAIN METHOD — called by controller
@@ -85,6 +146,7 @@ public class MarketPulseInsightsService {
                 .fiiDiiIntelligence(computeFiiDiiIntelligence(fiiDiiDays))
                 .dealIntelligence(computeDealIntelligence(blockDeals, bulkDeals, corpEvents, deliveryData))
                 .deliveryAnalysis(computeDeliveryAnalysis(deliveryData, blockDeals, bulkDeals, fiiDiiDays))
+                .institutionalActivity(computeInstitutionalActivity(blockDeals, bulkDeals, deliveryData))
                 .strategyScorecard(computeStrategyScorecard())
                 .computedAt(System.currentTimeMillis())
                 .marketStatus(getMarketStatus())
@@ -107,7 +169,7 @@ public class MarketPulseInsightsService {
     //  TIER 1: MARKET STATE
     // ═══════════════════════════════════════════════════════════
 
-    private MarketState computeMarketState(MarketPulseService.MacroSnapshot snap,
+    private MarketPulseInsightsDTO.MarketState computeMarketState(MarketPulseService.MacroSnapshot snap,
                                             List<Map<String, Object>> fiiDiiDays) {
         // Read ASS from Redis
         double assScore = readDouble("asian:sentiment:score", 0);
@@ -174,15 +236,62 @@ public class MarketPulseInsightsService {
         // Summary
         String summary = buildMarketSummary(direction, assScore, fiiNet, diiNet, vix, niftyChg, dxyChg, snap);
 
-        return MarketState.builder()
+        // ── Nifty 50 (from Streaming Candle hot-stocks enrichment) ──
+        double nifty50Px = 0, nifty50Chg = 0;
+        try {
+            String hsJson = readString("hotstocks:v1:999920000", null);
+            if (hsJson != null) {
+                JsonNode hs = mapper.readTree(hsJson);
+                nifty50Px = hs.path("ltpYesterday").asDouble(0);
+                nifty50Chg = hs.path("change1dPct").asDouble(0);
+            }
+        } catch (Exception ignored) {}
+
+        // ── SGX / GIFT Nifty (from sgxnifty.org scraper via Kafka) ──
+        double sgxPx = snap.getGiftNiftyPrice() > 0 ? snap.getGiftNiftyPrice() : snap.getSgxNiftyLastTrade();
+        double sgxChg = snap.getGiftNiftyChangePct();
+
+        // ── Asian markets (read same pattern as computeAsianMarkets) ──
+        double nikkeiChg   = readDouble("global:indices:nikkei:changePct", 0);
+        double hangSengChg = readDouble("global:indices:hangseng:changePct", 0);
+        double shanghaiChg = readDouble("global:indices:shanghai:changePct", 0);
+        double kospiChg    = readDouble("global:indices:kospi:changePct", 0);
+
+        // ── Phase 5+6: macro rates + computed spreads + calendar ──
+        double us10y    = readDouble("global:indices:us10y:price", 0);
+        double us10yChg = readDouble("global:indices:us10y:changePct", 0);
+        double vixDivergence = vix - snap.getUsVixPrice();
+        double brentWtiSpread = snap.getBrentOilPrice() - snap.getCrudeOilPrice();
+
+        // FOMC + India CPI calendar
+        CalendarEvent fomc = nextEvent(FOMC_DATES_2026);
+        CalendarEvent cpi  = nextEvent(INDIA_CPI_DATES_2026);
+        String calendarHint = buildCalendarHint(fomc, cpi);
+
+        // ── Phase 4: per-card inferences + globalRead ──
+        java.util.Map<String, String> inferences = buildCardInferences(
+            snap, sgxChg, nifty50Chg, vix, fiiNet, diiNet, dxyChg, assScore,
+            nikkeiChg, hangSengChg, shanghaiChg, kospiChg);
+        String globalRead = buildGlobalRead(direction, assScore, fiiNet, diiNet, vix,
+            nifty50Chg, sgxChg, dxyChg, snap);
+
+        return MarketPulseInsightsDTO.MarketState.builder()
             .direction(direction)
             .confidence(confidence)
             .dayType(dayType)
             .summary(summary)
             .assScore(assScore)
             .assRegime(assRegime)
-            .niftyPrice(snap.getGiftNiftyPrice())
+            // Legacy field — points to SGX/GIFT Nifty (for back-compat)
+            .niftyPrice(sgxPx)
             .niftyChangePct(niftyChg)
+            // Explicit separated fields (Phase 4)
+            .sgxNiftyPrice(sgxPx)
+            .sgxNiftyChangePct(sgxChg)
+            .nifty50Price(nifty50Px)
+            .nifty50ChangePct(nifty50Chg)
+            .cardInferences(inferences)
+            .globalRead(globalRead)
             .indiaVix(vix)
             .crudePrice(snap.getCrudeOilPrice())
             .crudeChangePct(snap.getCrudeOilChangePct())
@@ -198,8 +307,39 @@ public class MarketPulseInsightsService {
             .diiNetToday(diiNet)
             .usVix(snap.getUsVixPrice())
             .usVixChangePct(snap.getUsVixChangePct())
-            .giftNiftyPrice(snap.getGiftNiftyPrice())
-            .giftNiftyChangePct(snap.getGiftNiftyChangePct())
+            // US indices (from sgxnifty.org scraper → MacroSnapshot)
+            .sp500Price(snap.getSp500Price())
+            .sp500ChangePct(snap.getSp500ChangePct())
+            .dowPrice(snap.getDowPrice())
+            .dowChangePct(snap.getDowChangePct())
+            .nasdaqPrice(snap.getNasdaqPrice())
+            .nasdaqChangePct(snap.getNasdaqChangePct())
+            // Brent (Phase 1 — already scraped)
+            .brentPrice(snap.getBrentOilPrice())
+            .brentChangePct(snap.getBrentOilChangePct())
+            // Europe + Middle East populated by Phase 2 poller; read from Redis if available
+            .ftsePrice(readDouble("global:indices:ftse:price", 0))
+            .ftseChangePct(readDouble("global:indices:ftse:changePct", 0))
+            .daxPrice(readDouble("global:indices:dax:price", 0))
+            .daxChangePct(readDouble("global:indices:dax:changePct", 0))
+            .cacPrice(readDouble("global:indices:cac:price", 0))
+            .cacChangePct(readDouble("global:indices:cac:changePct", 0))
+            .tasiPrice(readDouble("global:indices:tasi:price", 0))
+            .tasiChangePct(readDouble("global:indices:tasi:changePct", 0))
+            .uaePrice(readDouble("global:indices:uae:price", 0))
+            .uaeChangePct(readDouble("global:indices:uae:changePct", 0))
+            // Phase 5+6 macro
+            .us10yYield(us10y)
+            .us10yChangePct(us10yChg)
+            .vixDivergence(round2(vixDivergence))
+            .brentWtiSpread(round2(brentWtiSpread))
+            .nextFomcDate(fomc.iso)
+            .daysUntilFomc(fomc.daysUntil)
+            .nextCpiDate(cpi.iso)
+            .daysUntilCpi(cpi.daysUntil)
+            .calendarHint(calendarHint)
+            .giftNiftyPrice(sgxPx)
+            .giftNiftyChangePct(sgxChg)
             .advances(snap.getAdvanceDecline() != null ? snap.getAdvanceDecline().getAdvances() : 0)
             .declines(snap.getAdvanceDecline() != null ? snap.getAdvanceDecline().getDeclines() : 0)
             .adRatioLabel(snap.getAdvanceDecline() != null ? snap.getAdvanceDecline().getRatioLabel() : "0:0")
@@ -208,6 +348,219 @@ public class MarketPulseInsightsService {
             .foRatioLabel(snap.getAdvanceDecline() != null ? snap.getAdvanceDecline().getFoRatioLabel() : "0:0")
             .timestamp(System.currentTimeMillis())
             .build();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  PHASE 4: Per-card cross-indice inferences
+    // ══════════════════════════════════════════════════════════════
+    // Each inference is a short 1-line takeaway that considers the asset's own move
+    // IN CONTEXT of the rest of the market. The rules are deterministic — no LLM —
+    // and keyed by card id (frontend reads via data.marketState.cardInferences[cardId]).
+    private java.util.Map<String, String> buildCardInferences(
+            MarketPulseService.MacroSnapshot snap,
+            double sgxChg, double nifty50Chg, double vix, double fiiNet, double diiNet,
+            double dxyChg, double ass,
+            double nikkeiChg, double hangSengChg, double shanghaiChg, double kospiChg) {
+
+        java.util.Map<String, String> inf = new java.util.LinkedHashMap<>();
+
+        // Nifty 50 — reflects the last NSE close + rest of the world
+        if (nifty50Chg > 1.5) inf.put("nifty50", "Strong bullish close · momentum into next session");
+        else if (nifty50Chg > 0.5) inf.put("nifty50", ass > 0 ? "Positive close · Asia tailwind extends" : "Positive close · domestic-led rally");
+        else if (nifty50Chg > 0) inf.put("nifty50", "Mildly positive · trend intact");
+        else if (nifty50Chg < -1.5) inf.put("nifty50", "Sharp selloff · defensive bias next session");
+        else if (nifty50Chg < -0.5) inf.put("nifty50", fiiNet < 0 ? "Weak close · FII selling pressure" : "Weak close · profit-booking");
+        else if (nifty50Chg < 0) inf.put("nifty50", "Mildly negative · consolidation");
+        else inf.put("nifty50", "Flat close · awaits directional cue");
+
+        // SGX Nifty — overnight futures, reflects US + Asia overlap
+        if (sgxChg > 0.5) inf.put("sgxNifty", "Gap-up signal · global cues supportive");
+        else if (sgxChg > 0.1) inf.put("sgxNifty", "Mild premium · positive bias");
+        else if (sgxChg < -0.5) inf.put("sgxNifty", "Gap-down signal · global weakness");
+        else if (sgxChg < -0.1) inf.put("sgxNifty", "Mild discount · cautious open likely");
+        else inf.put("sgxNifty", "Flat overnight · no gap signal");
+
+        // India VIX — volatility regime context
+        if (vix > 25) inf.put("indiaVix", "High fear · option premiums rich · hedge first");
+        else if (vix > 20) inf.put("indiaVix", "Elevated · monitor for spike, reduce size");
+        else if (vix > 15) inf.put("indiaVix", "Normal · regular position sizing");
+        else if (vix > 0) inf.put("indiaVix", "Calm · complacency risk · watch for shocks");
+        else inf.put("indiaVix", "DM");
+
+        // USD/INR — rupee strength + DXY interaction
+        if (dxyChg < -0.3) inf.put("usdInr", "Weak $ = rupee tailwind · EM flows supportive");
+        else if (dxyChg > 0.3) inf.put("usdInr", "Strong $ = rupee pressure · FII outflow risk");
+        else inf.put("usdInr", "Stable · no strong FX signal");
+
+        // Asian markets — each contextualised to overall Asia + India impact
+        inf.put("nikkei", asianCardInf("Nikkei", nikkeiChg, ass));
+        inf.put("hangSeng", asianCardInf("Hang Seng", hangSengChg, ass));
+        inf.put("shanghai", asianCardInf("Shanghai", shanghaiChg, ass));
+        inf.put("kospi", asianCardInf("KOSPI", kospiChg, ass));
+
+        // US markets — daily action + pre-market for next IST session
+        double dowChg = snap.getDowChangePct();
+        double sp500Chg = snap.getSp500ChangePct();
+        double nasdaqChg = snap.getNasdaqChangePct();
+        double usVixChg = snap.getUsVixChangePct();
+        double usVix = snap.getUsVixPrice();
+
+        inf.put("dow",    usCardInf("Dow", dowChg));
+        inf.put("sp500",  usCardInf("S&P 500", sp500Chg));
+        inf.put("nasdaq", usCardInf("Nasdaq", nasdaqChg));
+        if (usVix > 25) inf.put("usVix", "High fear on Wall Street · global risk-off caution");
+        else if (usVix > 20) inf.put("usVix", "Elevated · hedging activity");
+        else if (usVix > 0) inf.put("usVix", "Calm · risk-on conditions");
+        else inf.put("usVix", "DM");
+
+        // Europe — generally neutral impact, but extremes matter
+        inf.put("ftse", euCardInf("FTSE", readDouble("global:indices:ftse:changePct", 0)));
+        inf.put("dax",  euCardInf("DAX",  readDouble("global:indices:dax:changePct", 0)));
+        inf.put("cac",  euCardInf("CAC",  readDouble("global:indices:cac:changePct", 0)));
+
+        // Middle East — oil-economy proxies
+        double crudeChg = snap.getCrudeOilChangePct();
+        double tasiChg = readDouble("global:indices:tasi:changePct", 0);
+        double uaeChg = readDouble("global:indices:uae:changePct", 0);
+        inf.put("tasi", meCardInf("TASI", tasiChg, crudeChg));
+        inf.put("uae",  meCardInf("UAE", uaeChg, crudeChg));
+
+        // Commodities — cross-read with DXY + US session + India impact
+        inf.put("crudeWti", crudeInf(crudeChg, dxyChg));
+        double brentChg = snap.getBrentOilChangePct();
+        inf.put("brent", Math.abs(brentChg) < 0.1 ? "Flat · no Middle East supply shock"
+            : brentChg > 0 ? "Up · supportive for OMCs' cracks" : "Down · OMC inventory gain ahead");
+        double goldChg = snap.getGoldChangePct();
+        inf.put("gold", goldChg > 1 ? "Bid · safe-haven demand · risk-off tint"
+            : goldChg < -1 ? "Sold · risk-on dominates"
+            : Math.abs(goldChg) < 0.3 ? "Flat · no macro shock"
+            : goldChg > 0 ? "Mildly up · watch USD" : "Mildly down · tracking yields");
+        double silverChg = snap.getSilverChangePct();
+        inf.put("silver", silverChg > 2 ? "Surge · industrial + monetary demand"
+            : silverChg < -1 ? "Soft · profit-booking"
+            : Math.abs(silverChg) < 0.3 ? "Flat · tracking gold"
+            : "Normal · stable metals picture");
+
+        // DXY — the single biggest EM driver
+        if (dxyChg < -0.5) inf.put("dxy", "Sharply weak · EM flows strong · FII inflows likely");
+        else if (dxyChg < 0) inf.put("dxy", "Mildly weak · constructive for EM");
+        else if (dxyChg < 0.3) inf.put("dxy", "Flat · no strong FX rotation");
+        else inf.put("dxy", "Strong $ · EM pressure · watch FII outflows");
+
+        // FII / DII
+        if (fiiNet > 3000) inf.put("fii", "Aggressive buying · risk-on conviction");
+        else if (fiiNet > 500) inf.put("fii", "Net buying · supportive for Nifty");
+        else if (fiiNet > -500) inf.put("fii", "Neutral · no strong institutional signal");
+        else if (fiiNet > -3000) inf.put("fii", "Net selling · cautious rotation");
+        else inf.put("fii", "Aggressive selling · risk-off · hedge exposure");
+
+        if (diiNet > 3000) inf.put("dii", "Strong domestic support · absorbing FII sell-offs");
+        else if (diiNet > 500) inf.put("dii", "Net buying · domestic confidence");
+        else if (diiNet > -500) inf.put("dii", "Neutral · waiting for direction");
+        else inf.put("dii", "Net selling · domestic de-risking · unusual");
+
+        return inf;
+    }
+
+    private String asianCardInf(String name, double chg, double ass) {
+        if (chg > 1.5) return name + " strong green · tailwind for India opening";
+        if (chg > 0.3) return name + " mildly green · supportive";
+        if (chg < -1.5) return name + " sharp red · headwind for opening";
+        if (chg < -0.3) return name + " mildly red · caution";
+        return name + " flat · no directional cue";
+    }
+
+    private String usCardInf(String name, double chg) {
+        if (chg > 1) return name + " strong · supports risk-on bias for next session";
+        if (chg > 0.2) return name + " positive · mild tailwind for EMs";
+        if (chg < -1) return name + " sharp fall · global risk-off · cautious open";
+        if (chg < -0.2) return name + " weak · mild headwind";
+        return name + " flat · no strong signal";
+    }
+
+    private String euCardInf(String name, double chg) {
+        if (chg > 1) return name + " strong · supportive for EU-EM flows";
+        if (chg < -1) return name + " weak · risk-off tint";
+        if (Math.abs(chg) < 0.2) return name + " flat · no strong signal";
+        return name + (chg > 0 ? " mildly up" : " mildly down") + " · marginal impact";
+    }
+
+    private String meCardInf(String name, double chg, double crudeChg) {
+        if (chg > 1 && crudeChg > 0.5) return name + " up with crude · oil rally confirmation";
+        if (chg < -1 && crudeChg < -0.5) return name + " down with crude · oil weakness";
+        if (Math.abs(chg) < 0.2) return name + " flat · no oil-driven signal";
+        return name + (chg > 0 ? " mildly up" : " mildly down") + " · watch crude";
+    }
+
+    private String crudeInf(double crudeChg, double dxyChg) {
+        if (crudeChg > 2) return "Sharp rally · OMC cracks compress · inflation risk up";
+        if (crudeChg > 0.5) return "Up · mild inflation tailwind, watch OMC margins";
+        if (crudeChg < -2) return "Sharp drop · OMC inventory gain · disinflation supports";
+        if (crudeChg < -0.5) return "Down · marginal OMC relief";
+        return "Flat · no oil-driven signal";
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  PHASE 4: Holistic one-line read across all markets
+    // ══════════════════════════════════════════════════════════════
+    private String buildGlobalRead(String direction, double ass, double fiiNet, double diiNet,
+                                    double vix, double nifty50Chg, double sgxChg, double dxyChg,
+                                    MarketPulseService.MacroSnapshot snap) {
+        StringBuilder sb = new StringBuilder();
+
+        // 1. Asia bias
+        if (ass > 1) sb.append("Asia strong green (ASS ").append(String.format("%+.2f", ass)).append("), ");
+        else if (ass > 0.3) sb.append("Asia mildly green, ");
+        else if (ass < -1) sb.append("Asia red, ");
+        else if (ass < -0.3) sb.append("Asia mildly red, ");
+        else sb.append("Asia mixed, ");
+
+        // 2. US bias (use average of sp500 + nasdaq as leading indicator)
+        double usAvg = (snap.getSp500ChangePct() + snap.getNasdaqChangePct()) / 2.0;
+        if (usAvg > 0.5) sb.append("US risk-on, ");
+        else if (usAvg < -0.5) sb.append("US risk-off, ");
+        else sb.append("US mixed, ");
+
+        // 3. Flows
+        if (fiiNet > 500 && diiNet > 500) sb.append("both FII+DII buying, ");
+        else if (fiiNet > 500) sb.append(String.format("FII +%d Cr buying, ", (int) fiiNet));
+        else if (fiiNet < -500) sb.append(String.format("FII %d Cr selling, ", (int) fiiNet));
+        else sb.append("flows neutral, ");
+
+        // 4. DXY-EM read
+        if (dxyChg < -0.3) sb.append("weak dollar (EM tailwind), ");
+        else if (dxyChg > 0.3) sb.append("strong dollar (EM headwind), ");
+
+        // 5. Verdict
+        String verdict;
+        int score = 0;
+        if (ass > 0.5) score++;
+        if (ass < -0.5) score--;
+        if (usAvg > 0.3) score++;
+        if (usAvg < -0.3) score--;
+        if (fiiNet > 500) score++;
+        if (fiiNet < -500) score--;
+        if (dxyChg < -0.3) score++;
+        if (dxyChg > 0.3) score--;
+        if (nifty50Chg > 0.5) score++;
+        if (nifty50Chg < -0.5) score--;
+
+        if (score >= 3) verdict = "bullish setup for next session — buy dips";
+        else if (score >= 1) verdict = "mildly positive bias — trend-follow with SL";
+        else if (score <= -3) verdict = "bearish setup — hedge or reduce exposure";
+        else if (score <= -1) verdict = "mildly negative bias — tighten stops";
+        else verdict = "neutral/mixed — range-bound, wait for break";
+
+        sb.append(verdict).append(".");
+
+        // 6. Commodity caveat
+        double crudeChg = snap.getCrudeOilChangePct();
+        if (crudeChg > 1.5) sb.append(" ⚠ Crude +").append(String.format("%.1f", crudeChg)).append("% — OMC/aviation headwind.");
+        else if (crudeChg < -1.5) sb.append(" ✓ Crude ").append(String.format("%.1f", crudeChg)).append("% — disinflation supportive.");
+
+        if (vix > 22) sb.append(" ⚠ VIX ").append(String.format("%.1f", vix)).append(" elevated — size down.");
+
+        return sb.toString();
     }
 
     private String buildMarketSummary(String direction, double ass, double fiiNet, double diiNet,
@@ -646,20 +999,32 @@ public class MarketPulseInsightsService {
     }
 
     private AsianMarkets computeAsianMarkets(MarketPulseService.MacroSnapshot snap) {
-        // Read from Redis (set by FastAnalytics ASS scraper)
-        String indicesJson = readString("asian:sentiment:indices", null);
+        // Read from Redis (populated by GlobalIndicesPoller from FastAnalytics yfinance)
         double ass = readDouble("asian:sentiment:score", 0);
         String regime = readString("asian:sentiment:regime", "NEUTRAL");
 
-        double nikkei = 0, hangSeng = 0, shanghai = 0, kospi = 0;
-        if (indicesJson != null) {
-            try {
-                Map<String, Object> indices = mapper.readValue(indicesJson, Map.class);
-                nikkei = toDouble(indices.get("nikkei"));
-                hangSeng = toDouble(indices.get("hangSeng"));
-                shanghai = toDouble(indices.get("shanghai"));
-                kospi = toDouble(indices.get("kospi"));
-            } catch (Exception ignored) {}
+        // Prices + change% live under global:indices:{name}:{field} (Phase 3 unified pattern)
+        double nikkeiPx = readDouble("global:indices:nikkei:price", 0);
+        double nikkei   = readDouble("global:indices:nikkei:changePct", 0);
+        double hsPx     = readDouble("global:indices:hangseng:price", 0);
+        double hangSeng = readDouble("global:indices:hangseng:changePct", 0);
+        double shPx     = readDouble("global:indices:shanghai:price", 0);
+        double shanghai = readDouble("global:indices:shanghai:changePct", 0);
+        double ksPx     = readDouble("global:indices:kospi:price", 0);
+        double kospi    = readDouble("global:indices:kospi:changePct", 0);
+
+        // Backwards-compat fallback: asian:sentiment:indices JSON blob
+        if (nikkei == 0 && hangSeng == 0 && shanghai == 0 && kospi == 0) {
+            String indicesJson = readString("asian:sentiment:indices", null);
+            if (indicesJson != null) {
+                try {
+                    Map<String, Object> indices = mapper.readValue(indicesJson, Map.class);
+                    nikkei = toDouble(indices.get("nikkei"));
+                    hangSeng = toDouble(indices.get("hangSeng"));
+                    shanghai = toDouble(indices.get("shanghai"));
+                    kospi = toDouble(indices.get("kospi"));
+                } catch (Exception ignored) {}
+            }
         }
 
         String inference;
@@ -687,8 +1052,10 @@ public class MarketPulseInsightsService {
         }
 
         return AsianMarkets.builder()
-            .nikkeiChangePct(nikkei).hangSengChangePct(hangSeng)
-            .shanghaiChangePct(shanghai).kospiChangePct(kospi)
+            .nikkeiPrice(nikkeiPx).nikkeiChangePct(nikkei)
+            .hangSengPrice(hsPx).hangSengChangePct(hangSeng)
+            .shanghaiPrice(shPx).shanghaiChangePct(shanghai)
+            .kospiPrice(ksPx).kospiChangePct(kospi)
             .assScore(ass).regime(regime).inference(inference)
             .build();
     }
@@ -755,6 +1122,351 @@ public class MarketPulseInsightsService {
             .fiiSellingStreak(sellingStreak).diiBuyingStreak(0)
             .narrative(narrative).dailyBreakdown(fiiDiiDays)
             .build();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  PHASE 5+6: Institutional Activity (Tab 4)
+    //  Aggregates today's block + bulk deals into security-wise and fund-wise
+    //  views, with a Wyckoff-style divergence engine that flags
+    //  ACCUMULATION (institutional buy + retail sell) and
+    //  DISTRIBUTION (institutional sell + retail buy) patterns.
+    // ══════════════════════════════════════════════════════════════
+    @SuppressWarnings("unchecked")
+    private MarketPulseInsightsDTO.InstitutionalActivity computeInstitutionalActivity(
+            List<Map<String, Object>> blockDeals,
+            List<Map<String, Object>> bulkDeals,
+            Map<String, Object> deliveryData) {
+        try {
+            // Find the most recent _date present in deals — that's our "today" of record.
+            String dataDate = null;
+            for (var d : blockDeals) { var s = (String) d.get("_date"); if (s != null && (dataDate == null || s.compareTo(dataDate) > 0)) dataDate = s; }
+            for (var d : bulkDeals)  { var s = (String) d.get("_date"); if (s != null && (dataDate == null || s.compareTo(dataDate) > 0)) dataDate = s; }
+            final String latestDate = dataDate;
+
+            // Filter to deals from the latest date only
+            List<Map<String, Object>> all = new ArrayList<>();
+            if (blockDeals != null) for (var d : blockDeals) if (latestDate == null || latestDate.equals(d.get("_date"))) all.add(d);
+            if (bulkDeals != null)  for (var d : bulkDeals)  if (latestDate == null || latestDate.equals(d.get("_date"))) all.add(d);
+
+            // ── Aggregate by symbol ──
+            Map<String, SecurityAgg> bySym = new LinkedHashMap<>();
+            for (var d : all) {
+                String symbol = trimUpper((String) d.get("symbol"));
+                if (symbol == null || symbol.isEmpty()) continue;
+                String name = nullSafe((String) d.getOrDefault("name", d.get("securityName")));
+                String client = nullSafe((String) d.get("clientName"));
+                String side = nullSafe((String) d.get("buySell")).toUpperCase();
+                double valueCr = toDouble(d.get("valueCr"));
+                String type = classifyClient(client);
+
+                SecurityAgg agg = bySym.computeIfAbsent(symbol, k -> {
+                    SecurityAgg a = new SecurityAgg();
+                    a.symbol = k;
+                    a.companyName = name;
+                    a.sector = classifySector(k + " " + nullSafe(name));
+                    return a;
+                });
+                agg.dealCount++;
+                if (valueCr > agg.topDealCr) agg.topDealCr = valueCr;
+                boolean isBuy = side.contains("BUY");
+
+                if (isBuy) {
+                    agg.buyCr += valueCr;
+                    if (valueCr > agg.topBuyValueCr) { agg.topBuyValueCr = valueCr; agg.topBuyer = client; }
+                } else {
+                    agg.sellCr += valueCr;
+                    if (valueCr > agg.topSellValueCr) { agg.topSellValueCr = valueCr; agg.topSeller = client; }
+                }
+
+                double signed = isBuy ? valueCr : -valueCr;
+                switch (type) {
+                    case "FII": agg.fiiNet += signed; break;
+                    case "DII": agg.diiNet += signed; break;
+                    case "PROP_BROKER": agg.propNet += signed; break;
+                    default: agg.otherNet += signed; break;
+                }
+            }
+
+            // ── Per-symbol delivery% lookup ──
+            Map<String, Double> deliveryBySym = new HashMap<>();
+            Map<String, Double> deliveryBySector = new HashMap<>();
+            if (deliveryData != null) {
+                Object bs = deliveryData.get("bySymbol");
+                if (bs instanceof Map) {
+                    for (var e : ((Map<String, Object>) bs).entrySet()) {
+                        deliveryBySym.put(trimUpper(e.getKey()), toDouble(e.getValue()));
+                    }
+                }
+                Object sectors = deliveryData.get("sectors");
+                if (sectors instanceof Map) {
+                    for (var e : ((Map<String, Object>) sectors).entrySet()) {
+                        var sd = (Map<String, Object>) e.getValue();
+                        deliveryBySector.put(e.getKey(), toDouble(sd.get("deliveryPct")));
+                    }
+                }
+            }
+
+            // Compute sector net flow direction (used for sector-confirmation gate)
+            Map<String, Double> sectorNet = new HashMap<>();
+            for (var agg : bySym.values()) {
+                sectorNet.merge(agg.sector, agg.fiiNet + agg.diiNet, Double::sum);
+            }
+
+            // ── Build SecurityActivity entries with divergence engine ──
+            List<MarketPulseInsightsDTO.InstitutionalActivity.SecurityActivity> securities = new ArrayList<>();
+            int accumCount = 0;
+            int distCount = 0;
+            double totalValue = 0;
+            for (var agg : bySym.values()) {
+                double netCr = agg.buyCr - agg.sellCr;
+                double instNet = agg.fiiNet + agg.diiNet;          // institutional net
+                double deliv = deliveryBySym.getOrDefault(agg.symbol, 0.0);
+                double sectorDeliv = deliveryBySector.getOrDefault(agg.sector, 50.0);
+                double sectorMedian = sectorDeliv;
+                double sectorFlow = sectorNet.getOrDefault(agg.sector, 0.0);
+                totalValue += Math.abs(netCr);
+
+                DivergenceResult dr = computeDivergence(agg, instNet, deliv, sectorMedian, sectorFlow);
+                if ("ACCUMULATION".equals(dr.state)) accumCount++;
+                if ("DISTRIBUTION".equals(dr.state)) distCount++;
+
+                securities.add(MarketPulseInsightsDTO.InstitutionalActivity.SecurityActivity.builder()
+                    .symbol(agg.symbol)
+                    .sector(agg.sector)
+                    .netCr(round2(netCr))
+                    .fiiNetCr(round2(agg.fiiNet))
+                    .diiNetCr(round2(agg.diiNet))
+                    .propNetCr(round2(agg.propNet))
+                    .otherNetCr(round2(agg.otherNet))
+                    .dealCount(agg.dealCount)
+                    .topDealCr(round2(agg.topDealCr))
+                    .deliveryPct(round2(deliv))
+                    .sectorDeliveryPct(round2(sectorMedian))
+                    .topBuyer(truncateName(agg.topBuyer))
+                    .topSeller(truncateName(agg.topSeller))
+                    .divergenceState(dr.state)
+                    .divergenceConfidence(dr.confidence)
+                    .divergenceReasons(dr.reasons)
+                    .inference(dr.inference)
+                    .build());
+            }
+            // Sort by abs(netCr) desc
+            securities.sort((a, b) -> Double.compare(Math.abs(b.getNetCr()), Math.abs(a.getNetCr())));
+
+            // ── Aggregate by client name ──
+            Map<String, ClientAgg> byClient = new LinkedHashMap<>();
+            for (var d : all) {
+                String client = nullSafe((String) d.get("clientName"));
+                if (client.isEmpty()) continue;
+                String symbol = trimUpper((String) d.get("symbol"));
+                String side = nullSafe((String) d.get("buySell")).toUpperCase();
+                double valueCr = toDouble(d.get("valueCr"));
+                boolean isBuy = side.contains("BUY");
+
+                ClientAgg agg = byClient.computeIfAbsent(client, k -> {
+                    ClientAgg a = new ClientAgg();
+                    a.name = k;
+                    a.type = classifyClient(k);
+                    return a;
+                });
+                agg.dealCount++;
+                if (isBuy) {
+                    agg.buyCr += valueCr;
+                    agg.buySymbols.merge(symbol, valueCr, Double::sum);
+                } else {
+                    agg.sellCr += valueCr;
+                    agg.sellSymbols.merge(symbol, valueCr, Double::sum);
+                }
+            }
+
+            List<MarketPulseInsightsDTO.InstitutionalActivity.ClientFlow> clients = new ArrayList<>();
+            for (var agg : byClient.values()) {
+                double netCr = agg.buyCr - agg.sellCr;
+                List<String> topBuy = agg.buySymbols.entrySet().stream()
+                    .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                    .limit(5).map(Map.Entry::getKey).collect(Collectors.toList());
+                List<String> topSell = agg.sellSymbols.entrySet().stream()
+                    .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                    .limit(5).map(Map.Entry::getKey).collect(Collectors.toList());
+
+                String inference;
+                if (agg.buyCr > 0 && agg.sellCr == 0) inference = "Pure buyer · added " + (int) Math.round(netCr) + " Cr";
+                else if (agg.sellCr > 0 && agg.buyCr == 0) inference = "Pure seller · trimmed " + (int) Math.round(Math.abs(netCr)) + " Cr";
+                else if (Math.abs(netCr) < 1) inference = "Two-sided · churning";
+                else if (netCr > 0) inference = "Net buyer · accumulating " + (int) Math.round(netCr) + " Cr";
+                else inference = "Net seller · distributing " + (int) Math.round(Math.abs(netCr)) + " Cr";
+
+                clients.add(MarketPulseInsightsDTO.InstitutionalActivity.ClientFlow.builder()
+                    .name(truncateName(agg.name))
+                    .type(agg.type)
+                    .buyCr(round2(agg.buyCr))
+                    .sellCr(round2(agg.sellCr))
+                    .netCr(round2(netCr))
+                    .dealCount(agg.dealCount)
+                    .topBuySymbols(topBuy)
+                    .topSellSymbols(topSell)
+                    .inference(inference)
+                    .build());
+            }
+            clients.sort((a, b) -> Double.compare(Math.abs(b.getNetCr()), Math.abs(a.getNetCr())));
+
+            // ── Headline summary ──
+            String headline;
+            if (accumCount > 0 && distCount == 0) {
+                headline = String.format("%d security(s) showing institutional accumulation. Watch for follow-through next session.", accumCount);
+            } else if (distCount > 0 && accumCount == 0) {
+                headline = String.format("%d security(s) showing institutional distribution. Caution on long entries.", distCount);
+            } else if (accumCount > 0 && distCount > 0) {
+                headline = String.format("Mixed: %d accumulation, %d distribution. Stock-pick over index plays.", accumCount, distCount);
+            } else {
+                headline = String.format("%d institutional deals across %d securities, no strong divergence patterns.", all.size(), bySym.size());
+            }
+
+            return MarketPulseInsightsDTO.InstitutionalActivity.builder()
+                .bySecurity(securities)
+                .byClient(clients)
+                .totalDealsCount(all.size())
+                .totalDealValueCr(round2(totalValue))
+                .accumulationCount(accumCount)
+                .distributionCount(distCount)
+                .headlineSummary(headline)
+                .dataDate(latestDate)
+                .build();
+        } catch (Exception e) {
+            log.error("[INSIGHTS] computeInstitutionalActivity failed: {}", e.getMessage(), e);
+            return MarketPulseInsightsDTO.InstitutionalActivity.builder()
+                .bySecurity(List.of()).byClient(List.of())
+                .totalDealsCount(0).totalDealValueCr(0)
+                .headlineSummary("Institutional activity unavailable")
+                .build();
+        }
+    }
+
+    // ── Wyckoff Divergence Engine ──
+    // Multi-gate validation (the framework agreed earlier).
+    // Available gates given our data: institutional net Cr magnitude, FII+DII alignment,
+    // delivery% vs sector median, sector confirmation. We don't have intraday volume or
+    // daily turnover so the volume gate is approximated by deal-count and net-Cr magnitude.
+    private DivergenceResult computeDivergence(SecurityAgg agg, double instNet, double deliv,
+                                                double sectorMedian, double sectorFlow) {
+        DivergenceResult r = new DivergenceResult();
+        r.reasons = new ArrayList<>();
+
+        if (Math.abs(instNet) < 2.0) {
+            // Too small to be a meaningful institutional move
+            r.state = "NEUTRAL";
+            r.confidence = "NONE";
+            r.inference = "Routine flow";
+            return r;
+        }
+
+        boolean fiiPositive = agg.fiiNet > 0.5;
+        boolean diiPositive = agg.diiNet > 0.5;
+        boolean fiiNegative = agg.fiiNet < -0.5;
+        boolean diiNegative = agg.diiNet < -0.5;
+
+        // Determine direction
+        boolean isBuyDivergence = instNet > 0;
+        boolean isSellDivergence = instNet < 0;
+
+        int gates = 0;
+
+        // Gate 1: Magnitude (≥5 Cr is meaningful institutional size)
+        if (Math.abs(instNet) >= 5) { gates++; r.reasons.add("Size " + (int) Math.round(Math.abs(instNet)) + " Cr"); }
+
+        // Gate 2: FII + DII same side (high-conviction signal when both align)
+        if ((fiiPositive && diiPositive) || (fiiNegative && diiNegative)) {
+            gates++; r.reasons.add("FII+DII aligned");
+        } else if ((fiiPositive && !diiNegative) || (fiiNegative && !diiPositive)
+                || (diiPositive && !fiiNegative) || (diiNegative && !fiiPositive)) {
+            // Half-credit: one side strong, other neutral
+            r.reasons.add("Single-side flow");
+        }
+
+        // Gate 3: Delivery% vs sector — accumulation with high delivery is highest quality
+        if (isBuyDivergence && deliv > Math.max(50, sectorMedian)) {
+            gates++; r.reasons.add(String.format("Delivery %.0f%% > sector %.0f%%", deliv, sectorMedian));
+        } else if (isSellDivergence && deliv < 35) {
+            gates++; r.reasons.add(String.format("Delivery %.0f%% (speculative)", deliv));
+        } else if (isSellDivergence && deliv > 55) {
+            // Distribution into strength — institutions selling, retail absorbing
+            gates++; r.reasons.add(String.format("Delivery %.0f%% — retail absorbing", deliv));
+        }
+
+        // Gate 4: Sector confirmation (same direction sector-wide)
+        if (isBuyDivergence && sectorFlow > 5) { gates++; r.reasons.add("Sector buying"); }
+        if (isSellDivergence && sectorFlow < -5) { gates++; r.reasons.add("Sector selling"); }
+
+        // Gate 5: Deal count (multiple deals = sustained interest)
+        if (agg.dealCount >= 3) { gates++; r.reasons.add(agg.dealCount + " deals"); }
+
+        // Final classification
+        if (gates >= 4 && isBuyDivergence) {
+            r.state = "ACCUMULATION";
+            r.confidence = "STRONG";
+            r.inference = String.format("🟢 STRONG accumulation · %s leading buys · BUY on next dip · stop -3%%", trimName(agg.topBuyer));
+        } else if (gates >= 4 && isSellDivergence) {
+            r.state = "DISTRIBUTION";
+            r.confidence = "STRONG";
+            r.inference = String.format("🔴 STRONG distribution · %s leading sells · AVOID longs · SHORT-bias", trimName(agg.topSeller));
+        } else if (gates == 3 && isBuyDivergence) {
+            r.state = "ACCUMULATION";
+            r.confidence = "MODERATE";
+            r.inference = "🟡 Moderate accumulation · watch for follow-through next session";
+        } else if (gates == 3 && isSellDivergence) {
+            r.state = "DISTRIBUTION";
+            r.confidence = "MODERATE";
+            r.inference = "🟠 Moderate distribution · tighten stops on existing longs";
+        } else if (gates == 2) {
+            r.state = isBuyDivergence ? "ACCUMULATION" : "DISTRIBUTION";
+            r.confidence = "WEAK";
+            r.inference = String.format("Weak %s · low conviction · wait for confirmation",
+                isBuyDivergence ? "buying" : "selling");
+        } else {
+            r.state = "NEUTRAL";
+            r.confidence = "NONE";
+            r.inference = String.format("Routine %s · no edge",
+                isBuyDivergence ? "institutional buy" : "institutional sell");
+        }
+        return r;
+    }
+
+    private String trimName(String name) {
+        if (name == null || name.isEmpty()) return "Institution";
+        String[] parts = name.split("\\s+");
+        return parts[0]; // First word = brand name typically
+    }
+    private String truncateName(String name) {
+        if (name == null) return null;
+        return name.length() > 50 ? name.substring(0, 47) + "…" : name;
+    }
+    private String trimUpper(String s) { return s == null ? null : s.trim().toUpperCase(); }
+    private String nullSafe(String s) { return s == null ? "" : s; }
+
+    private static class SecurityAgg {
+        String symbol;
+        String companyName;
+        String sector;
+        double buyCr = 0, sellCr = 0;
+        double fiiNet = 0, diiNet = 0, propNet = 0, otherNet = 0;
+        int dealCount = 0;
+        double topDealCr = 0;
+        double topBuyValueCr = 0, topSellValueCr = 0;
+        String topBuyer, topSeller;
+    }
+    private static class ClientAgg {
+        String name;
+        String type;
+        double buyCr = 0, sellCr = 0;
+        int dealCount = 0;
+        Map<String, Double> buySymbols = new HashMap<>();
+        Map<String, Double> sellSymbols = new HashMap<>();
+    }
+    private static class DivergenceResult {
+        String state;            // ACCUMULATION/DISTRIBUTION/NEUTRAL
+        String confidence;       // STRONG/MODERATE/WEAK/NONE
+        List<String> reasons;
+        String inference;
     }
 
     @SuppressWarnings("unchecked")
@@ -834,16 +1546,62 @@ public class MarketPulseInsightsService {
             .build();
     }
 
+    @SuppressWarnings("unchecked")
     private List<DealIntelligence.SectorFlow> computeSectorFlows(List<Map<String, Object>> blockDeals,
                                                                    List<Map<String, Object>> bulkDeals,
                                                                    Map<String, Object> deliveryData) {
+        // Phase 7c: bulk-deals API returns 5 trading days. The headline netCr should reflect
+        // the LATEST date only (so it matches the trader's mental model "what happened today");
+        // the 5-day aggregate is exposed separately as weekTotalCr for context.
+        String latestDate = null;
+        for (var d : blockDeals) { var s = (String) d.get("_date"); if (s != null && (latestDate == null || s.compareTo(latestDate) > 0)) latestDate = s; }
+        for (var d : bulkDeals)  { var s = (String) d.get("_date"); if (s != null && (latestDate == null || s.compareTo(latestDate) > 0)) latestDate = s; }
+        final String dateOfRecord = latestDate;
+
+        // Per-sector running totals (FII/DII/Other buy+sell + deal count) — TODAY ONLY
         Map<String, double[]> sectorAgg = new LinkedHashMap<>();
-        // [fiiBuy, fiiSell, diiBuy, diiSell, otherBuy, otherSell, dealCount]
+        // Per-sector → per-symbol stats — TODAY ONLY
+        Map<String, Map<String, double[]>> sectorBySymbol = new LinkedHashMap<>();
+        // Per-sector → per-client net Cr — TODAY ONLY
+        Map<String, Map<String, Double>> sectorByClient = new LinkedHashMap<>();
+        // Phase 8d: per-sector → per-symbol → per-client → [buyCr, sellCr] (for churn detection)
+        Map<String, Map<String, Map<String, double[]>>> sectorBySymbolByClient = new LinkedHashMap<>();
+        // Phase 8d: per-sector → per-client → [buyCr, sellCr] (for structured topClientFlows)
+        Map<String, Map<String, double[]>> sectorByClientGross = new LinkedHashMap<>();
+        // Phase 7c: 5-day cumulative net Cr per sector (separate from today)
+        Map<String, Double> weekTotalBySector = new HashMap<>();
 
-        for (var d : blockDeals) aggregateDealToSector(d, sectorAgg);
-        for (var d : bulkDeals) aggregateDealToSector(d, sectorAgg);
+        // First pass: walk all 5 days to populate weekTotalBySector
+        for (var d : blockDeals) accumulateWeekTotal(d, weekTotalBySector);
+        for (var d : bulkDeals)  accumulateWeekTotal(d, weekTotalBySector);
 
-        // Get delivery data by sector
+        // Phase 8a: build per-symbol 5-day net Cr timeseries (across the entire deal window).
+        // Sort all unique deal dates ascending so the series is oldest → newest.
+        java.util.SortedSet<String> dateSet = new java.util.TreeSet<>();
+        for (var d : blockDeals) { var s = (String) d.get("_date"); if (s != null) dateSet.add(s); }
+        for (var d : bulkDeals)  { var s = (String) d.get("_date"); if (s != null) dateSet.add(s); }
+        List<String> sortedDates = new ArrayList<>(dateSet);
+        Map<String, Integer> dateIndex = new HashMap<>();
+        for (int i = 0; i < sortedDates.size(); i++) dateIndex.put(sortedDates.get(i), i);
+        Map<String, double[]> symbolDailyNet = new HashMap<>();  // symbol → [day0, day1, ..., dayN-1]
+        for (var d : blockDeals) accumulateSymbolDaily(d, symbolDailyNet, dateIndex, sortedDates.size());
+        for (var d : bulkDeals)  accumulateSymbolDaily(d, symbolDailyNet, dateIndex, sortedDates.size());
+
+        // Second pass: aggregate ONLY the latest-date deals for the headline numbers
+        for (var d : blockDeals) {
+            if (latestDate == null || latestDate.equals(d.get("_date"))) {
+                aggregateDealToSector(d, sectorAgg, sectorBySymbol, sectorByClient,
+                    sectorBySymbolByClient, sectorByClientGross);
+            }
+        }
+        for (var d : bulkDeals) {
+            if (latestDate == null || latestDate.equals(d.get("_date"))) {
+                aggregateDealToSector(d, sectorAgg, sectorBySymbol, sectorByClient,
+                    sectorBySymbolByClient, sectorByClientGross);
+            }
+        }
+
+        // Sector-wide delivery%
         Map<String, Double> deliveryBySector = new HashMap<>();
         if (deliveryData != null && deliveryData.get("sectors") != null) {
             var sectors = (Map<String, Object>) deliveryData.get("sectors");
@@ -853,19 +1611,174 @@ public class MarketPulseInsightsService {
             }
         }
 
-        List<DealIntelligence.SectorFlow> flows = new ArrayList<>();
+        // ── Phase 7b: persist today's sector flows + read history for streak compute ──
+        Map<String, Double> todayBySector = new LinkedHashMap<>();
         for (var entry : sectorAgg.entrySet()) {
             double[] v = entry.getValue();
-            double net = (v[0] - v[1]) + (v[2] - v[3]) + (v[4] - v[5]);
-            double delivPct = deliveryBySector.getOrDefault(entry.getKey(), 0.0);
+            todayBySector.put(entry.getKey(), (v[0] - v[1]) + (v[2] - v[3]) + (v[4] - v[5]));
+        }
+        snapshotSectorFlows(todayBySector);
+        Map<String, Integer> streaks = computeSectorStreaks(todayBySector);
+        Map<String, String> streakDirs = computeSectorStreakDirections(todayBySector);
+
+        List<DealIntelligence.SectorFlow> flows = new ArrayList<>();
+        for (var entry : sectorAgg.entrySet()) {
+            String sector = entry.getKey();
+            double[] v = entry.getValue();
+            double fiiNet = v[0] - v[1];
+            double diiNet = v[2] - v[3];
+            double net = fiiNet + diiNet + (v[4] - v[5]);
+            double delivPct = deliveryBySector.getOrDefault(sector, 0.0);
+            int daysFlowing = streaks.getOrDefault(sector, 1);
+            String streakDir = streakDirs.getOrDefault(sector, net >= 0 ? "BUY" : "SELL");
+
+            // Top stocks contributing to this sector's net flow + Phase 8d churn detection
+            List<DealIntelligence.SectorFlow.StockContribution> topStocks = new ArrayList<>();
+            var bySymbol = sectorBySymbol.getOrDefault(sector, Map.of());
+            var symbolClientMap = sectorBySymbolByClient.getOrDefault(sector, Map.of());
+            var sortedSymbols = bySymbol.entrySet().stream()
+                .sorted((a, b) -> {
+                    // Sort by gross volume (buy + sell) instead of pure net — gives churners visibility
+                    double grossA = a.getValue()[0] + a.getValue()[1];
+                    double grossB = b.getValue()[0] + b.getValue()[1];
+                    return Double.compare(grossB, grossA);
+                })
+                .limit(3)
+                .collect(Collectors.toList());
+            double sectorChurnedSum = 0;  // for sector churn ratio
+            double sectorGrossSum = 0;
+            for (var s : sortedSymbols) {
+                double symBuy = s.getValue()[0];
+                double symSell = s.getValue()[1];
+                double symNet = symBuy - symSell;
+                double symGross = symBuy + symSell;
+                double symDeals = s.getValue()[2];
+
+                // Compute self-matched per client (sum of min(clientBuy, clientSell))
+                // + Phase 8c: FII vs DII per-stock split for alignment classification
+                var clientMap = symbolClientMap.getOrDefault(s.getKey(), Map.of());
+                double selfMatched = 0;
+                String dominantClient = null;
+                double dominantGross = 0;
+                double symFiiNet = 0;
+                double symDiiNet = 0;
+                for (var ce : clientMap.entrySet()) {
+                    double cBuy = ce.getValue()[0];
+                    double cSell = ce.getValue()[1];
+                    selfMatched += Math.min(cBuy, cSell);
+                    double cGross = cBuy + cSell;
+                    if (cGross > dominantGross) { dominantGross = cGross; dominantClient = ce.getKey(); }
+                    // Phase 8c: classify client and accumulate net per type
+                    String cType = classifyClient(ce.getKey());
+                    double cNet = cBuy - cSell;
+                    if ("FII".equals(cType)) symFiiNet += cNet;
+                    else if ("DII".equals(cType)) symDiiNet += cNet;
+                }
+                // churnRatio = fraction of gross that was self-matched (each matched ₹ counts on both sides → x2)
+                double churnRatio = symGross > 0 ? Math.min(1.0, (2 * selfMatched) / symGross) : 0;
+
+                // Phase 8c: FII/DII alignment classification (threshold 0.5 Cr to filter noise)
+                String alignment = classifyFiiDiiAlignment(symFiiNet, symDiiNet);
+
+                String flowQuality;
+                if (churnRatio > 0.7) flowQuality = "CHURN";
+                else if (Math.abs(symNet) > 5 && churnRatio < 0.3) flowQuality = "HIGH";
+                else if (Math.abs(symNet) > 2) flowQuality = "MEDIUM";
+                else flowQuality = "LOW";
+
+                sectorChurnedSum += 2 * selfMatched;
+                sectorGrossSum += symGross;
+
+                // Phase 8a: 5-day daily series + pattern detection
+                double[] dailySeriesArr = symbolDailyNet.getOrDefault(s.getKey(), new double[sortedDates.size()]);
+                List<Double> dailySeries = new ArrayList<>();
+                for (double dailyVal : dailySeriesArr) dailySeries.add(round1(dailyVal));
+                String pattern = detectStockPattern(dailySeriesArr);
+
+                topStocks.add(DealIntelligence.SectorFlow.StockContribution.builder()
+                    .symbol(s.getKey())
+                    .netCr(round1(symNet))
+                    .grossCr(round1(symGross))
+                    .churnRatio(Math.round(churnRatio * 100.0) / 100.0)
+                    .flowQuality(flowQuality)
+                    .dominantClient(truncateName(dominantClient))
+                    .side(symNet >= 0 ? "BUY-NET" : "SELL-NET")
+                    .dealCount((int) symDeals)
+                    // Phase 8c
+                    .fiiNetCr(round1(symFiiNet))
+                    .diiNetCr(round1(symDiiNet))
+                    .fiiDiiAlignment(alignment)
+                    // Phase 8a
+                    .dailyCrTimeseries(dailySeries)
+                    .dailyDates(sortedDates)
+                    .pattern(pattern)
+                    .build());
+            }
+            double sectorChurnRatio = sectorGrossSum > 0 ? Math.min(1.0, sectorChurnedSum / sectorGrossSum) : 0;
+
+            // Top clients in this sector — both legacy string list AND new structured list
+            var clientMap = sectorByClient.getOrDefault(sector, Map.of());
+            var clientGrossMap = sectorByClientGross.getOrDefault(sector, Map.of());
+            // Sort by gross volume so churners surface (instead of by net which hides them)
+            var sortedClients = clientGrossMap.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue()[0] + b.getValue()[1],
+                                                  a.getValue()[0] + a.getValue()[1]))
+                .limit(3)
+                .collect(Collectors.toList());
+
+            List<String> topClients = new ArrayList<>();
+            List<DealIntelligence.SectorFlow.ClientFlowDetail> topClientFlows = new ArrayList<>();
+            for (var ce : sortedClients) {
+                String name = ce.getKey();
+                double cBuy = ce.getValue()[0];
+                double cSell = ce.getValue()[1];
+                double cNet = cBuy - cSell;
+                double cGross = cBuy + cSell;
+                double cChurn = cGross > 0 ? Math.min(1.0, (2 * Math.min(cBuy, cSell)) / cGross) : 0;
+                String shortName = name.length() > 35 ? name.substring(0, 32) + "…" : name;
+                topClients.add(String.format("%s (%+.0f Cr)", shortName, cNet));
+                topClientFlows.add(DealIntelligence.SectorFlow.ClientFlowDetail.builder()
+                    .name(truncateName(name))
+                    .type(classifyClient(name))
+                    .buyCr(round1(cBuy))
+                    .sellCr(round1(cSell))
+                    .netCr(round1(cNet))
+                    .churnRatio(Math.round(cChurn * 100.0) / 100.0)
+                    .build());
+            }
+
+            // Phase 8d: if sector flow is mostly churn, override the regime to NEUTRAL/CHURN
+            // (don't classify a churn-dominated sector as ACCUMULATION even if net Cr is positive)
+            String regime;
+            if (sectorChurnRatio > 0.7) {
+                regime = "CHURN";
+            } else if (net > 5 && delivPct > 50) regime = "ACCUMULATION";
+            else if (net < -5 && delivPct > 50) regime = "DISTRIBUTION_INTO_STRENGTH";
+            else if (net < -5 && delivPct < 35) regime = "DISTRIBUTION";
+            else if (net > 5 && delivPct < 35) regime = "SPECULATIVE_BUYING";
+            else if (Math.abs(net) > 5) regime = "MIXED";
+            else regime = "NEUTRAL";
 
             String signal = generateSectorSignal(net, delivPct, v[0], v[1], v[2], v[3]);
+            String inference = buildSectorInference(sector, net, delivPct, fiiNet, diiNet, regime, topStocks, topClients, daysFlowing, streakDir, sectorChurnRatio);
+            String traderAction = buildTraderAction(regime, daysFlowing, streakDir, delivPct, net, topStocks, sectorChurnRatio, sector);
 
             flows.add(DealIntelligence.SectorFlow.builder()
-                .sector(entry.getKey()).netCr(Math.round(net * 10) / 10.0)
-                .fiiBuyCr(v[0]).fiiSellCr(v[1]).diiBuyCr(v[2]).diiSellCr(v[3])
-                .otherBuyCr(v[4]).otherSellCr(v[5]).dealCount((int) v[6])
+                .sector(sector).netCr(Math.round(net * 10) / 10.0)
+                .fiiBuyCr(round1(v[0])).fiiSellCr(round1(v[1]))
+                .diiBuyCr(round1(v[2])).diiSellCr(round1(v[3]))
+                .otherBuyCr(round1(v[4])).otherSellCr(round1(v[5])).dealCount((int) v[6])
                 .deliveryPct(delivPct).signal(signal)
+                .topStocks(topStocks).topClients(topClients)
+                .regime(regime).inference(inference)
+                .daysFlowing(daysFlowing).streakDirection(streakDir)
+                .traderAction(traderAction)
+                // Phase 7c
+                .weekTotalCr(round1(weekTotalBySector.getOrDefault(sector, 0.0)))
+                .dataDate(dateOfRecord)
+                // Phase 8d
+                .topClientFlows(topClientFlows)
+                .sectorChurnRatio(Math.round(sectorChurnRatio * 100.0) / 100.0)
                 .build());
         }
 
@@ -873,11 +1786,107 @@ public class MarketPulseInsightsService {
         return flows;
     }
 
-    private void aggregateDealToSector(Map<String, Object> deal, Map<String, double[]> sectorAgg) {
-        String symbol = (String) deal.getOrDefault("symbol", "");
+    private double round1(double v) { return Math.round(v * 10) / 10.0; }
+
+    // Phase 8a: accumulate per-symbol daily net Cr across the entire deal window.
+    private void accumulateSymbolDaily(Map<String, Object> deal,
+                                        Map<String, double[]> symbolDailyNet,
+                                        Map<String, Integer> dateIndex,
+                                        int seriesLength) {
+        String symbol = trimUpper((String) deal.getOrDefault("symbol", ""));
+        String date = (String) deal.get("_date");
+        if (symbol == null || symbol.isEmpty() || date == null) return;
+        Integer idx = dateIndex.get(date);
+        if (idx == null) return;
+        boolean isBuy = "BUY".equalsIgnoreCase(nullSafe((String) deal.getOrDefault("buySell", "")));
+        double val = toDouble(deal.get("valueCr"));
+        double signed = isBuy ? val : -val;
+        var series = symbolDailyNet.computeIfAbsent(symbol, k -> new double[seriesLength]);
+        series[idx] += signed;
+    }
+
+    // Phase 8a: classify the rhythm of a stock's 5-day flow.
+    // SINGLE_DAY     = only one of N days has any meaningful net (one-off event)
+    // BLOCK_EXIT     = one day dominates >70% of total absolute volume (single block trade)
+    // PERSISTENT_BUYING / PERSISTENT_SELLING = 3+ days monotonic in one direction (institutional commitment)
+    // SYSTEMATIC     = 3+ active days, mostly same direction, evenly spread (sustained pressure)
+    // CHOPPY         = 2+ sign flips across the window (noise)
+    // MIXED_2D       = exactly 2 active days, no clear pattern
+    private String detectStockPattern(double[] series) {
+        if (series == null || series.length == 0) return "SINGLE_DAY";
+        int activeDays = 0;
+        double sumAbs = 0;
+        double maxAbs = 0;
+        int posDays = 0;
+        int negDays = 0;
+        int signFlips = 0;
+        double prevSign = 0;
+        for (double v : series) {
+            if (Math.abs(v) > 0.5) {
+                activeDays++;
+                sumAbs += Math.abs(v);
+                if (Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+                double sign = Math.signum(v);
+                if (v > 0) posDays++;
+                if (v < 0) negDays++;
+                if (prevSign != 0 && sign != prevSign) signFlips++;
+                prevSign = sign;
+            }
+        }
+        if (activeDays == 0) return "SINGLE_DAY";
+        if (activeDays == 1) return "SINGLE_DAY";
+        // BLOCK_EXIT — one day is 70%+ of total volume
+        if (sumAbs > 0 && maxAbs / sumAbs >= 0.7) return "BLOCK_EXIT";
+        // CHOPPY — multiple sign flips
+        if (signFlips >= 2) return "CHOPPY";
+        // PERSISTENT — 3+ days, all same direction
+        if (posDays >= 3 && negDays == 0) return "PERSISTENT_BUYING";
+        if (negDays >= 3 && posDays == 0) return "PERSISTENT_SELLING";
+        // SYSTEMATIC — 3+ days mostly same direction
+        if (activeDays >= 3) return "SYSTEMATIC";
+        return "MIXED_2D";
+    }
+
+    // Phase 8c: classify per-stock FII vs DII alignment.
+    // 0.5 Cr threshold filters out noise (single tiny deal) so a stock with FII +0.1 / DII +0.1 isn't flagged.
+    private String classifyFiiDiiAlignment(double fiiNet, double diiNet) {
+        boolean fiiBuy  = fiiNet >  0.5;
+        boolean fiiSell = fiiNet < -0.5;
+        boolean diiBuy  = diiNet >  0.5;
+        boolean diiSell = diiNet < -0.5;
+        if (fiiBuy && diiBuy)  return "FII_DII_BUY";        // both buying = highest conviction long
+        if (fiiSell && diiSell) return "FII_DII_SELL";       // both selling = highest conviction short
+        if (fiiSell && diiBuy)  return "FII_SELL_DII_BUY";   // accumulation pattern (DII absorbing FII)
+        if (fiiBuy && diiSell)  return "FII_BUY_DII_SELL";   // distribution pattern (FII selling into DII)
+        if (fiiBuy)  return "FII_ONLY_BUY";
+        if (fiiSell) return "FII_ONLY_SELL";
+        if (diiBuy)  return "DII_ONLY_BUY";
+        if (diiSell) return "DII_ONLY_SELL";
+        return "NO_INST";  // only OTHER/PROP_BROKER activity, no real institutional bias
+    }
+
+    // Phase 7c: walks the entire 5-day deal window and accumulates per-sector net Cr
+    // for the weekTotalCr context field. Independent of the today-only aggregation path.
+    private void accumulateWeekTotal(Map<String, Object> deal, Map<String, Double> weekTotalBySector) {
+        String symbol = trimUpper((String) deal.getOrDefault("symbol", ""));
         String name = (String) deal.getOrDefault("securityName", deal.getOrDefault("name", ""));
-        String client = (String) deal.getOrDefault("clientName", "");
-        String buySell = (String) deal.getOrDefault("buySell", "");
+        String buySell = nullSafe((String) deal.getOrDefault("buySell", "")).toUpperCase();
+        double val = toDouble(deal.get("valueCr"));
+        String sector = classifySector(symbol + " " + nullSafe(name));
+        double signed = buySell.contains("BUY") ? val : -val;
+        weekTotalBySector.merge(sector, signed, Double::sum);
+    }
+
+    private void aggregateDealToSector(Map<String, Object> deal,
+                                        Map<String, double[]> sectorAgg,
+                                        Map<String, Map<String, double[]>> sectorBySymbol,
+                                        Map<String, Map<String, Double>> sectorByClient,
+                                        Map<String, Map<String, Map<String, double[]>>> sectorBySymbolByClient,
+                                        Map<String, Map<String, double[]>> sectorByClientGross) {
+        String symbol = trimUpper((String) deal.getOrDefault("symbol", ""));
+        String name = (String) deal.getOrDefault("securityName", deal.getOrDefault("name", ""));
+        String client = nullSafe((String) deal.getOrDefault("clientName", ""));
+        String buySell = nullSafe((String) deal.getOrDefault("buySell", ""));
         double val = toDouble(deal.get("valueCr"));
 
         String sector = classifySector(symbol + " " + name);
@@ -885,7 +1894,7 @@ public class MarketPulseInsightsService {
 
         sectorAgg.computeIfAbsent(sector, k -> new double[7]);
         double[] v = sectorAgg.get(sector);
-        v[6]++; // deal count
+        v[6]++;
 
         boolean isBuy = "BUY".equalsIgnoreCase(buySell);
         switch (clientType) {
@@ -893,6 +1902,195 @@ public class MarketPulseInsightsService {
             case "DII" -> { if (isBuy) v[2] += val; else v[3] += val; }
             default -> { if (isBuy) v[4] += val; else v[5] += val; }
         }
+
+        // Per-symbol contribution (buy, sell, dealCount)
+        var bySymbol = sectorBySymbol.computeIfAbsent(sector, k -> new HashMap<>());
+        var symStats = bySymbol.computeIfAbsent(symbol, k -> new double[3]);
+        if (isBuy) symStats[0] += val; else symStats[1] += val;
+        symStats[2]++;
+
+        // Per-client contribution (signed Cr)
+        if (!client.isEmpty()) {
+            var byClient = sectorByClient.computeIfAbsent(sector, k -> new HashMap<>());
+            byClient.merge(client, isBuy ? val : -val, Double::sum);
+
+            // Phase 8d: per-symbol per-client buy/sell tracking
+            var bySymByClient = sectorBySymbolByClient.computeIfAbsent(sector, k -> new HashMap<>());
+            var symClientMap = bySymByClient.computeIfAbsent(symbol, k -> new HashMap<>());
+            var clientStats = symClientMap.computeIfAbsent(client, k -> new double[2]);
+            if (isBuy) clientStats[0] += val; else clientStats[1] += val;
+
+            // Phase 8d: per-sector per-client gross tracking (buy, sell)
+            var byClientGross = sectorByClientGross.computeIfAbsent(sector, k -> new HashMap<>());
+            var grossStats = byClientGross.computeIfAbsent(client, k -> new double[2]);
+            if (isBuy) grossStats[0] += val; else grossStats[1] += val;
+        }
+    }
+
+    // Phase 7+8d: richer sector inference referencing top stocks + clients + streak + churn
+    private String buildSectorInference(String sector, double net, double delivPct,
+                                         double fiiNet, double diiNet, String regime,
+                                         List<DealIntelligence.SectorFlow.StockContribution> topStocks,
+                                         List<String> topClients,
+                                         int daysFlowing, String streakDirection,
+                                         double sectorChurnRatio) {
+        StringBuilder sb = new StringBuilder();
+
+        // Phase 8d: CHURN regime trumps everything else
+        if ("CHURN".equals(regime)) {
+            sb.append("⚠ NO EDGE · prop market-making (").append((int) (sectorChurnRatio * 100))
+              .append("% self-matched) · liquidity provision, not directional flow");
+            if (!topStocks.isEmpty()) {
+                var top = topStocks.get(0);
+                sb.append(" · churned by ").append(top.getDominantClient() != null ? top.getDominantClient() : "single broker")
+                  .append(" on ").append(top.getSymbol());
+            }
+            return sb.toString();
+        }
+
+        // Streak intensifier prefix
+        if (daysFlowing >= 4) sb.append(daysFlowing).append("-day SUSTAINED · ");
+        else if (daysFlowing == 3) sb.append("3-day streak · ");
+        else if (daysFlowing == 2) sb.append("2-day continuation · ");
+
+        // Headline based on regime
+        switch (regime) {
+            case "ACCUMULATION":
+                sb.append("🟢 Sector accumulation · institutions buying with strong delivery (").append((int) delivPct).append("%)");
+                break;
+            case "DISTRIBUTION":
+                sb.append("🔴 Sector distribution · low delivery (").append((int) delivPct).append("%) + net selling — exit longs");
+                break;
+            case "DISTRIBUTION_INTO_STRENGTH":
+                sb.append("🟠 Distribution into strength · institutions trimming despite ").append((int) delivPct).append("% delivery");
+                break;
+            case "SPECULATIVE_BUYING":
+                sb.append("⚠ Speculative buying · low delivery (").append((int) delivPct).append("%) — momentum, no conviction");
+                break;
+            case "MIXED":
+                if (net > 0) sb.append("Mixed bias · net buying ").append(String.format("+%.0f", net)).append(" Cr but delivery weak");
+                else sb.append("Mixed bias · net selling ").append(String.format("%.0f", net)).append(" Cr");
+                break;
+            default:
+                sb.append("Routine flow · no edge");
+        }
+        // Anchor with top stock — but skip if it's a CHURN-flagged stock
+        if (!topStocks.isEmpty()) {
+            var top = topStocks.get(0);
+            if (!"CHURN".equals(top.getFlowQuality())) {
+                sb.append(" · driver: ").append(top.getSymbol())
+                  .append(" ").append(String.format("%+.0f", top.getNetCr())).append(" Cr");
+            }
+        }
+        // FII vs DII split note when meaningful
+        if (Math.abs(fiiNet) > 5 || Math.abs(diiNet) > 5) {
+            sb.append(" · FII ").append(String.format("%+.0f", fiiNet)).append(" / DII ").append(String.format("%+.0f", diiNet));
+        }
+        // Append churn warning for borderline cases
+        if (sectorChurnRatio > 0.4 && sectorChurnRatio <= 0.7) {
+            sb.append(" · ⚠ ").append((int) (sectorChurnRatio * 100)).append("% churned (lower conviction)");
+        }
+        return sb.toString();
+    }
+
+    // Phase 7b+8d: concrete retail trader action keyed by regime + streak + churn
+    private String buildTraderAction(String regime, int daysFlowing, String streakDir, double delivPct, double net,
+                                      List<DealIntelligence.SectorFlow.StockContribution> topStocks,
+                                      double sectorChurnRatio, String sector) {
+        boolean strongStreak = daysFlowing >= 3;
+        // Phase 8d: dynamic, data-driven CHURN message naming the actual churning client + stock
+        if ("CHURN".equals(regime)) {
+            // Find the dominant churning stock (largest gross with CHURN flag)
+            DealIntelligence.SectorFlow.StockContribution dom = null;
+            for (var s : topStocks) {
+                if ("CHURN".equals(s.getFlowQuality())) {
+                    if (dom == null || s.getGrossCr() > dom.getGrossCr()) dom = s;
+                }
+            }
+            if (dom != null) {
+                String client = dom.getDominantClient() != null ? dom.getDominantClient() : "a single broker";
+                return String.format(
+                    "— SKIP · %s churned ₹%.0f Cr both ways on %s for ₹%+.1f Cr net (%d%% self-matched) · pure market-making, no directional edge · wait for real institutional flow before trading %s.",
+                    client, dom.getGrossCr(), dom.getSymbol(), dom.getNetCr(),
+                    (int) Math.round(dom.getChurnRatio() * 100),
+                    sector
+                );
+            }
+            // Fallback when no specific dominant stock identified
+            return String.format(
+                "— SKIP · %d%% of %s flow was self-matched by single brokers · pure liquidity provision, no directional conviction · wait for real institutional flow.",
+                (int) Math.round(sectorChurnRatio * 100), sector
+            );
+        }
+        switch (regime) {
+            case "ACCUMULATION":
+                if (strongStreak) return "🟢 BUY on dips · stop -3% · " + daysFlowing + "-day institutional accumulation, conviction building. Position sizing: normal.";
+                return "🟢 BUY-DIPS · institutions absorbing supply (delivery " + (int) delivPct + "%) · stop below today's low. Wait for follow-through tomorrow before adding.";
+            case "DISTRIBUTION":
+                if (strongStreak) return "🔴 AVOID longs · " + daysFlowing + "-day distribution streak · consider short on rally to resistance · stop above today's high.";
+                return "🔴 AVOID new longs · institutions exiting + low delivery = no support · trim existing positions if any.";
+            case "DISTRIBUTION_INTO_STRENGTH":
+                if (strongStreak) return "🟠 TRIM longs aggressively · " + daysFlowing + "-day distribution into strength = classic top · don't be the bag-holder.";
+                return "🟠 TRIM longs · institutions giving paper to retail · don't add new · classic distribution top forming.";
+            case "SPECULATIVE_BUYING":
+                return "⚠ AVOID chasing · momentum-driven with low delivery · likely to fade · wait for delivery > 50% before believing the move.";
+            case "MIXED":
+                return "↔ WAIT · no clear edge · check tomorrow's flow before committing capital.";
+            default:
+                return "— No edge · skip this sector today.";
+        }
+    }
+
+    // Phase 7b: write today's per-sector net Cr to Redis (TTL 7 days) so we can compute streaks.
+    private void snapshotSectorFlows(Map<String, Double> todayBySector) {
+        try {
+            String today = java.time.LocalDate.now(IST).toString();
+            String key = "sector-flows:snapshot:" + today;
+            redis.opsForValue().set(key, mapper.writeValueAsString(todayBySector),
+                java.time.Duration.ofDays(7));
+        } catch (Exception e) {
+            log.debug("[SECTOR_SNAPSHOT] write failed: {}", e.getMessage());
+        }
+    }
+
+    // Phase 7b: walk back up to 4 prior days, count consecutive same-direction days for each sector
+    @SuppressWarnings("unchecked")
+    private Map<String, Integer> computeSectorStreaks(Map<String, Double> todayBySector) {
+        Map<String, Integer> result = new HashMap<>();
+        for (var e : todayBySector.entrySet()) result.put(e.getKey(), 1); // start with today
+
+        java.time.LocalDate today = java.time.LocalDate.now(IST);
+        for (int back = 1; back <= 4; back++) {
+            String date = today.minusDays(back).toString();
+            String key = "sector-flows:snapshot:" + date;
+            try {
+                String json = redis.opsForValue().get(key);
+                if (json == null) continue; // gap day, skip but don't break streak (allows weekends)
+                Map<String, Object> dayMap = mapper.readValue(json, Map.class);
+                for (var e : todayBySector.entrySet()) {
+                    String sector = e.getKey();
+                    double todayVal = e.getValue();
+                    Object prev = dayMap.get(sector);
+                    if (prev == null) continue;
+                    double prevVal = toDouble(prev);
+                    // Continue streak only if same sign (both buying or both selling) AND meaningful magnitude
+                    if (Math.abs(prevVal) > 1 && Math.signum(todayVal) == Math.signum(prevVal)) {
+                        result.merge(sector, 1, Integer::sum);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        return result;
+    }
+
+    // Same loop, but returns the dominant direction over the streak window (BUY / SELL / MIXED)
+    @SuppressWarnings("unchecked")
+    private Map<String, String> computeSectorStreakDirections(Map<String, Double> todayBySector) {
+        Map<String, String> result = new HashMap<>();
+        for (var e : todayBySector.entrySet()) {
+            result.put(e.getKey(), e.getValue() >= 0 ? "BUY" : "SELL");
+        }
+        return result;
     }
 
     private String generateSectorSignal(double net, double delivPct, double fiiBuy, double fiiSell,
@@ -1182,11 +2380,11 @@ public class MarketPulseInsightsService {
     }
 
     private String classifySector(String text) {
-        if (text == null) return "Other";
+        if (text == null) return "Misc";
         for (var entry : SECTOR_PATTERNS.entrySet()) {
             if (entry.getValue().matcher(text).find()) return entry.getKey();
         }
-        return "Other";
+        return "Misc";
     }
 
     private int countFiiSellingStreak(List<Map<String, Object>> fiiDiiDays) {
@@ -1252,18 +2450,34 @@ public class MarketPulseInsightsService {
 
     private String getMarketStatus() {
         ZonedDateTime now = ZonedDateTime.now(IST);
+        int dow = now.getDayOfWeek().getValue();   // 1=Mon..7=Sun
         int hhmm = now.getHour() * 100 + now.getMinute();
-        if (hhmm < 915) return "PRE_MARKET";
-        if (hhmm <= 1530) return "OPEN";
-        if (hhmm <= 2330) return "MCX_OPEN";
+        // Weekend — both NSE and MCX closed (MCX runs Mon-Fri)
+        if (dow == 6 || dow == 7) return "WEEKEND";
+        if (hhmm < 900)  return "PRE_MARKET";        // before MCX open
+        if (hhmm < 915)  return "PRE_MARKET";        // NSE pre-open
+        if (hhmm <= 1530) return "NSE_OPEN";          // NSE equity hours
+        if (hhmm <= 2330) return "MCX_OPEN";          // post-NSE, MCX still trading
         return "CLOSED";
     }
 
     private String getNextBoundary() {
         ZonedDateTime now = ZonedDateTime.now(IST);
-        int min = now.getMinute();
+        int dow = now.getDayOfWeek().getValue();
         int hour = now.getHour();
-        // NSE 30m boundaries: :15, :45
+        int min = now.getMinute();
+
+        // Weekend — point to Monday 09:15 IST (NSE open)
+        if (dow == 6) return "Mon 09:15 IST";
+        if (dow == 7) return "Mon 09:15 IST";
+
+        // After-hours weekday — point to tomorrow's NSE open (or Mon if Friday)
+        if (hour >= 24 || (hour * 100 + min) > 2330) {
+            return dow == 5 ? "Mon 09:15 IST" : "Tomorrow 09:15 IST";
+        }
+
+        // During MCX-only window (15:30 → 23:30) — point to next 30m candle close
+        // For NSE hours (09:15 → 15:30) — point to next NSE 15-minute boundary
         int nextMin = min < 15 ? 15 : min < 45 ? 45 : 15;
         int nextHour = min >= 45 ? hour + 1 : hour;
         return String.format("%02d:%02d IST", nextHour, nextMin);

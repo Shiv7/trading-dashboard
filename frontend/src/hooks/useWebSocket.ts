@@ -6,7 +6,13 @@ import type { QuantScore, PatternSignal } from '../types'
 import { walletApi, scoresApi, quantScoresApi } from '../services/api'
 import { isAnyMarketOpen } from '../utils/tradingUtils'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:8085/ws'
+// SockJS requires an absolute URL. If VITE_WS_URL is relative (e.g. "/ws"),
+// resolve it against the current page origin so that https://kotsin.in/ws is used
+// in prod and http://localhost:3001/ws in dev (Vite proxy forwards to :8085).
+const RAW_WS_URL = import.meta.env.VITE_WS_URL || '/ws'
+const WS_URL = /^https?:\/\//.test(RAW_WS_URL)
+  ? RAW_WS_URL
+  : `${window.location.origin}${RAW_WS_URL.startsWith('/') ? '' : '/'}${RAW_WS_URL}`
 
 // FIX BUG #10: Data validation helper
 function isValidObject(data: unknown): data is Record<string, unknown> {

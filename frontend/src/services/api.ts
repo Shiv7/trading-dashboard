@@ -15,6 +15,7 @@ import type {
   PivotStateDTO,
   StrategyStateDTO
 } from '../types/indicators'
+import type { HotStocksListResponse, StockMetrics } from '../types/hotstocks'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8085/api'
 const STREAMING_API_BASE = API_BASE
@@ -159,6 +160,15 @@ export const tradesApi = {
   getTradeById: (tradeId: string) => fetchJson<Trade>(`/trades/${tradeId}`),
 }
 
+// Live Trades API — /api/live returns { activePositions, todayExits } virtual positions snapshot
+export interface LiveTradesData {
+  activePositions: Record<string, unknown>[]
+  todayExits: Record<string, unknown>[]
+}
+export const liveTradesApi = {
+  getLiveData: () => fetchJson<LiveTradesData>('/live'),
+}
+
 // QuantScores API (Institutional-Grade Scoring)
 export const quantScoresApi = {
   getAllScores: (limit = 100) => fetchJson<QuantScore[]>(`/quant-scores?limit=${limit}`),
@@ -279,6 +289,14 @@ export const tradingModeApi = {
 }
 
 // Market Pulse API
+export type MarketPulseState = 'LIVE' | 'STALE_SESSION' | 'CLOSED_AFTERHRS' | 'CLOSED_HOLIDAY' | 'ERROR'
+
+export interface AssetStatus {
+  state: MarketPulseState
+  subtitle: string
+  lastUpdateMs: number
+}
+
 export interface MacroSnapshot {
   giftNiftyPrice: number
   giftNiftyChange: number
@@ -288,11 +306,30 @@ export interface MacroSnapshot {
   giftNiftyHigh: number
   giftNiftyLow: number
   giftNiftyPrevClose: number
+  sgxNiftyLastTrade: number
+  sgxNiftyLastTradeTimestamp: number
   indiaVix: number
   vixRegime: string
+  dowPrice: number
+  sp500Price: number
+  nasdaqPrice: number
   dowChangePct: number
   sp500ChangePct: number
   nasdaqChangePct: number
+  dxyPrice: number
+  dxyChangePct: number
+  usVixPrice: number
+  usVixChangePct: number
+  crudeOilPrice: number
+  crudeOilChangePct: number
+  brentOilPrice: number
+  brentOilChangePct: number
+  goldPrice: number
+  goldChangePct: number
+  silverPrice: number
+  silverChangePct: number
+  usdInrPrice: number
+  usdInrChangePct: number
   advanceDecline: {
     advances: number
     declines: number
@@ -306,6 +343,21 @@ export interface MacroSnapshot {
     foRatioLabel: string
   }
   timestamp: number
+  // Phase 1c — per-asset state classification
+  giftNiftyStatus?: AssetStatus
+  indiaVixStatus?: AssetStatus
+  dowStatus?: AssetStatus
+  sp500Status?: AssetStatus
+  nasdaqStatus?: AssetStatus
+  dxyStatus?: AssetStatus
+  usVixStatus?: AssetStatus
+  crudeStatus?: AssetStatus
+  brentStatus?: AssetStatus
+  goldStatus?: AssetStatus
+  silverStatus?: AssetStatus
+  usdInrStatus?: AssetStatus
+  niftyStatus?: AssetStatus
+  advanceDeclineStatus?: AssetStatus
 }
 
 export interface BlockDeal {
@@ -336,6 +388,229 @@ export interface DeliveryData {
   timestamp?: number
 }
 
+// ── Trading Command Center Insights (pre-computed) ──
+export interface CommandCenterInsights {
+  marketState?: {
+    direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+    confidence: number
+    dayType: string
+    summary: string
+    assScore: number
+    assRegime: string
+    niftyPrice: number
+    niftyChangePct: number
+    // Phase 4: explicit Indian indices
+    sgxNiftyPrice: number
+    sgxNiftyChangePct: number
+    nifty50Price: number
+    nifty50ChangePct: number
+    indiaVix: number
+    crudePrice: number
+    crudeChangePct: number
+    goldPrice: number
+    goldChangePct: number
+    silverPrice: number
+    silverChangePct: number
+    dxyPrice: number
+    dxyChangePct: number
+    usdInrPrice: number
+    usdInrChangePct: number
+    fiiNetToday: number
+    diiNetToday: number
+    usVix: number
+    usVixChangePct: number
+    // US indices (sgxnifty.org scraper)
+    sp500Price: number
+    sp500ChangePct: number
+    dowPrice: number
+    dowChangePct: number
+    nasdaqPrice: number
+    nasdaqChangePct: number
+    // Brent crude (in addition to WTI)
+    brentPrice: number
+    brentChangePct: number
+    // Europe (yfinance Phase 2)
+    ftsePrice: number
+    ftseChangePct: number
+    daxPrice: number
+    daxChangePct: number
+    cacPrice: number
+    cacChangePct: number
+    // Middle East (yfinance Phase 2)
+    tasiPrice: number       // Saudi Tadawul (^TASI.SR)
+    tasiChangePct: number
+    uaePrice: number        // iShares MSCI UAE ETF (UAE) — composite proxy
+    uaeChangePct: number
+    giftNiftyPrice: number
+    giftNiftyChangePct: number
+    advances: number
+    declines: number
+    adRatioLabel: string
+    foAdvances: number
+    foDeclines: number
+    foRatioLabel: string
+    timestamp: number
+    // Phase 4: per-card cross-indice inferences (key = card id, value = takeaway)
+    cardInferences?: Record<string, string>
+    // Phase 4: holistic one-line summary across all markets
+    globalRead?: string
+    // Phase 5+6: macro
+    us10yYield: number
+    us10yChangePct: number
+    vixDivergence: number
+    brentWtiSpread: number
+    nextFomcDate?: string
+    daysUntilFomc?: number
+    nextCpiDate?: string
+    daysUntilCpi?: number
+    calendarHint?: string
+  }
+  // Phase 5+6: Institutional Activity (Tab 4)
+  institutionalActivity?: {
+    bySecurity: Array<{
+      symbol: string
+      sector: string
+      netCr: number
+      fiiNetCr: number
+      diiNetCr: number
+      propNetCr: number
+      otherNetCr: number
+      dealCount: number
+      topDealCr: number
+      deliveryPct: number
+      sectorDeliveryPct: number
+      topBuyer?: string
+      topSeller?: string
+      divergenceState: 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' | string
+      divergenceConfidence: 'STRONG' | 'MODERATE' | 'WEAK' | 'NONE' | string
+      divergenceReasons: string[]
+      inference: string
+    }>
+    byClient: Array<{
+      name: string
+      type: 'FII' | 'DII' | 'PROP_BROKER' | 'OTHER' | string
+      buyCr: number
+      sellCr: number
+      netCr: number
+      dealCount: number
+      topBuySymbols: string[]
+      topSellSymbols: string[]
+      inference: string
+    }>
+    totalDealsCount: number
+    totalDealValueCr: number
+    accumulationCount: number
+    distributionCount: number
+    headlineSummary: string
+    dataDate?: string
+  }
+  strategyAlignments?: Array<{
+    strategy: string; status: string; statusIcon: string; description: string
+    macroContext: string; riskLevel: string; activePositions: number
+    dayPnl: number; totalPnl: number; drawdownPct: number
+  }>
+  positionGuidance?: Array<{
+    scripCode: string; symbol: string; strategy: string; side: string
+    entryPrice: number; currentPrice: number; pnl: number; pnlPct: number
+    action: string; reason: string; sectorStatus: string; t1Hit: boolean
+    greekTrailActive: boolean; currentSl: number; suggestedSl: number
+  }>
+  alerts?: Array<{
+    severity: string; icon: string; title: string; message: string
+    action: string; timestamp: number
+  }>
+  commoditySignals?: {
+    commodities: Array<{ name: string; price: number; changePct: number; direction: string }>
+    inferences: string[]
+  }
+  sectorIndices?: Array<{ name: string; fullName: string; changePct: number; inference: string }>
+  asianMarkets?: {
+    nikkeiPrice: number; nikkeiChangePct: number
+    hangSengPrice: number; hangSengChangePct: number
+    shanghaiPrice: number; shanghaiChangePct: number
+    kospiPrice: number; kospiChangePct: number
+    assScore: number; regime: string; inference: string
+  }
+  fiiDiiIntelligence?: {
+    fiiNetToday: number; diiNetToday: number; fiiNetWeek: number; diiNetWeek: number
+    fiiSellingStreak: number; diiBuyingStreak: number; narrative: string
+    dailyBreakdown: Array<Record<string, any>>
+  }
+  dealIntelligence?: {
+    blockDealCount: number; bulkDealCount: number; totalDealVolumeCr: number
+    watchlist: Array<{
+      symbol: string; bias: string; score: number; conviction: string
+      fnoEligible: boolean; netCr: number; reasons: string[]; sector: string
+    }>
+    sectorFlows: Array<{
+      sector: string; netCr: number; fiiBuyCr: number; fiiSellCr: number
+      diiBuyCr: number; diiSellCr: number; otherBuyCr: number; otherSellCr: number
+      dealCount: number; deliveryPct: number; signal: string
+      // Phase 7 enrichment
+      topStocks?: Array<{
+        symbol: string; netCr: number; side: string; dealCount: number
+        // Phase 8d: churn detection
+        grossCr?: number
+        churnRatio?: number
+        flowQuality?: 'HIGH' | 'MEDIUM' | 'LOW' | 'CHURN' | string
+        dominantClient?: string
+        // Phase 8c: FII vs DII per-stock alignment
+        fiiNetCr?: number
+        diiNetCr?: number
+        fiiDiiAlignment?: 'FII_DII_BUY' | 'FII_DII_SELL' | 'FII_SELL_DII_BUY' | 'FII_BUY_DII_SELL' | 'FII_ONLY_BUY' | 'FII_ONLY_SELL' | 'DII_ONLY_BUY' | 'DII_ONLY_SELL' | 'NO_INST' | string
+        // Phase 8a: 5-day daily flow rhythm
+        dailyCrTimeseries?: number[]
+        dailyDates?: string[]
+        pattern?: 'SYSTEMATIC' | 'BLOCK_EXIT' | 'PERSISTENT_BUYING' | 'PERSISTENT_SELLING' | 'CHOPPY' | 'SINGLE_DAY' | 'MIXED_2D' | string
+      }>
+      topClients?: string[]
+      regime?: 'ACCUMULATION' | 'DISTRIBUTION' | 'DISTRIBUTION_INTO_STRENGTH' | 'SPECULATIVE_BUYING' | 'MIXED' | 'NEUTRAL' | 'CHURN' | string
+      inference?: string
+      // Phase 7b: multi-day persistence
+      daysFlowing?: number
+      streakDirection?: 'BUY' | 'SELL' | 'MIXED' | string
+      traderAction?: string
+      // Phase 7c: 5-day cumulative context
+      weekTotalCr?: number
+      dataDate?: string
+      // Phase 8d: structured client flows + sector-wide churn ratio
+      topClientFlows?: Array<{
+        name: string
+        type: 'FII' | 'DII' | 'PROP_BROKER' | 'OTHER' | string
+        buyCr: number
+        sellCr: number
+        netCr: number
+        churnRatio: number
+      }>
+      sectorChurnRatio?: number
+    }>
+    topClients: Array<{
+      name: string; type: string; buyCr: number; sellCr: number; netCr: number
+      buySymbols: string[]; sellSymbols: string[]; dealCount: number
+    }>
+    topStocks: Array<{
+      symbol: string; sector: string; netCr: number; blockBuyCr: number; blockSellCr: number
+      bulkBuyCr: number; bulkSellCr: number; dateCount: number; clients: string[]
+      corporateEvent: string; blockPct: number
+    }>
+    eventsWithDeals: Array<Record<string, any>>
+    dealInsights: string[]
+  }
+  deliveryAnalysis?: {
+    date: string
+    sectors: Array<{ sector: string; deliveryPct: number; turnoverLacs: number; signal: string }>
+    inference: string
+  }
+  strategyScorecard?: Array<{
+    strategy: string; balance: number; peakBalance: number; drawdown: number
+    drawdownPct: number; dayPnl: number; dayTrades: number; dayWins: number
+    dayLosses: number; winRate: number; totalTrades: number; status: string
+  }>
+  computedAt: number
+  marketStatus: string
+  nextBoundary: string
+}
+
 export const marketPulseApi = {
   getSnapshot: () => fetchJson<MacroSnapshot>('/market-pulse'),
   getBlockDeals: () => fetchJson<BlockDeal[]>('/market-pulse/block-deals'),
@@ -344,6 +619,7 @@ export const marketPulseApi = {
   getCorporateEvents: () => fetchJson<CorporateEvent[]>('/market-pulse/corporate-events'),
   getConviction: (symbol: string) => fetchJson<ConvictionData>(`/market-pulse/conviction/${symbol}`),
   getDeliveryData: () => fetchJson<DeliveryData>('/market-pulse/delivery-data'),
+  getInsights: () => fetchJson<CommandCenterInsights>('/market-pulse/insights'),
 }
 
 // Performance Analytics API
@@ -1114,6 +1390,27 @@ export const greekTrailingApi = {
   disable: () =>
     postJson<{ success: boolean; message: string; trailsKilled: number }>(
       '/greek-trailing/disable', {}),
+}
+
+// ── Hot Stocks ────────────────────────────────────────────────
+export const hotStocksApi = {
+  async list(): Promise<HotStocksListResponse> {
+    const res = await fetch(`${API_BASE}/hot-stocks`)
+    if (!res.ok) throw new Error(`hot-stocks list failed: ${res.status}`)
+    return res.json()
+  },
+
+  async single(symbol: string): Promise<StockMetrics> {
+    const res = await fetch(`${API_BASE}/hot-stocks/${encodeURIComponent(symbol)}`)
+    if (!res.ok) throw new Error(`hot-stocks single failed: ${res.status}`)
+    return res.json()
+  },
+
+  async wallet(): Promise<Record<string, unknown>> {
+    const res = await fetch(`${API_BASE}/hot-stocks/wallet`)
+    if (!res.ok) throw new Error(`hot-stocks wallet failed: ${res.status}`)
+    return res.json()
+  },
 }
 
 // Export helpers for use in other service files

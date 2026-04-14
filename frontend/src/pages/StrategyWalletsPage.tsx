@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { RefreshCw, Filter, ArrowUpDown, Check, TrendingUp, TrendingDown, Target, Briefcase, Plus, X, ChevronDown } from 'lucide-react'
-import { strategyWalletsApi, walletApi } from '../services/api'
+import { strategyWalletsApi, liveTradesApi } from '../services/api'
 import { isAnyMarketOpen } from '../utils/tradingUtils'
 import type { StrategyWalletSummary, StrategyWalletTrade } from '../services/api'
 import type { Position } from '../types'
@@ -16,7 +16,7 @@ type SectionFilterTag =
   | 'NSE' | 'MCX' | 'CURRENCY'
   | 'OPTIONS' | 'FUT' | 'EQUITY'
   | 'PROFIT' | 'LOSS'
-  | 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'RETEST' | 'MICROALPHA' | 'MERE' | 'QUANT'
+  | 'FUDKII' | 'FUKAA' | 'FUDKOI' | 'RETEST' | 'MICROALPHA' | 'MERE' | 'QUANT' | 'HOTSTOCKS'
   | 'MCX_BB_15' | 'MCX_BB_30' | 'NSE_BB_30'
   | 'MOST_RECENT'
 
@@ -54,6 +54,7 @@ const SECTION_FILTER_GROUPS: { label: string; tags: { key: SectionFilterTag; lab
       { key: 'RETEST', label: 'RETEST', color: 'bg-violet-500/15 text-violet-400 border-violet-500/30' },
       { key: 'MERE', label: 'MERE', color: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30' },
       { key: 'QUANT', label: 'QUANT', color: 'bg-rose-500/15 text-rose-400 border-rose-500/30' },
+      { key: 'HOTSTOCKS', label: 'HOTSTOCKS', color: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
       { key: 'MCX_BB_15', label: 'MCX-BB-15', color: 'bg-lime-500/15 text-lime-400 border-lime-500/30' },
       { key: 'MCX_BB_30', label: 'MCX-BB-30', color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
       { key: 'NSE_BB_30', label: 'NSE-BB-30', color: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
@@ -109,6 +110,7 @@ function getStrategyTag(strategy?: string): SectionFilterTag | null {
   if (s.includes('MICRO')) return 'MICROALPHA'
   if (s.includes('MERE')) return 'MERE'
   if (s.includes('QUANT')) return 'QUANT'
+  if (s.includes('HOTSTOCKS') || s.includes('HOTSTOCK')) return 'HOTSTOCKS'
   if (s.includes('MCX_BB_15') || s.includes('MCX-BB-15')) return 'MCX_BB_15'
   if (s.includes('MCX_BB_30') || s.includes('MCX-BB-30')) return 'MCX_BB_30'
   if (s.includes('NSE_BB_30') || s.includes('NSE-BB-30')) return 'NSE_BB_30'
@@ -127,7 +129,7 @@ function matchesSectionFilters(
   const exchangeTags: SectionFilterTag[] = ['NSE', 'MCX', 'CURRENCY']
   const instrumentTags: SectionFilterTag[] = ['OPTIONS', 'FUT', 'EQUITY']
   const pnlTags: SectionFilterTag[] = ['PROFIT', 'LOSS']
-  const strategyTags: SectionFilterTag[] = ['FUKAA', 'FUDKOI', 'FUDKII', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30']
+  const strategyTags: SectionFilterTag[] = ['FUKAA', 'FUDKOI', 'FUDKII', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'HOTSTOCKS', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30']
 
   const activeExchange = exchangeTags.filter(t => active.has(t))
   const activeInstrument = instrumentTags.filter(t => active.has(t))
@@ -649,34 +651,45 @@ export default function StrategyWalletsPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [s, t, w] = await Promise.all([
+      const [s, t, live] = await Promise.all([
         strategyWalletsApi.getSummaries(),
         strategyWalletsApi.getWeeklyTrades({
           sortBy: sortField,
         }),
-        walletApi.getWallet(),
+        liveTradesApi.getLiveData(),
       ])
       if (s) setSummaries(s)
       if (t) setTrades(t)
-      if (w?.positions) {
-        // Show all today's trades as cards: active first, then closed
-        const today = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })
-        const todayPositions = w.positions.filter(p => {
-          if (p.quantity > 0) return true // Always show open positions
-          // Show closed positions from today
-          if (p.openedAt) {
-            const opened = new Date(p.openedAt)
-            return opened.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) === today
-          }
-          return false
+      if (live) {
+        // Normalize API fields (entryPrice→avgEntryPrice, pct names, null-safe numerics)
+        const normalizePos = (p: any): Position => ({
+          ...p,
+          avgEntryPrice: p.avgEntryPrice ?? p.entryPrice ?? 0,
+          currentPrice: p.currentPrice ?? p.exitPrice ?? p.avgEntryPrice ?? p.entryPrice ?? 0,
+          quantity: p.quantity ?? p.remainingQuantity ?? p.totalQuantity ?? 0,
+          unrealizedPnl: p.unrealizedPnl ?? 0,
+          unrealizedPnlPercent: p.unrealizedPnlPercent ?? p.unrealizedPnlPct ?? 0,
+          realizedPnl: p.realizedPnl ?? p.pnl ?? 0,
+          stopLoss: p.stopLoss ?? 0,
+          target1: p.target1 ?? 0,
+          target2: p.target2 ?? 0,
+          openedAt: p.openedAt ?? '',
+          lastUpdated: p.lastUpdated ?? p.closedAt ?? p.openedAt ?? '',
+          status: p.status ?? 'UNKNOWN',
+          companyName: p.companyName ?? p.symbol ?? p.scripCode ?? '',
+          side: p.side ?? 'LONG',
+          positionId: p.positionId ?? p.tradeId ?? p.scripCode ?? '',
         })
-        // Sort: active (qty > 0) first, then closed
-        todayPositions.sort((a, b) => {
+        const allPositions = [
+          ...(live.activePositions || []).map((p: any) => ({ ...normalizePos(p), __exited: false })),
+          ...(live.todayExits || []).map((p: any) => ({ ...normalizePos(p), __exited: true })),
+        ]
+        allPositions.sort((a, b) => {
           if (a.quantity > 0 && b.quantity <= 0) return -1
           if (a.quantity <= 0 && b.quantity > 0) return 1
           return 0
         })
-        setPositions(todayPositions)
+        setPositions(allPositions)
       }
     } catch (err) {
       console.error('Error loading strategy wallets:', err)
@@ -814,9 +827,9 @@ export default function StrategyWalletsPage() {
         {/* ── Wallet Cards (horizontal scroll) ── */}
         <div className="overflow-x-auto pb-2 -mx-1.5 sm:-mx-4 px-1.5 sm:px-4 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
           <div className="flex gap-2 sm:gap-4" style={{ minWidth: 'max-content' }}>
-          {(summaries.length > 0 ? summaries : Array.from({ length: 10 }, (_, i) => ({
-            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30'][i],
-            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30'][i],
+          {(summaries.length > 0 ? summaries : Array.from({ length: 11 }, (_, i) => ({
+            strategy: ['FUDKII', 'FUKAA', 'FUDKOI', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'HOTSTOCKS', 'MCX_BB_15', 'MCX_BB_30', 'NSE_BB_30'][i],
+            displayName: ['FUDKII', 'FUKAA', 'FUDKOI', 'RETEST', 'MICROALPHA', 'MERE', 'QUANT', 'HOTSTOCKS', 'MCX-BB-15', 'MCX-BB-30', 'NSE-BB-30'][i],
             initialCapital: 1000000, currentCapital: 1000000, totalPnl: 0, totalPnlPercent: 0,
             totalTrades: 0, wins: 0, losses: 0, winRate: 0, mcxUsedMargin: 0,
           }))).map(s => {
@@ -999,15 +1012,9 @@ export default function StrategyWalletsPage() {
 
         {/* ── Active Trades ── */}
         {(() => {
-          const today = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })
-          const activePositions = positions.filter(p => p.quantity > 0)
-          const exitedPositions = positions.filter(p =>
-            p.quantity <= 0 ||
-            (p.quantity > 0 && p.exitHistory && p.exitHistory.length > 0 &&
-              p.exitHistory.some(ev =>
-                new Date(ev.timestamp).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) === today
-              ))
-          )
+          // positions already contains active + today's exits from /api/live
+          const activePositions = positions.filter(p => !(p as any).__exited)
+          const exitedPositions = positions.filter(p => (p as any).__exited)
 
           const filterPos = (list: Position[], filter: { active: Set<SectionFilterTag> }) => {
             let filtered = list.filter(p => matchesSectionFilters(

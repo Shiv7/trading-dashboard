@@ -1,5 +1,7 @@
 package com.kotsin.dashboard.controller;
 
+import com.kotsin.dashboard.dto.MarketPulseInsightsDTO;
+import com.kotsin.dashboard.service.MarketPulseInsightsService;
 import com.kotsin.dashboard.service.MarketPulseService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +16,7 @@ import java.util.Map;
 public class MarketPulseController {
 
     private final MarketPulseService marketPulseService;
+    private final MarketPulseInsightsService insightsService;
 
     @GetMapping
     public ResponseEntity<MarketPulseService.MacroSnapshot> getMacroSnapshot() {
@@ -48,5 +51,14 @@ public class MarketPulseController {
     @GetMapping("/conviction/{symbol}")
     public ResponseEntity<Map<String, Object>> getConviction(@PathVariable String symbol) {
         return ResponseEntity.ok(marketPulseService.getConvictionForSymbol(symbol));
+    }
+
+    /**
+     * Trading Command Center — single endpoint for all pre-computed insights used by
+     * /command-center, /market-intelligence, and CommandCenterTab pages.
+     */
+    @GetMapping("/insights")
+    public ResponseEntity<MarketPulseInsightsDTO> getInsights() {
+        return ResponseEntity.ok(insightsService.buildInsights());
     }
 }
