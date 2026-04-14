@@ -1014,6 +1014,7 @@ export interface UserProfile {
   enabled: boolean
   createdAt: string
   lastLoginAt: string
+  allowedPages?: string[]
   preferences?: {
     timezone: string
     defaultLotSize: number
@@ -1069,6 +1070,9 @@ export const adminApi = {
   updateUserRole: (userId: string, role: string) => putJson<UserProfile>(`/admin/users/${userId}/role`, { role }),
   toggleUserEnabled: (userId: string, enabled: boolean) => putJson<UserProfile>(`/admin/users/${userId}/enable`, { enabled }),
   deleteUser: (userId: string) => deleteJson<{ message: string }>(`/admin/users/${userId}`),
+  getSidebarPages: () => fetchJson<Array<{ key: string; label: string }>>('/admin/sidebar-pages'),
+  getUserPermissions: (userId: string) => fetchJson<{ allowedPages: string[] }>(`/admin/users/${userId}/permissions`),
+  updateUserPermissions: (userId: string, allowedPages: string[]) => putJson<UserProfile>(`/admin/users/${userId}/permissions`, { allowedPages }),
 }
 
 // ===== PnL API =====
