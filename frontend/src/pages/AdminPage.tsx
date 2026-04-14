@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { adminApi, type UserProfile } from '../services/api'
 import UserPermissionsDrawer from '../components/Admin/UserPermissionsDrawer'
+import CreateUserModal from '../components/Admin/CreateUserModal'
 
 export default function AdminPage() {
   const [users, setUsers] = useState<UserProfile[]>([])
@@ -9,6 +10,7 @@ export default function AdminPage() {
   const [page, setPage] = useState(0)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
 
   const loadUsers = async () => {
     setLoading(true)
@@ -67,6 +69,10 @@ export default function AdminPage() {
           <h1 className="text-2xl font-display font-bold text-white">User Management</h1>
           <p className="text-slate-400 text-sm mt-1">{totalElements} registered users</p>
         </div>
+        <button onClick={() => setCreateOpen(true)}
+          className="px-4 py-2 bg-amber-500 text-slate-900 font-medium rounded-lg hover:bg-amber-400 transition-colors">
+          + Add User
+        </button>
       </div>
 
       {message && (
@@ -172,6 +178,12 @@ export default function AdminPage() {
         user={permissionsUser}
         onClose={() => setPermissionsUser(null)}
         onSaved={() => { loadUsers(); showMessage('success', 'Permissions updated'); }}
+      />
+
+      <CreateUserModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(username) => { loadUsers(); showMessage('success', `User "${username}" created`); }}
       />
     </div>
   )

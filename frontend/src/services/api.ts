@@ -1073,6 +1073,8 @@ export const adminApi = {
   getSidebarPages: () => fetchJson<Array<{ key: string; label: string }>>('/admin/sidebar-pages'),
   getUserPermissions: (userId: string) => fetchJson<{ allowedPages: string[] }>(`/admin/users/${userId}/permissions`),
   updateUserPermissions: (userId: string, allowedPages: string[]) => putJson<UserProfile>(`/admin/users/${userId}/permissions`, { allowedPages }),
+  createUser: (payload: { username: string; email: string; password: string; displayName?: string; role?: string; allowedPages?: string[] }) =>
+    postJson<UserProfile>('/admin/users', payload),
 }
 
 // ===== PnL API =====

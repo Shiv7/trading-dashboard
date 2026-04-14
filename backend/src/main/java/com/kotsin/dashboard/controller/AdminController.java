@@ -3,6 +3,7 @@ package com.kotsin.dashboard.controller;
 import com.kotsin.dashboard.model.dto.auth.UserResponse;
 import com.kotsin.dashboard.model.entity.User;
 import com.kotsin.dashboard.security.SidebarPage;
+import com.kotsin.dashboard.service.AuthService;
 import com.kotsin.dashboard.service.SlippageBackfillService;
 import com.kotsin.dashboard.service.UserProfileService;
 import org.springframework.data.domain.Page;
@@ -25,10 +26,29 @@ public class AdminController {
 
     private final UserProfileService profileService;
     private final SlippageBackfillService slippageBackfillService;
+    private final AuthService authService;
 
-    public AdminController(UserProfileService profileService, SlippageBackfillService slippageBackfillService) {
+    public AdminController(UserProfileService profileService, SlippageBackfillService slippageBackfillService, AuthService authService) {
         this.profileService = profileService;
         this.slippageBackfillService = slippageBackfillService;
+        this.authService = authService;
+    }
+
+    @PostMapping("/users")
+    public ResponseEntity<?> createUser(@RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<String> allowedPages = (List<String>) body.getOrDefault("allowedPages", List.of());
+            return ResponseEntity.ok(authService.adminCreateUser(
+                    (String) body.get("username"),
+                    (String) body.get("email"),
+                    (String) body.get("password"),
+                    (String) body.get("displayName"),
+                    (String) body.get("role"),
+                    allowedPages));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @GetMapping("/users")

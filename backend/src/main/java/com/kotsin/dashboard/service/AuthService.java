@@ -29,6 +29,51 @@ public class AuthService {
         this.tokenProvider = tokenProvider;
     }
 
+    public UserResponse adminCreateUser(String username, String email, String password,
+                                         String displayName, String role,
+                                         java.util.List<String> allowedPages) {
+        if (username == null || username.isBlank()) throw new IllegalArgumentException("Username required");
+        if (email == null || email.isBlank()) throw new IllegalArgumentException("Email required");
+        if (password == null || password.length() < 6) throw new IllegalArgumentException("Password must be at least 6 characters");
+        if (userRepository.existsByUsername(username)) throw new IllegalArgumentException("Username already taken");
+        if (userRepository.existsByEmail(email)) throw new IllegalArgumentException("Email already registered");
+
+        String safeRole = "TRADER";
+        if ("VIEWER".equals(role)) safeRole = "VIEWER";
+        // ADMIN cannot be created via API — DB insert only.
+
+        java.util.Set<String> valid = com.kotsin.dashboard.security.SidebarPage.allKeys();
+        java.util.List<String> pages = new ArrayList<>();
+        if (allowedPages != null) {
+            for (String p : allowedPages) {
+                if (!valid.contains(p)) throw new IllegalArgumentException("Unknown page key: " + p);
+                pages.add(p);
+            }
+        }
+
+        User user = User.builder()
+                .username(username)
+                .email(email)
+                .passwordHash(passwordEncoder.encode(password))
+                .displayName(displayName != null && !displayName.isBlank() ? displayName : username)
+                .role(safeRole)
+                .allowedPages(pages)
+                .enabled(true)
+                .preferences(User.UserPreferences.builder()
+                        .timezone("Asia/Kolkata")
+                        .defaultLotSize(1)
+                        .riskTolerance("MODERATE")
+                        .preferredInstruments(new ArrayList<>())
+                        .notificationSettings(User.NotificationSettings.builder().build())
+                        .build())
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        user = userRepository.save(user);
+        log.info("Admin created user: {} ({}) pages={}", user.getUsername(), user.getRole(), pages);
+        return UserResponse.fromUser(user);
+    }
+
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.getUsername())) {
             throw new IllegalArgumentException("Username already taken");
