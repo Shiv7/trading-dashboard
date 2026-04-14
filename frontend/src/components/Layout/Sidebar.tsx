@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 
 interface NavItem {
   path: string
+  key?: string
   label: string
   icon: JSX.Element
   requireAdmin?: boolean
@@ -17,6 +18,7 @@ export default function Sidebar() {
   const navItems: NavItem[] = [
     {
       path: '/dashboard',
+      key: 'dashboard',
       label: 'Dashboard',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -26,6 +28,7 @@ export default function Sidebar() {
     },
     {
       path: '/watchlist',
+      key: 'watchlist',
       label: 'Watchlist',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -36,6 +39,7 @@ export default function Sidebar() {
     },
     {
       path: '/orders',
+      key: 'orders',
       label: 'Orders',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -45,6 +49,7 @@ export default function Sidebar() {
     },
     {
       path: '/positions',
+      key: 'positions',
       label: 'Positions',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -54,6 +59,7 @@ export default function Sidebar() {
     },
     {
       path: '/trades',
+      key: 'trades',
       label: 'Trades',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -63,6 +69,7 @@ export default function Sidebar() {
     },
     {
       path: '/pnl',
+      key: 'pnl',
       label: 'PnL Analytics',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -72,6 +79,7 @@ export default function Sidebar() {
     },
     {
       path: '/signals',
+      key: 'signals',
       label: 'Signals',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -81,6 +89,7 @@ export default function Sidebar() {
     },
     {
       path: '/risk',
+      key: 'risk',
       label: 'Risk',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -90,6 +99,7 @@ export default function Sidebar() {
     },
     {
       path: '/quant-scores',
+      key: 'quant-scores',
       label: 'Quant Score',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -99,6 +109,7 @@ export default function Sidebar() {
     },
     {
       path: '/greek-trailing',
+      key: 'greek-trailing',
       label: 'Greek Trail',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -109,6 +120,7 @@ export default function Sidebar() {
     },
     {
       path: '/performance',
+      key: 'performance',
       label: 'Performance',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -118,6 +130,7 @@ export default function Sidebar() {
     },
     {
       path: '/patterns',
+      key: 'patterns',
       label: 'Patterns',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -127,6 +140,7 @@ export default function Sidebar() {
     },
     {
       path: '/insights',
+      key: 'insights',
       label: 'Insights',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -136,6 +150,7 @@ export default function Sidebar() {
     },
     {
       path: '/market-pulse',
+      key: 'market-pulse',
       label: 'Market Pulse',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -145,6 +160,7 @@ export default function Sidebar() {
     },
     {
       path: '/hot-stocks',
+      key: 'hot-stocks',
       label: 'HotStocks',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -155,6 +171,7 @@ export default function Sidebar() {
     },
     {
       path: '/strategy',
+      key: 'strategy',
       label: 'Strategy',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -164,6 +181,7 @@ export default function Sidebar() {
     },
     {
       path: '/wallets',
+      key: 'wallets',
       label: 'Wallets',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -174,6 +192,7 @@ export default function Sidebar() {
     },
     {
       path: '/ml-shadow',
+      key: 'ml-shadow',
       label: 'ML Shadow',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -207,6 +226,10 @@ export default function Sidebar() {
     }] : []),
   ]
 
+  const allowedPages = user?.allowedPages ?? [];
+  const isAdmin = user?.role === 'ADMIN';
+  const visibleNavItems = isAdmin ? navItems : navItems.filter(i => i.key && allowedPages.includes(i.key));
+
   const isActive = (path: string) => location.pathname === path ||
     (path !== '/dashboard' && location.pathname.startsWith(path))
 
@@ -230,7 +253,7 @@ export default function Sidebar() {
 
       {/* Nav items */}
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto custom-scrollbar">
-        {navItems.map(item => (
+        {visibleNavItems.map(item => (
           <Link
             key={item.path}
             to={item.path}
