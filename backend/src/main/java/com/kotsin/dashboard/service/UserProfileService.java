@@ -116,6 +116,12 @@ public class UserProfileService {
         return UserResponse.fromUser(user);
     }
 
+    public String findIdByUsername(String username) {
+        return userRepository.findByUsername(username)
+                .map(User::getId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + username));
+    }
+
     public void deleteUser(String userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
