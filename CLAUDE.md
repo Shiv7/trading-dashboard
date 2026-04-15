@@ -17,7 +17,7 @@
 ```bash
 ps aux | grep "spring-boot:run" | grep -v grep
 kill -9 <PID>
-cd /home/ubuntu/trading-dashboard/backend && nohup mvn spring-boot:run > nohup.out 2>&1 &
+cd /home/ubuntu/trading-dashboard/backend && nohup mvn spring-boot:run >> nohup.out 2>&1 &  # use `>>` append, NOT `>`, to preserve forensic log history across restarts
 tail -100f nohup.out
 ```
 

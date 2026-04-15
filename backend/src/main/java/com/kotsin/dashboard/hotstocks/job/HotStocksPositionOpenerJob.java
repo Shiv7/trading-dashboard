@@ -31,11 +31,19 @@ import java.util.Map;
 @Component
 public class HotStocksPositionOpenerJob {
     private static final Logger log = LoggerFactory.getLogger(HotStocksPositionOpenerJob.class);
+    private static final String LOG_PREFIX = "[HOTSTOCKS-OPENER]";
     private static final double POSITION_SIZE_RUPEES = 150_000.0;  // 1.5 L per position
-    private static final int MAX_POSITIONS = 6;
+    // Positional strategy: up to 6 NEW entries per day, up to 50 concurrent active positions.
+    // Replaces legacy MAX_POSITIONS=6 which capped TOTAL active — wrong for positional multi-day holds.
+    static final int MAX_NEW_PER_DAY = 6;
+    static final int MAX_CONCURRENT = 50;
     private static final double SL_PCT = 0.05;     // 5% stop loss
     private static final double T1_PCT = 0.05;     // 5% first target
+    private static final double T2_PCT = 0.08;     // 8% second target
+    private static final double T3_PCT = 0.12;     // 12% third target
+    private static final double T4_PCT = 0.15;     // 15% fourth target
     private static final String KILL_SWITCH_KEY = "hotstocks:v1:kill_switch";
+    private static final String POSITIONS_KEY_PREFIX = "virtual:positions:";
 
     private final HotStocksService service;
     private final StringRedisTemplate redis;
@@ -67,16 +75,35 @@ public class HotStocksPositionOpenerJob {
             return;
         }
 
+        int concurrentBefore = countActiveHotStocksPositions();
+        log.info("{} strategy=HOTSTOCKS action=START concurrentBefore={} maxConcurrent={} maxNewPerDay={} rankedCount={}",
+            LOG_PREFIX, concurrentBefore, MAX_CONCURRENT, MAX_NEW_PER_DAY, ranked.size());
+
         int opened = 0;
-        int skipped = 0;
+        int skippedDedup = 0;
+        int skippedCapReached = 0;
+        int skippedNotFno = 0;
         int failed = 0;
         for (StockMetrics m : ranked) {
-            if (opened >= MAX_POSITIONS) break;
-            if (!m.isFnoEligible()) continue;
+            if (opened >= MAX_NEW_PER_DAY) {
+                log.info("{} strategy=HOTSTOCKS action=STOP_DAILY_CAP opened={} maxNewPerDay={}",
+                    LOG_PREFIX, opened, MAX_NEW_PER_DAY);
+                break;
+            }
+            if (concurrentBefore + opened >= MAX_CONCURRENT) {
+                skippedCapReached++;
+                log.warn("{} strategy=HOTSTOCKS scrip={} symbol={} action=SKIP reason=concurrent_max_{} concurrentNow={}",
+                    LOG_PREFIX, m.getScripCode(), m.getSymbol(), MAX_CONCURRENT, concurrentBefore + opened);
+                break;
+            }
+            if (!m.isFnoEligible()) {
+                skippedNotFno++;
+                continue;
+            }
             if (hotStocksPositionExists(m.getScripCode())) {
-                skipped++;
-                log.info("HotStocksPositionOpenerJob: {} ({}) already has HOTSTOCKS position — skipping",
-                    m.getSymbol(), m.getScripCode());
+                skippedDedup++;
+                log.info("{} strategy=HOTSTOCKS scrip={} symbol={} action=SKIP reason=already_held",
+                    LOG_PREFIX, m.getScripCode(), m.getSymbol());
                 continue;
             }
             try {
@@ -84,12 +111,48 @@ public class HotStocksPositionOpenerJob {
                 opened++;
             } catch (Exception e) {
                 failed++;
-                log.warn("HotStocksPositionOpenerJob: failed to open {} ({}): {}",
-                    m.getSymbol(), m.getScripCode(), e.getMessage());
+                log.warn("{} strategy=HOTSTOCKS scrip={} symbol={} action=FAIL reason={}",
+                    LOG_PREFIX, m.getScripCode(), m.getSymbol(), e.getMessage());
             }
         }
-        log.info("HotStocksPositionOpenerJob complete: {} opened, {} skipped (dedup), {} failed",
-            opened, skipped, failed);
+        log.info("{} strategy=HOTSTOCKS action=COMPLETE opened={} skippedDedup={} skippedCapReached={} skippedNotFno={} failed={} concurrentAfter={}",
+            LOG_PREFIX, opened, skippedDedup, skippedCapReached, skippedNotFno, failed, concurrentBefore + opened);
+    }
+
+    /**
+     * Counts currently active HOTSTOCKS positions (qtyOpen>0, not CLOSED). Enforces the
+     * MAX_CONCURRENT cap so accumulated positions across multiple days don't blow past
+     * the risk limit.
+     *
+     * Returns 0 on Redis failure — conservative: lets the opener proceed but the cap
+     * check will still trigger mid-loop. A hard failure here would block a whole day's
+     * entries, which is worse than under-counting.
+     */
+    int countActiveHotStocksPositions() {
+        try {
+            java.util.Set<String> keys = redis.keys(POSITIONS_KEY_PREFIX + "*");
+            if (keys == null || keys.isEmpty()) return 0;
+            com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+            int n = 0;
+            for (String key : keys) {
+                String json = redis.opsForValue().get(key);
+                if (json == null || json.isBlank()) continue;
+                try {
+                    com.fasterxml.jackson.databind.JsonNode node = om.readTree(json);
+                    String source = node.path("signalSource").asText("");
+                    String status = node.path("status").asText("");
+                    int qtyOpen = node.path("qtyOpen").asInt(0);
+                    if ("HOTSTOCKS".equals(source) && qtyOpen > 0 && !"CLOSED".equals(status)) n++;
+                } catch (Exception ignore) {
+                    // malformed JSON on a single position key — log but do not fail the whole count
+                    log.debug("{} scrip={} action=PARSE_FAIL reason=malformed_json", LOG_PREFIX, key);
+                }
+            }
+            return n;
+        } catch (Exception e) {
+            log.warn("{} action=COUNT_FAIL reason={} — returning 0 (permissive)", LOG_PREFIX, e.getMessage());
+            return 0;
+        }
     }
 
     /**
@@ -126,7 +189,12 @@ public class HotStocksPositionOpenerJob {
         }
         // Use SL from the enriched action cue if available, else fall back to percentage stop
         double sl = m.getSuggestedSlPrice() > 0 ? m.getSuggestedSlPrice() : entry * (1 - SL_PCT);
+        // Positional staircase: T1 5% / T2 8% / T3 12% / T4 15%. Opener owns these defaults;
+        // the daily recalibrator (later) may overwrite T1-T4 based on fresh volatility + greeks.
         double t1 = entry * (1 + T1_PCT);
+        double t2 = entry * (1 + T2_PCT);
+        double t3 = entry * (1 + T3_PCT);
+        double t4 = entry * (1 + T4_PCT);
 
         // Fetch slippage estimate from trade-exec. Required by StrategyTradeExecutor;
         // missing field triggers NPE on Math.abs(req.getEstimatedEntrySlippage()).
@@ -151,17 +219,22 @@ public class HotStocksPositionOpenerJob {
         payload.put("entryPrice", entry);
         payload.put("sl", sl);
         payload.put("t1", t1);
-        payload.put("t2", 0.0);
-        payload.put("t3", 0.0);
-        payload.put("t4", 0.0);
+        payload.put("t2", t2);
+        payload.put("t3", t3);
+        payload.put("t4", t4);
 
         // equity mirroring
         payload.put("equitySpot", entry);
         payload.put("equitySl", sl);
         payload.put("equityT1", t1);
-        payload.put("equityT2", 0.0);
-        payload.put("equityT3", 0.0);
-        payload.put("equityT4", 0.0);
+        payload.put("equityT2", t2);
+        payload.put("equityT3", t3);
+        payload.put("equityT4", t4);
+
+        // Partial-exit scaffolding (provision only — wiring of per-target partial sizing
+        // lands when the exit allocator is ready). For now: single 100% exit at T1.
+        payload.put("partialExits", java.util.List.of(
+            java.util.Map.of("level", "T1", "qtyPct", 100)));
 
         // deltas + strategy routing
         payload.put("delta", 1.0);
