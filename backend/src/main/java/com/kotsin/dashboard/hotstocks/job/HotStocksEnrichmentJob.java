@@ -7,6 +7,7 @@ import com.kotsin.dashboard.hotstocks.model.CorporateEvent;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
 import com.kotsin.dashboard.hotstocks.service.HotStocksRanker;
 import com.kotsin.dashboard.hotstocks.service.HotStocksService;
+import com.kotsin.dashboard.hotstocks.service.RecommendationHistoryService;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -43,17 +45,20 @@ public class HotStocksEnrichmentJob {
     private final FivePaisaHistoryClient historyClient;
     private final MarketPulseRedisClient marketPulseClient;
     private final MongoTemplate mongo;
+    private final RecommendationHistoryService recommendationHistoryService;
 
     public HotStocksEnrichmentJob(HotStocksService service,
                                   HotStocksRanker ranker,
                                   FivePaisaHistoryClient historyClient,
                                   MarketPulseRedisClient marketPulseClient,
-                                  MongoTemplate mongo) {
+                                  MongoTemplate mongo,
+                                  RecommendationHistoryService recommendationHistoryService) {
         this.service = service;
         this.ranker = ranker;
         this.historyClient = historyClient;
         this.marketPulseClient = marketPulseClient;
         this.mongo = mongo;
+        this.recommendationHistoryService = recommendationHistoryService;
     }
 
     @Scheduled(cron = "0 45 5 * * MON-FRI", zone = "Asia/Kolkata")
@@ -129,6 +134,13 @@ public class HotStocksEnrichmentJob {
             // Step 5: rank and cache top list
             List<StockMetrics> top6Fno = ranker.rank(computed, 6, true);
             service.cacheRankedList(top6Fno);
+
+            // Task 8 wiring: record each recommended scripCode into the 10-day rolling
+            // history so the dashboard card can render a "Recommended Nx in last 10d" badge.
+            LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+            for (StockMetrics m : top6Fno) {
+                recommendationHistoryService.record(m.getScripCode(), today);
+            }
 
             long elapsed = System.currentTimeMillis() - start;
             log.info("HotStocksEnrichmentJob complete: {} computed, {} failed, {} ranked, elapsed={}ms",

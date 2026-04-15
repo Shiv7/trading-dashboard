@@ -1,7 +1,9 @@
 package com.kotsin.dashboard.hotstocks.controller;
 
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
+import com.kotsin.dashboard.hotstocks.service.HotStocksAlertPublisher;
 import com.kotsin.dashboard.hotstocks.service.HotStocksService;
+import com.kotsin.dashboard.hotstocks.service.RecommendationHistoryService;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,10 +36,31 @@ public class HotStocksController {
 
     private final HotStocksService service;
     private final StringRedisTemplate redis;
+    private final RecommendationHistoryService recommendationHistoryService;
+    private final HotStocksAlertPublisher alertPublisher;
 
-    public HotStocksController(HotStocksService service, StringRedisTemplate redis) {
+    public HotStocksController(HotStocksService service,
+                               StringRedisTemplate redis,
+                               RecommendationHistoryService recommendationHistoryService,
+                               HotStocksAlertPublisher alertPublisher) {
         this.service = service;
         this.redis = redis;
+        this.recommendationHistoryService = recommendationHistoryService;
+        this.alertPublisher = alertPublisher;
+    }
+
+    @GetMapping("/alerts")
+    public List<String> getAlerts() {
+        return alertPublisher.readRecent(50);
+    }
+
+    @GetMapping("/recommendation-count/{scripCode}")
+    public Map<String, Object> getRecommendationCount(@PathVariable String scripCode) {
+        return Map.of(
+            "scripCode", scripCode,
+            "count", recommendationHistoryService.countInLastNDays(scripCode, 10),
+            "daysLookback", 10
+        );
     }
 
     @GetMapping
