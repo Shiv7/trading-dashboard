@@ -150,7 +150,12 @@ public class HotStocksEnrichmentJob {
             }
 
             // Step 5: rank and cache top list
-            List<StockMetrics> top6Fno = ranker.rank(computed, 6, true);
+            // Cache a wider pool (20 F&O) so the 09:15 opener can advance past
+            // already-held names via dedup and still reach MAX_NEW_PER_DAY=6 fresh
+            // entries. UI + refresh job cap display at 6 via stream.limit(6).
+            // (2026-04-15: previously hard-capped at 6 — caused under-opening on
+            //  days with overlap between today's ranked list and existing holdings.)
+            List<StockMetrics> top6Fno = ranker.rank(computed, 20, true);
             service.cacheRankedList(top6Fno);
 
             // Task 8 wiring: record each recommended scripCode into the 10-day rolling
