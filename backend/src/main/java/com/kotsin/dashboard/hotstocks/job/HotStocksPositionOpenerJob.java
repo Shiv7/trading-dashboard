@@ -38,10 +38,14 @@ public class HotStocksPositionOpenerJob {
     static final int MAX_NEW_PER_DAY = 6;
     static final int MAX_CONCURRENT = 50;
     private static final double SL_PCT = 0.05;     // 5% stop loss
-    private static final double T1_PCT = 0.05;     // 5% first target
-    private static final double T2_PCT = 0.08;     // 8% second target
-    private static final double T3_PCT = 0.12;     // 12% third target
-    private static final double T4_PCT = 0.15;     // 15% fourth target
+    // Staircase tuned from retrospective backtest (2026-04-15):
+    // 17 real picks showed 88% forward-positive but ZERO hit +5% within 10 days.
+    // Mean outcome +1.27%/trade. Lowering T1 to +2% locks in the typical grinding
+    // winner; T2-T4 capture breakouts.
+    private static final double T1_PCT = 0.02;     // 2% — catches typical grinder
+    private static final double T2_PCT = 0.05;     // 5% — gap/breakout tier
+    private static final double T3_PCT = 0.08;     // 8% — strong trender
+    private static final double T4_PCT = 0.12;     // 12% — exceptional run
     private static final String KILL_SWITCH_KEY = "hotstocks:v1:kill_switch";
     private static final String POSITIONS_KEY_PREFIX = "virtual:positions:";
 

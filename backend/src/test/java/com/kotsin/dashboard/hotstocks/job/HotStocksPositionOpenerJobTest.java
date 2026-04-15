@@ -165,14 +165,15 @@ class HotStocksPositionOpenerJobTest {
         Map<String, Object> payload = captor.getValue().getBody();
         assertNotNull(payload);
 
-        // T1 = 500 * 1.05 = 525
-        assertEquals(525.0, ((Number) payload.get("t1")).doubleValue(), 0.001);
-        // T2 = 500 * 1.08 = 540
-        assertEquals(540.0, ((Number) payload.get("t2")).doubleValue(), 0.001);
-        // T3 = 500 * 1.12 = 560
-        assertEquals(560.0, ((Number) payload.get("t3")).doubleValue(), 0.001);
-        // T4 = 500 * 1.15 = 575
-        assertEquals(575.0, ((Number) payload.get("t4")).doubleValue(), 0.001);
+        // Staircase: +2 / +5 / +8 / +12% (tuned from 2026-04-15 backtest — picks grind, don't breakout)
+        // T1 = 500 * 1.02 = 510
+        assertEquals(510.0, ((Number) payload.get("t1")).doubleValue(), 0.001);
+        // T2 = 500 * 1.05 = 525
+        assertEquals(525.0, ((Number) payload.get("t2")).doubleValue(), 0.001);
+        // T3 = 500 * 1.08 = 540
+        assertEquals(540.0, ((Number) payload.get("t3")).doubleValue(), 0.001);
+        // T4 = 500 * 1.12 = 560
+        assertEquals(560.0, ((Number) payload.get("t4")).doubleValue(), 0.001);
 
         // partialExits scaffolding present
         Object pe = payload.get("partialExits");
