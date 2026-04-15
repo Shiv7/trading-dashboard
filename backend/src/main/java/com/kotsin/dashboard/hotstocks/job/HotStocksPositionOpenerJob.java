@@ -128,6 +128,10 @@ public class HotStocksPositionOpenerJob {
         double sl = m.getSuggestedSlPrice() > 0 ? m.getSuggestedSlPrice() : entry * (1 - SL_PCT);
         double t1 = entry * (1 + T1_PCT);
 
+        // Fetch slippage estimate from trade-exec. Required by StrategyTradeExecutor;
+        // missing field triggers NPE on Math.abs(req.getEstimatedEntrySlippage()).
+        Map<String, Object> slip = fetchSlippage(m.getScripCode(), m.getSymbol(), qty, entry);
+
         Map<String, Object> payload = new HashMap<>();
         // identity
         payload.put("scripCode", m.getScripCode());
@@ -168,6 +172,15 @@ public class HotStocksPositionOpenerJob {
         payload.put("executionMode", "AUTO");
         payload.put("tradeLabel", "HOTSTOCKS_POSITIONAL");
 
+        // Slippage fields — REQUIRED by StrategyTradeExecutor (unboxed via Math.abs).
+        payload.put("estimatedEntrySlippage",
+            ((Number) slip.getOrDefault("estimatedEntrySlippage", 0.0)).doubleValue());
+        payload.put("estimatedEntrySlippageTotal",
+            ((Number) slip.getOrDefault("estimatedEntrySlippageTotal", 0.0)).doubleValue());
+        payload.put("estimatedSlippagePct",
+            ((Number) slip.getOrDefault("estimatedSlippagePct", 0.0)).doubleValue());
+        payload.put("slippageTier", slip.getOrDefault("slippageTier", "STATIC"));
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
@@ -176,5 +189,31 @@ public class HotStocksPositionOpenerJob {
             tradeExecUrl + "/api/strategy-trades", request, Map.class);
         log.info("HotStocksPositionOpenerJob: opened {} qty={} entry={} sl={} t1={} status={}",
             m.getSymbol(), qty, entry, sl, t1, response.getStatusCode());
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Map<String, Object> fetchSlippage(String scripCode, String symbol, int qty, double price) {
+        Map<String, Object> req = new HashMap<>();
+        req.put("scripCode", scripCode);
+        req.put("qty", qty);
+        req.put("price", price);
+        req.put("exchange", "NSE");
+        req.put("lotSize", 1);
+        req.put("instrumentType", "EQUITY");
+        req.put("symbol", symbol);
+        req.put("side", "BUY");
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        try {
+            ResponseEntity<Map> resp = rest.postForEntity(
+                tradeExecUrl + "/api/slippage/estimate",
+                new HttpEntity<>(req, headers), Map.class);
+            Map body = resp.getBody();
+            return body != null ? (Map<String, Object>) body : new HashMap<>();
+        } catch (Exception e) {
+            log.warn("HotStocksPositionOpenerJob: slippage estimate failed for {} ({}): {} — defaulting to zero",
+                symbol, scripCode, e.getMessage());
+            return new HashMap<>();
+        }
     }
 }
