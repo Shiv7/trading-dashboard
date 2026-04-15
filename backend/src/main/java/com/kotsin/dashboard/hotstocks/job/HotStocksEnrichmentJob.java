@@ -46,19 +46,22 @@ public class HotStocksEnrichmentJob {
     private final MarketPulseRedisClient marketPulseClient;
     private final MongoTemplate mongo;
     private final RecommendationHistoryService recommendationHistoryService;
+    private final com.kotsin.dashboard.hotstocks.service.OiSeriesProvider oiSeriesProvider;
 
     public HotStocksEnrichmentJob(HotStocksService service,
                                   HotStocksRanker ranker,
                                   FivePaisaHistoryClient historyClient,
                                   MarketPulseRedisClient marketPulseClient,
                                   MongoTemplate mongo,
-                                  RecommendationHistoryService recommendationHistoryService) {
+                                  RecommendationHistoryService recommendationHistoryService,
+                                  com.kotsin.dashboard.hotstocks.service.OiSeriesProvider oiSeriesProvider) {
         this.service = service;
         this.ranker = ranker;
         this.historyClient = historyClient;
         this.marketPulseClient = marketPulseClient;
         this.mongo = mongo;
         this.recommendationHistoryService = recommendationHistoryService;
+        this.oiSeriesProvider = oiSeriesProvider;
     }
 
     @Scheduled(cron = "0 45 5 * * MON-FRI", zone = "Asia/Kolkata")
@@ -95,6 +98,12 @@ public class HotStocksEnrichmentJob {
 
             Map<String, Double> deliveryBySymbol = marketPulseClient.fetchDeliveryBySymbol();
 
+            // Smart-money hedging indicators (2026-04-15):
+            //  - Short-interest delta: recent 5-day sum vs prior 5-day sum
+            //  - (Per-symbol PCR delta populated below per-stock via OiSeriesProvider)
+            Map<String, Double> shortInterestDelta = marketPulseClient.fetchShortInterestDelta5d();
+            log.info("HotStocksEnrichmentJob: short-interest symbols with delta data = {}", shortInterestDelta.size());
+
             // Step 3: Nifty benchmark 5d return
             double nifty5d = benchmark5d(NIFTY_SCRIP_CODE);
             log.info("HotStocksEnrichmentJob: deals={}, events={}, delivery_symbols={}, nifty5d={}",
@@ -122,6 +131,15 @@ public class HotStocksEnrichmentJob {
                         nifty5d,
                         /*oiChange5d=*/ null,  // TODO Phase 1b: load from oi_metrics_1m
                         deals, events);
+                    // Smart-money hedging populate: short-interest delta (from Redis)
+                    // and PCR 5d delta (from options OI aggregation). Both nullable —
+                    // null when data absent (non-F&O, new listing, or thin OI history).
+                    Double siDelta = shortInterestDelta.get(info.symbol);
+                    if (siDelta != null) m.setShortInterestDelta5d(siDelta);
+                    if (info.fnoEligible) {
+                        java.util.Optional<Double> pcrDelta = oiSeriesProvider.fivePcrDeltaTrend(info.symbol);
+                        pcrDelta.ifPresent(m::setPcrDelta5d);
+                    }
                     service.cache(m);
                     computed.add(m);
                 } catch (Exception e) {

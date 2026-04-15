@@ -12,6 +12,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -170,5 +171,82 @@ public class OiSeriesProvider {
     private static long numberOf(Object v) {
         if (v instanceof Number) return ((Number) v).longValue();
         return 0;
+    }
+
+    /**
+     * 5-day PCR delta for an underlying symbol: (current PCR / PCR 5 sessions ago) − 1.
+     * PCR = sum(put OI) / sum(call OI) across all strikes of all active option contracts
+     * for that underlying.
+     *
+     * Positive delta = put OI growing faster than call OI (bearish hedging / distribution).
+     * Negative delta = call OI growing faster (bullish positioning).
+     *
+     * Returns empty when: non-F&O symbol, no options traded, or fewer than 2 sessions of
+     * data in oi_metrics_1m. Feeds the SMART_BUY_PUT_OI_BALLOONING clamp in HotStocks scorer.
+     *
+     * Thin-data caveat (2026-04-15): oi_metrics_1m has ~5 days of history; delta values
+     * will stabilize over the next 2-3 weeks as the collection accumulates.
+     */
+    public Optional<Double> fivePcrDeltaTrend(String underlyingSymbol) {
+        if (mongo == null || underlyingSymbol == null) return Optional.empty();
+        try {
+            LocalDate today = LocalDate.now(IST);
+            java.util.Date from = java.util.Date.from(today.minusDays(10).atStartOfDay(IST).toInstant());
+            java.util.Date to   = java.util.Date.from(today.plusDays(1).atStartOfDay(IST).toInstant());
+
+            List<Document> pipeline = List.of(
+                new Document("$match", new Document("underlyingSymbol", underlyingSymbol)
+                        .append("optionType", new Document("$in", List.of("CE", "PE")))
+                        .append("timestamp", new Document("$gte", from).append("$lt", to))),
+                new Document("$addFields", new Document("dayKey",
+                        new Document("$dateToString", new Document("format", "%Y-%m-%d")
+                                .append("date", "$timestamp")
+                                .append("timezone", "Asia/Kolkata")))),
+                // For each (day, optionType, scripCode) pair, take the LAST reading of the day.
+                // We want EOD OI snapshot, not intraday noise.
+                new Document("$sort", new Document("timestamp", 1)),
+                new Document("$group", new Document("_id",
+                        new Document("day", "$dayKey").append("optionType", "$optionType").append("scripCode", "$scripCode"))
+                        .append("oiClose", new Document("$last", "$oiClose"))),
+                // Sum across all contracts for the same (day, optionType)
+                new Document("$group", new Document("_id",
+                        new Document("day", "$_id.day").append("optionType", "$_id.optionType"))
+                        .append("totalOi", new Document("$sum", "$oiClose"))),
+                new Document("$sort", new Document("_id.day", 1))
+            );
+
+            // Build day → {CE, PE} aggregation
+            Map<String, long[]> perDay = new java.util.TreeMap<>();  // day → [CE, PE]
+            for (Document row : mongo.getCollection("oi_metrics_1m").aggregate(pipeline)) {
+                Document id = (Document) row.get("_id");
+                String day = id.getString("day");
+                String type = id.getString("optionType");
+                long total = numberOf(row.get("totalOi"));
+                long[] pair = perDay.computeIfAbsent(day, k -> new long[]{0, 0});
+                if ("CE".equals(type)) pair[0] = total;
+                else if ("PE".equals(type)) pair[1] = total;
+            }
+
+            if (perDay.size() < 2) return Optional.empty();
+
+            // Compute PCR for anchor (oldest with both sides) + latest (newest with both sides)
+            List<Map.Entry<String, long[]>> entries = new ArrayList<>(perDay.entrySet());
+            Double anchorPcr = null;
+            Double latestPcr = null;
+            for (Map.Entry<String, long[]> e : entries) {
+                long[] v = e.getValue();
+                if (v[0] > 0 && v[1] >= 0) {
+                    double pcr = (double) v[1] / v[0];
+                    if (anchorPcr == null) anchorPcr = pcr;
+                    latestPcr = pcr;  // keep overwriting — last one wins
+                }
+            }
+            if (anchorPcr == null || latestPcr == null || anchorPcr == 0) return Optional.empty();
+            return Optional.of((latestPcr / anchorPcr) - 1.0);
+
+        } catch (Exception e) {
+            log.debug("[OI-SERIES] PCR delta fetch failed for {}: {}", underlyingSymbol, e.getMessage());
+            return Optional.empty();
+        }
     }
 }

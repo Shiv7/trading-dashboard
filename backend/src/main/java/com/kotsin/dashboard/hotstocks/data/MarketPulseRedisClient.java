@@ -162,6 +162,84 @@ public class MarketPulseRedisClient {
         return parts[0] + "-" + month + "-" + parts[2];
     }
 
+    /**
+     * Returns short-interest delta for each symbol: (sum of last 5 trading days) vs
+     * (sum of prior 5 trading days), expressed as a ratio delta.
+     *
+     * Formula: deltaRatio = (recent5dSum / max(prior5dSum, 1)) - 1
+     *   +0.50 = short interest grew 50%
+     *    0.00 = flat
+     *   -0.30 = short interest fell 30%
+     *
+     * Data source: market-pulse:short-selling:{YYYY-MM-DD} lists published by the
+     * NSE historical backfill + daily scraper. Returns empty map if no data in window.
+     * Called once per HotStocks enrichment cycle — O(10 redis GETs).
+     */
+    public Map<String, Double> fetchShortInterestDelta5d() {
+        LocalDate today = LocalDate.now();
+        // Walk back up to 14 calendar days to collect 10 trading days of data (5 + 5).
+        List<String> recentDates = new ArrayList<>();
+        List<String> priorDates = new ArrayList<>();
+        int daysBack = 1;
+        while ((recentDates.size() < 5 || priorDates.size() < 5) && daysBack < 20) {
+            LocalDate d = today.minusDays(daysBack);
+            // weekday filter (Mon-Fri) — NSE holidays not filtered here but missing keys naturally skip
+            if (d.getDayOfWeek().getValue() < 6) {
+                String dateStr = d.format(ISO);
+                String key = "market-pulse:short-selling:" + dateStr;
+                if (redis.hasKey(key)) {
+                    (recentDates.size() < 5 ? recentDates : priorDates).add(dateStr);
+                }
+            }
+            daysBack++;
+        }
+        if (recentDates.isEmpty() || priorDates.isEmpty()) {
+            log.debug("fetchShortInterestDelta5d: insufficient short-sell history (recent={}, prior={})",
+                recentDates.size(), priorDates.size());
+            return Collections.emptyMap();
+        }
+
+        Map<String, Long> recentSum = aggregateShortQty(recentDates);
+        Map<String, Long> priorSum  = aggregateShortQty(priorDates);
+
+        Map<String, Double> out = new HashMap<>();
+        // Union of symbols that appeared in either window
+        java.util.Set<String> syms = new java.util.HashSet<>(recentSum.keySet());
+        syms.addAll(priorSum.keySet());
+        for (String s : syms) {
+            long r = recentSum.getOrDefault(s, 0L);
+            long p = priorSum.getOrDefault(s, 0L);
+            if (p <= 0) {
+                // No prior activity — treat as strong delta if recent exists, else skip.
+                if (r > 0) out.put(s, 1.0); // +100% (new short-selling emerged)
+            } else {
+                out.put(s, ((double) r / p) - 1.0);
+            }
+        }
+        return out;
+    }
+
+    /** Sum quantity by symbol across the given daily list keys. */
+    private Map<String, Long> aggregateShortQty(List<String> dateKeys) {
+        Map<String, Long> sums = new HashMap<>();
+        for (String dateStr : dateKeys) {
+            String json = redis.opsForValue().get("market-pulse:short-selling:" + dateStr);
+            if (json == null || json.isBlank()) continue;
+            try {
+                JsonNode arr = mapper.readTree(json);
+                if (!arr.isArray()) continue;
+                for (JsonNode n : arr) {
+                    String sym = n.path("symbol").asText("");
+                    long q = n.path("quantity").asLong(0);
+                    if (!sym.isEmpty()) sums.merge(sym, q, Long::sum);
+                }
+            } catch (Exception e) {
+                log.debug("aggregateShortQty parse fail for {}: {}", dateStr, e.getMessage());
+            }
+        }
+        return sums;
+    }
+
     /** Returns the full symbol → delivery% map from the most recent bhavcopy run. */
     public Map<String, Double> fetchDeliveryBySymbol() {
         String json = redis.opsForValue().get("market-pulse:delivery-data");

@@ -241,6 +241,30 @@ public class HotStocksScoringEngine {
         // make smart-money signals ambiguous — flows could be positioning for
         // either an expected beat or information leak. Positional HotStocks
         // holds shouldn't take this binary risk.
+        // ── Clamp: SMART_BUY_SHORT_RISING ────────────────────────────────────
+        // Institutional short interest is growing alongside the smart buying.
+        // Some institutions are expressing bearish views via stock-borrow shorts
+        // while others accumulate cash — mixed smart-money positioning, bearish
+        // skew if shorts are building faster than usual.
+        // Threshold: +50% short interest growth over last 5 days vs prior 5.
+        Double shortDelta = m.getShortInterestDelta5d();
+        if (s > 0 && smartBuy > 0 && shortDelta != null && shortDelta > 0.50) {
+            s -= 15;
+            clamps.add("SMART_BUY_SHORT_RISING");
+        }
+
+        // ── Clamp: SMART_BUY_PUT_OI_BALLOONING ───────────────────────────────
+        // Put OI growing faster than call OI (PCR rising) while smart money
+        // buys cash = institutions hedging the purchase via options. Real
+        // accumulation shows rising call OI, stable/falling put OI. A 15%
+        // PCR rise over 5 days is conservative given our thin (5-10 day)
+        // OI history; can tune down as data deepens.
+        Double pcrDelta = m.getPcrDelta5d();
+        if (s > 0 && smartBuy > 0 && pcrDelta != null && pcrDelta > 0.15) {
+            s -= 20;
+            clamps.add("SMART_BUY_PUT_OI_BALLOONING");
+        }
+
         Integer daysToEventBoxed = m.getDaysToNearestEvent();
         String eventType = m.getNearestEventType();
         boolean blackoutEvent = eventType != null && (

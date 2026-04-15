@@ -236,6 +236,125 @@ class HotStocksScoringEngineClampsTest {
             "should not clamp SHORT signals — blackout only suppresses BUY decisions");
     }
 
+    // ─── SMART_BUY_SHORT_RISING ─────────────────────────────────────────────
+
+    @Test
+    void shortRising_fires_whenSmartBuyAndShortInterestSurging() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setShortInterestDelta5d(0.75);  // +75% short interest growth
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertTrue(clamps.contains("SMART_BUY_SHORT_RISING"));
+    }
+
+    @Test
+    void shortRising_doesNotFire_whenShortFalling() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setShortInterestDelta5d(-0.20);  // short cover
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_SHORT_RISING"));
+    }
+
+    @Test
+    void shortRising_doesNotFire_whenShortDeltaBelowThreshold() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setShortInterestDelta5d(0.30);  // +30% — below 50% threshold
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_SHORT_RISING"));
+    }
+
+    @Test
+    void shortRising_doesNotFire_whenShortDataUnavailable() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setShortInterestDelta5d(null);  // no data
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_SHORT_RISING"));
+    }
+
+    @Test
+    void shortRising_doesNotFire_onBearishScore() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setShortInterestDelta5d(0.75);
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(-20, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_SHORT_RISING"));
+    }
+
+    // ─── SMART_BUY_PUT_OI_BALLOONING ────────────────────────────────────────
+
+    @Test
+    void pcrBallooning_fires_whenSmartBuyAndPutOiDominant() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setPcrDelta5d(0.25);  // PCR up 25% — put OI growing faster
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertTrue(clamps.contains("SMART_BUY_PUT_OI_BALLOONING"));
+    }
+
+    @Test
+    void pcrBallooning_doesNotFire_whenPcrFalling() {
+        // Falling PCR = call OI growing faster = clean accumulation
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setPcrDelta5d(-0.10);
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_PUT_OI_BALLOONING"));
+    }
+
+    @Test
+    void pcrBallooning_doesNotFire_whenPcrBelowThreshold() {
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setPcrDelta5d(0.05);  // +5% — below 15% threshold
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_PUT_OI_BALLOONING"));
+    }
+
+    @Test
+    void pcrBallooning_doesNotFire_whenPcrDataNull() {
+        // Non-F&O stock OR insufficient OI history — skip gracefully
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setPcrDelta5d(null);
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(25, m, flow);
+        assertFalse(clamps.contains("SMART_BUY_PUT_OI_BALLOONING"));
+    }
+
+    @Test
+    void bothHedgingClamps_canStackOnSameStock() {
+        // Simultaneous short-interest spike + PCR balloon = worst-case hedging pattern
+        StockMetrics m = baseMetrics();
+        m.setSmartBuyCr(30.0);
+        m.setShortInterestDelta5d(0.80);
+        m.setPcrDelta5d(0.30);
+        FlowInput flow = new FlowInput(30.0, 0.0, 1);
+
+        List<String> clamps = runClamps(50, m, flow);
+        assertTrue(clamps.contains("SMART_BUY_SHORT_RISING"));
+        assertTrue(clamps.contains("SMART_BUY_PUT_OI_BALLOONING"));
+    }
+
     // ─── Integration: DELHIVERY reconstruction ─────────────────────────────
 
     @Test

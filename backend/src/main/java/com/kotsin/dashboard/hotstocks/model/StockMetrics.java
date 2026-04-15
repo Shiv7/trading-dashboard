@@ -80,6 +80,12 @@ public class StockMetrics {
     private String oiInterpretation;    // "LONG_BUILDUP" / "SHORT_COVERING" / "SHORT_BUILDUP" / "LONG_UNWINDING"
     private String volumeRegimeLabel;   // "INSTITUTIONAL_ACCUMULATION" / "RETAIL_SPIKE" / "NORMAL" / "QUIET"
 
+    // Smart-money hedging indicators (nullable — populated only when data available).
+    // Added 2026-04-15: feed Clamp 6 (short-interest rising) and Clamp 7 (PCR ballooning).
+    // Delta values are ratios: 0.50 = +50%, -0.30 = -30%, null = no data / not F&O / not enough history.
+    private Double shortInterestDelta5d;
+    private Double pcrDelta5d;
+
     // Corporate events
     private List<CorporateEvent> upcomingEvents = new ArrayList<>();
     private Integer daysToNearestEvent;
@@ -263,6 +269,12 @@ public class StockMetrics {
     public void setOiInterpretation(String oiInterpretation) { this.oiInterpretation = oiInterpretation; }
     public String getVolumeRegimeLabel() { return volumeRegimeLabel; }
     public void setVolumeRegimeLabel(String volumeRegimeLabel) { this.volumeRegimeLabel = volumeRegimeLabel; }
+
+    // Smart-money hedging indicators
+    public Double getShortInterestDelta5d() { return shortInterestDelta5d; }
+    public void setShortInterestDelta5d(Double v) { this.shortInterestDelta5d = v; }
+    public Double getPcrDelta5d() { return pcrDelta5d; }
+    public void setPcrDelta5d(Double v) { this.pcrDelta5d = v; }
 
     // Corporate events
     public List<CorporateEvent> getUpcomingEvents() { return upcomingEvents; }
