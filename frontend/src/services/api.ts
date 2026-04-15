@@ -1417,6 +1417,30 @@ export const hotStocksApi = {
     if (!res.ok) throw new Error(`hot-stocks wallet failed: ${res.status}`)
     return res.json()
   },
+
+  async alerts(): Promise<HotStocksAlert[]> {
+    const res = await fetch(`${API_BASE}/hot-stocks/alerts`)
+    if (!res.ok) throw new Error(`hot-stocks alerts failed: ${res.status}`)
+    const raw: string[] = await res.json()
+    const out: HotStocksAlert[] = []
+    for (const s of raw ?? []) {
+      try {
+        const parsed = JSON.parse(s)
+        if (parsed && typeof parsed === 'object') out.push(parsed as HotStocksAlert)
+      } catch {
+        // Skip malformed payload — backend guarantees JSON but be defensive.
+      }
+    }
+    return out
+  },
+}
+
+export interface HotStocksAlert {
+  type: 'INSUFFICIENT_FUNDS_NEXT_SESSION' | string
+  strategy: string
+  freeBalance: number
+  required: number
+  at: number
 }
 
 // Export helpers for use in other service files
