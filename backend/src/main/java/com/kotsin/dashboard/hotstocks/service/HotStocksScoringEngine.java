@@ -164,6 +164,14 @@ public class HotStocksScoringEngine {
     }
 
     // ── Hard clamps ─────────────────────────────────────────────────────────
+    //
+    // Clamps run AFTER the bucket sum. They exist to catch known-bad regimes that
+    // the additive buckets cannot veto on their own. Each clamp is independent;
+    // many can stack on the same signal. Added clamps list the reason for UI.
+    //
+    // Ordering matters only for determinism of clamps[] output. Arithmetic effect
+    // is additive — adjustments compose.
+
     static int applyClamps(int score, StockMetrics m, FlowInput flow, List<String> clamps) {
         int s = score;
         if ("BEARISH_TREND".equals(m.getPriceRegime())) {
@@ -187,6 +195,66 @@ public class HotStocksScoringEngine {
             s -= 15;
             clamps.add("HEAVY_SELL_YEST");
         }
+
+        // ── Clamp: SMART_BUY_TAPE_SELL_DIVERGENCE ─────────────────────────────
+        // Smart clients disclosed buying via bulk/block deals, but the aggregate
+        // market is net-selling by a wide margin. Smart money may be selling in
+        // the open market below disclosure thresholds — invisible here.
+        // Catches the DELHIVERY-class pattern where the existing DISTRIBUTION
+        // clamp (sell > 2× buy) doesn't fire but net-Cr is still strongly negative.
+        double smartBuy = m.getSmartBuyCr();
+        double smartSell = m.getSmartSellCr();
+        double netCr = flow.net();
+        if (smartBuy > 0 && smartSell < 5 && netCr < -100) {
+            s -= 20;
+            clamps.add("SMART_BUY_TAPE_SELL_DIVERGENCE");
+        }
+
+        // ── Clamp: LOW_DELIVERY_SPECULATION ───────────────────────────────────
+        // Bullish score backed by LOW delivery % means the buyers are intraday
+        // speculators who squared off at EOD. True institutional accumulation
+        // shows up as high delivery %. Applied only when score is already
+        // bullish — we're suppressing false-positive BUYs, not punishing SHORTs.
+        double deliveryPct = m.getDeliveryPctLatest();
+        if (s > 0 && deliveryPct > 0 && deliveryPct < 25 && smartBuy > 0) {
+            s -= 15;
+            clamps.add("LOW_DELIVERY_SPECULATION");
+        }
+
+        // ── Clamp: ROTATION_NOT_ACCUMULATION ─────────────────────────────────
+        // Same smart client appears on BOTH buy and sell sides of the 7-day
+        // window. That is rotation (or inter-fund position transfer), not
+        // fresh accumulation. Suppress the consensus bonus assumption.
+        List<String> buyers = m.getSmartBuyClients();
+        List<String> sellers = m.getSmartSellClients();
+        if (buyers != null && !buyers.isEmpty() && sellers != null && !sellers.isEmpty()) {
+            java.util.Set<String> overlap = new java.util.HashSet<>(buyers);
+            overlap.retainAll(sellers);
+            if (!overlap.isEmpty()) {
+                s -= 15;
+                clamps.add("ROTATION_NOT_ACCUMULATION");
+            }
+        }
+
+        // ── Clamp: PRE_EVENT_BLACKOUT ────────────────────────────────────────
+        // Earnings / board meeting / results within the next 5 trading days
+        // make smart-money signals ambiguous — flows could be positioning for
+        // either an expected beat or information leak. Positional HotStocks
+        // holds shouldn't take this binary risk.
+        Integer daysToEventBoxed = m.getDaysToNearestEvent();
+        String eventType = m.getNearestEventType();
+        boolean blackoutEvent = eventType != null && (
+                "EARNINGS".equalsIgnoreCase(eventType)
+                || "RESULTS".equalsIgnoreCase(eventType)
+                || "BOARD_MEETING".equalsIgnoreCase(eventType));
+        if (daysToEventBoxed != null && blackoutEvent && s > 0) {
+            int d = daysToEventBoxed;
+            if (d >= 0 && d <= 5) {
+                s = Math.min(s, 0);
+                clamps.add("PRE_EVENT_BLACKOUT_" + eventType);
+            }
+        }
+
         return s;
     }
 
