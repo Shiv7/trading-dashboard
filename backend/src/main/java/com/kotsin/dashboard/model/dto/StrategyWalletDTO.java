@@ -17,6 +17,8 @@ public class StrategyWalletDTO {
         private String strategy;
         private String displayName;
         private double initialCapital;
+        private double totalTopups;
+        private double deployedCapital;
         private double currentCapital;
         private double totalPnl;
         private double totalPnlPercent;

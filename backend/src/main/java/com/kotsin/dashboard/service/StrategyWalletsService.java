@@ -54,8 +54,21 @@ public class StrategyWalletsService {
                     // is the fresh source (2s from monitoring). Wallet entity's unrealizedPnl is Lua-maintained
                     // every 5s and including it here causes double-counting when position-level is added.
                     double unrealizedPnl = 0;
-                    // totalPnl = balance - initial (source of truth, not wallet counters which may miss partial exits)
-                    double totalPnl = currentBalance - initialCapital;
+                    // Declared topups from history
+                    double declaredTopups = sumTopupHistory(wallet);
+                    // Back-calculated deployed capital using the invariant:
+                    //   currentBalance = initialCapital + totalTopups + realizedPnl
+                    // This auto-detects any UNDECLARED capital injections (silent admin adds, wallet resets, etc)
+                    // by deriving deployed capital from realized-PnL counter rather than trusting topupHistory alone.
+                    double backCalculatedDeployed = currentBalance - realizedPnl;
+                    double declaredDeployed = initialCapital + declaredTopups;
+                    // Take max to preserve declared topups even if balance has drifted; but prefer back-calculated
+                    // when it exceeds declared (signals an undeclared injection)
+                    double deployedCapital = Math.max(declaredDeployed, backCalculatedDeployed);
+                    double totalTopups = deployedCapital - initialCapital;
+                    // totalPnl (realized only at this stage) comes from the wallet's authoritative counter.
+                    // Unrealized is added in a second pass further down.
+                    double totalPnl = realizedPnl;
                     int totalTrades = getIntValue(wallet, "totalTradeCount", 0);
                     int wins = getIntValue(wallet, "totalWinCount", 0);
                     int losses = getIntValue(wallet, "totalLossCount", 0);
@@ -67,7 +80,7 @@ public class StrategyWalletsService {
                             getNumericValue(wallet, "dayPnl", 0));
                     boolean circuitBreakerTripped = getBoolValue(wallet, "circuitBreakerTripped", false);
 
-                    double pnlPercent = initialCapital > 0 ? totalPnl / initialCapital * 100 : 0;
+                    double pnlPercent = deployedCapital > 0 ? totalPnl / deployedCapital * 100 : 0;
 
                     double peakBalance = getNumericValue(wallet, "peakBalance", 0);
                     double maxDrawdown = getNumericValue(wallet, "maxDrawdown", 0);
@@ -93,6 +106,8 @@ public class StrategyWalletsService {
                             .strategy(DISPLAY_NAMES.getOrDefault(key, key))
                             .displayName(DISPLAY_NAMES.getOrDefault(key, key))
                             .initialCapital(round2(initialCapital))
+                            .totalTopups(round2(totalTopups))
+                            .deployedCapital(round2(deployedCapital))
                             .currentCapital(round2(currentBalance))
                             .totalPnl(round2(totalPnl))
                             .totalPnlPercent(round2(pnlPercent))
@@ -181,7 +196,8 @@ public class StrategyWalletsService {
                 // Set both unrealizedPnl and totalPnl from it — no double-counting.
                 s.setUnrealizedPnl(round2(unrealFromPositions));
                 s.setTotalPnl(round2(s.getTotalPnl() + unrealFromPositions));
-                s.setTotalPnlPercent(round2(s.getTotalPnl() / s.getInitialCapital() * 100));
+                double denom = s.getDeployedCapital() > 0 ? s.getDeployedCapital() : s.getInitialCapital();
+                s.setTotalPnlPercent(round2(denom > 0 ? s.getTotalPnl() / denom * 100 : 0));
                 Double mcxMargin = mcxMarginByStrategy.get(s.getStrategy());
                 s.setMcxUsedMargin(round2(mcxMargin != null ? mcxMargin : 0));
                 s.setOpenPositionCount(openCountByStrategy.getOrDefault(s.getStrategy(), 0));
@@ -687,6 +703,25 @@ public class StrategyWalletsService {
     private boolean getBoolValue(Map<String, Object> map, String key, boolean defaultVal) {
         Object val = map.get(key);
         return val instanceof Boolean ? (Boolean) val : defaultVal;
+    }
+
+    /**
+     * Sum all topup amounts from wallet.topupHistory. Topups are capital injections — they
+     * MUST be subtracted from balance growth to reveal true profit.
+     * Returns 0 if history is absent or malformed.
+     */
+    @SuppressWarnings("unchecked")
+    private double sumTopupHistory(Map<String, Object> wallet) {
+        Object raw = wallet.get("topupHistory");
+        if (!(raw instanceof List<?> list)) return 0;
+        double sum = 0;
+        for (Object entry : list) {
+            if (entry instanceof Map<?, ?> e) {
+                Object amt = e.get("amount");
+                if (amt instanceof Number n) sum += n.doubleValue();
+            }
+        }
+        return sum;
     }
 
     /** For price fields (SL, targets): 0 means "not set" → return null */
