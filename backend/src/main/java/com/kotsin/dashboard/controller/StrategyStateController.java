@@ -3,6 +3,9 @@ package com.kotsin.dashboard.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.kafka.FUDKIIConsumer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
 import com.kotsin.dashboard.kafka.FUDKOIConsumer;
 import com.kotsin.dashboard.kafka.FUKAAConsumer;
 import com.kotsin.dashboard.kafka.MereConsumer;
@@ -966,5 +969,43 @@ public class StrategyStateController {
     @GetMapping("/retest/history")
     public ResponseEntity<List<Map<String, Object>>> getRetestHistory() {
         return ResponseEntity.ok(retestConsumer.getTodaySignalHistory());
+    }
+
+    // ── RETEST STAGE PANEL — proxy to streamingcandle's in-memory state machine ──
+    // The per-stage outcome data (ALIGNED/OPPOSED/PENDING/TIMED_OUT + timestamps) lives only
+    // in streamingcandle's RetestStateMachine. Dashboard proxies so the frontend keeps a
+    // single API_BASE and we don't fan tokens to a second host.
+
+    @Value("${streamingcandle.base-url:http://localhost:8081}")
+    private String streamingcandleBaseUrl;
+
+    private final RestTemplate retestProxyRestTemplate = new RestTemplate();
+
+    @GetMapping("/retest/stages/{scripCode}")
+    public ResponseEntity<?> getRetestStages(@PathVariable String scripCode,
+                                              @RequestParam(defaultValue = "30") int expiredGraceMinutes) {
+        try {
+            String url = streamingcandleBaseUrl + "/api/retest/state/" + scripCode
+                + "?expiredGraceMinutes=" + Math.max(0, Math.min(expiredGraceMinutes, 720));
+            return retestProxyRestTemplate.getForEntity(url, Object.class);
+        } catch (RestClientException e) {
+            log.warn("[API] GET /retest/stages/{} proxy failed: {}", scripCode, e.getMessage());
+            return ResponseEntity.status(503).body(
+                Map.of("error", "streamingcandle unavailable", "detail", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/retest/stages")
+    public ResponseEntity<?> getAllRetestStages(
+            @RequestParam(defaultValue = "30") int expiredGraceMinutes) {
+        try {
+            String url = streamingcandleBaseUrl + "/api/retest/states"
+                + "?expiredGraceMinutes=" + Math.max(0, Math.min(expiredGraceMinutes, 720));
+            return retestProxyRestTemplate.getForEntity(url, Object.class);
+        } catch (RestClientException e) {
+            log.warn("[API] GET /retest/stages proxy failed: {}", e.getMessage());
+            return ResponseEntity.status(503).body(
+                Map.of("error", "streamingcandle unavailable", "detail", e.getMessage()));
+        }
     }
 }

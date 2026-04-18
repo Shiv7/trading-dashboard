@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { API_BASE } from '../../services/api';
 import { LiquiditySourceBadge } from './SignalBadges';
+import { RetestStagePanel } from './RetestStagePanel';
 
 interface RetestSignal {
   scripCode: string;
@@ -195,6 +196,11 @@ export function RetestTabContent({ autoRefresh = true }: RetestTabContentProps) 
                   {sig.retestDistancePct != null && sig.retestDistancePct > 0 && (
                     <span className="text-[10px] text-slate-500">dist: {sig.retestDistancePct.toFixed(1)}%</span>
                   )}
+                </div>
+
+                {/* Row 3b: Per-stage outcome panel — green/red/grey cells with staleness */}
+                <div className="mb-2 bg-slate-900/40 rounded px-2 py-1.5 border border-slate-700/30">
+                  <RetestStagePanel scripCode={sig.scripCode} autoRefresh={autoRefresh} compact />
                 </div>
 
                 {/* Row 4: Fortress / Confluence */}
