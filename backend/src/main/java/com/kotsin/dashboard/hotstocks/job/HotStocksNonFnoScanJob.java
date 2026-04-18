@@ -1,7 +1,7 @@
 package com.kotsin.dashboard.hotstocks.job;
 
 import com.kotsin.dashboard.hotstocks.metrics.DailyCandle;
-import com.kotsin.dashboard.hotstocks.data.FivePaisaHistoryClient;
+import com.kotsin.dashboard.hotstocks.data.BhavcopyRedisClient;
 import com.kotsin.dashboard.hotstocks.data.MarketPulseRedisClient;
 import com.kotsin.dashboard.hotstocks.model.CorporateEvent;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
@@ -14,11 +14,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -30,21 +28,19 @@ import java.util.stream.Collectors;
  * daily candles, delivery). We scan AFTER close so data is clean and we don't
  * impact the realtime options pipeline during market hours.
  *
- * Flagged picks are written to Redis key {@code hotstocks:next-day-subscription:{date}}
- * so ScripFinder / OptionProducer can subscribe them at the pre-market slot.
+ * Tier-2 picks are ANALYTICAL ONLY — non-F&O equities have no tradable option chain so
+ * next-day option subscription is not applicable. The ranked list lives in Redis via
+ * {@link HotStocksService#cache(StockMetrics)} for the frontend watchlist.
  */
 @Component
 @Slf4j
 public class HotStocksNonFnoScanJob {
 
-    private static final String NEXT_DAY_SUB_KEY = "hotstocks:next-day-subscription:";
-
     private final HotStocksService service;
     private final HotStocksRanker ranker;
-    private final FivePaisaHistoryClient historyClient;
+    private final BhavcopyRedisClient bhavcopyClient;
     private final MarketPulseRedisClient marketPulseClient;
     private final MongoTemplate mongo;
-    private final StringRedisTemplate redis;
 
     @Value("${hotstocks.nonfno.topN:10}")
     private int topN;
@@ -52,19 +48,20 @@ public class HotStocksNonFnoScanJob {
     @Value("${hotstocks.nonfno.scan.enabled:true}")
     private boolean enabled;
 
+    @Value("${hotstocks.nonfno.min.candles:60}")
+    private int minCandles;
+
     @Autowired
     public HotStocksNonFnoScanJob(HotStocksService service,
                                    HotStocksRanker ranker,
-                                   FivePaisaHistoryClient historyClient,
+                                   BhavcopyRedisClient bhavcopyClient,
                                    MarketPulseRedisClient marketPulseClient,
-                                   MongoTemplate mongo,
-                                   StringRedisTemplate redis) {
+                                   MongoTemplate mongo) {
         this.service = service;
         this.ranker = ranker;
-        this.historyClient = historyClient;
+        this.bhavcopyClient = bhavcopyClient;
         this.marketPulseClient = marketPulseClient;
         this.mongo = mongo;
-        this.redis = redis;
     }
 
     /**
@@ -78,17 +75,16 @@ public class HotStocksNonFnoScanJob {
         long start = System.currentTimeMillis();
         log.info("[HS-NONFNO-SCAN] starting");
         try {
-            List<ScripInfo> universe = loadNonFnoEquityUniverse();
+            List<String> universe = loadNonFnoEquityUniverse();
             log.info("[HS-NONFNO-SCAN] universe size={}", universe.size());
             if (universe.isEmpty()) return;
 
-            List<String> scripCodes = universe.stream().map(s -> s.scripCode).toList();
-            Map<String, List<DailyCandle>> candleMap = historyClient.fetchBulk(
-                "N", "C", scripCodes,
-                LocalDate.now().minusYears(1), LocalDate.now());
+            Map<String, List<DailyCandle>> candleMap = bhavcopyClient.fetchBulk(universe);
+            log.info("[HS-NONFNO-SCAN] bhavcopy candles resolved for {} / {} symbols (min={} required)",
+                candleMap.size(), universe.size(), minCandles);
 
             List<MarketPulseRedisClient.Deal> allDeals = marketPulseClient.fetchDeals(
-                LocalDate.now().minusDays(10), LocalDate.now());
+                java.time.LocalDate.now().minusDays(10), java.time.LocalDate.now());
             Map<String, List<MarketPulseRedisClient.Deal>> dealsBySymbol = allDeals.stream()
                 .collect(Collectors.groupingBy(MarketPulseRedisClient.Deal::symbol));
             List<CorporateEvent> events = marketPulseClient.fetchCorporateEvents();
@@ -97,40 +93,33 @@ public class HotStocksNonFnoScanJob {
             Map<String, Double> deliveryBySymbol = marketPulseClient.fetchDeliveryBySymbol();
 
             List<StockMetrics> computed = new ArrayList<>();
-            int skipped = 0;
-            for (ScripInfo info : universe) {
+            int skippedInsufficient = 0;
+            int skippedError = 0;
+            for (String symbol : universe) {
                 try {
-                    List<DailyCandle> candles = candleMap.get(info.scripCode);
-                    if (candles == null || candles.size() < 60) { skipped++; continue; }
+                    List<DailyCandle> candles = candleMap.get(symbol);
+                    if (candles == null || candles.size() < minCandles) { skippedInsufficient++; continue; }
+                    // scripCode=null: non-F&O has no tradable 5paisa derivative chain. Analytical only.
                     StockMetrics m = service.computeFromInputs(
-                        info.scripCode, info.symbol, false,
-                        candles, deliveryBySymbol.get(info.symbol),
+                        /*scripCode*/ null, symbol, /*fnoEligible*/ false,
+                        candles, deliveryBySymbol.get(symbol),
                         0.0, 0.0, null,
-                        dealsBySymbol.getOrDefault(info.symbol, List.of()),
-                        eventsBySymbol.getOrDefault(info.symbol, List.of()));
+                        dealsBySymbol.getOrDefault(symbol, List.of()),
+                        eventsBySymbol.getOrDefault(symbol, List.of()));
                     ranker.enrichWithV2Score(m);
                     computed.add(m);
                     service.cache(m);
                 } catch (Exception e) {
-                    skipped++;
-                    log.debug("[HS-NONFNO-SCAN] skip {}: {}", info.symbol, e.getMessage());
+                    skippedError++;
+                    log.debug("[HS-NONFNO-SCAN] skip {}: {}", symbol, e.getMessage());
                 }
             }
 
-            // Top-N non-F&O picks + write next-day subscription list
             List<StockMetrics> top = ranker.rank(computed, topN, /*fnoOnly=*/false);
-            String dayKey = LocalDate.now().plusDays(1).toString();
-            String redisKey = NEXT_DAY_SUB_KEY + dayKey;
-            List<String> picks = top.stream().map(StockMetrics::getScripCode).toList();
-            if (!picks.isEmpty()) {
-                redis.opsForValue().set(redisKey, String.join(",", picks));
-                // 24h expiry — consumed by pre-market subscription job tomorrow
-                redis.expire(redisKey, java.time.Duration.ofHours(24));
-            }
-
             long ms = System.currentTimeMillis() - start;
-            log.info("[HS-NONFNO-SCAN] complete: scanned={} scored={} top={} redis={} ms={}",
-                universe.size(), computed.size(), top.size(), redisKey, ms);
+            log.info("[HS-NONFNO-SCAN] complete: universe={} withCandles={} insufficient={} errors={} scored={} top={} ms={}",
+                universe.size(), candleMap.size(), skippedInsufficient, skippedError,
+                computed.size(), top.size(), ms);
             top.forEach(s -> log.info("[HS-NONFNO-SCAN] pick sym={} score={} net={}Cr",
                 s.getSymbol(), s.getV2Score(),
                 s.getV2NetInstitutionalCr() != null ? String.format("%+.0f", s.getV2NetInstitutionalCr()) : "?"));
@@ -140,56 +129,35 @@ public class HotStocksNonFnoScanJob {
     }
 
     /**
-     * Non-F&O universe = symbols with recent bulk/block deal activity over the
-     * past 10 sessions that are NOT in the F&O universe. ScripGroup is curated
-     * to F&O-only today; so our non-F&O source is deal-activity-driven.
+     * Non-F&O universe = symbols with recent bulk/block deal activity over the past 10 sessions
+     * that are NOT in the F&O universe. ScripGroup is curated to F&O-only today, so the non-F&O
+     * source is deal-activity-driven.
      *
-     * We resolve each symbol to a scripCode via two paths:
-     *   1. ScripGroup by companyName (unlikely to hit for non-F&O)
-     *   2. `nseEquityMetadata` collection if present (future hook)
-     *
-     * Symbols without a resolvable scripCode are logged and skipped — can't
-     * fetch candles or trade them without one.
+     * Returns bare symbols (uppercased) — no scripCode resolution. Non-F&O equities are scored
+     * analytically via NSE bhavcopy, keyed by SYMBOL. No tradable option chain means no need
+     * to look up 5paisa scripCodes.
      */
-    private List<ScripInfo> loadNonFnoEquityUniverse() {
-        // Collect all F&O scripCodes to EXCLUDE
+    private List<String> loadNonFnoEquityUniverse() {
         Query fnoQ = new Query(Criteria.where("tradingType").is("EQUITY")
             .and("futures.0").exists(true));
-        java.util.Set<String> fnoScripCodes = new java.util.HashSet<>();
-        java.util.Set<String> fnoSymbols = new java.util.HashSet<>();
+        Set<String> fnoSymbols = new HashSet<>();
         for (Document d : mongo.find(fnoQ, Document.class, "ScripGroup")) {
-            Object id = d.get("_id");
-            if (id != null) fnoScripCodes.add(id.toString());
             String n = d.getString("companyName");
             if (n != null) fnoSymbols.add(n.trim().toUpperCase());
         }
 
-        // Pull symbols with recent deal activity
         List<MarketPulseRedisClient.Deal> recentDeals = marketPulseClient.fetchDeals(
-            LocalDate.now().minusDays(10), LocalDate.now());
-        java.util.Set<String> dealSymbols = new java.util.HashSet<>();
+            java.time.LocalDate.now().minusDays(10), java.time.LocalDate.now());
+        Set<String> dealSymbols = new HashSet<>();
         for (MarketPulseRedisClient.Deal d : recentDeals) {
             if (d.symbol() != null) dealSymbols.add(d.symbol().trim().toUpperCase());
         }
 
-        // Non-F&O candidates = deal symbols minus F&O symbols
-        List<ScripInfo> out = new ArrayList<>();
-        int skippedNoScripCode = 0;
+        List<String> out = new ArrayList<>();
         for (String sym : dealSymbols) {
-            if (fnoSymbols.contains(sym)) continue; // exclude F&O — handled by Tier 1
-            // Resolve scripCode via ScripGroup (some may exist with tradingType!=EQUITY)
-            Document doc = mongo.findOne(
-                new Query(Criteria.where("companyName").is(sym)), Document.class, "ScripGroup");
-            if (doc == null || doc.get("_id") == null) { skippedNoScripCode++; continue; }
-            String scripCode = doc.get("_id").toString();
-            if (fnoScripCodes.contains(scripCode)) continue;
-            out.add(new ScripInfo(scripCode, sym));
-        }
-        if (skippedNoScripCode > 0) {
-            log.info("[HS-NONFNO-SCAN] {} deal-symbols had no ScripGroup match (not tradable)", skippedNoScripCode);
+            if (fnoSymbols.contains(sym)) continue;
+            out.add(sym);
         }
         return out;
     }
-
-    private record ScripInfo(String scripCode, String symbol) {}
 }
