@@ -74,7 +74,16 @@ class HotStocksPositionOpenerJobTest {
     }
 
     private HotStocksPositionOpenerJob newJob() {
-        return new HotStocksPositionOpenerJob(service, redis, rest, resolver, confluence);
+        return newJob(6, 2);
+    }
+
+    private HotStocksPositionOpenerJob newJob(int fnoCap, int nonFnoCap) {
+        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(
+            service, redis, rest, resolver, confluence);
+        // @Value defaults don't fire without a Spring context — set the caps explicitly.
+        org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewFnoPerDay", fnoCap);
+        org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewNonFnoPerDay", nonFnoCap);
+        return job;
     }
 
     private static StockMetrics fno(String scripCode, String symbol, double ltp) {
@@ -340,6 +349,49 @@ class HotStocksPositionOpenerJobTest {
         assertEquals(51.0, ((Number) payload.get("t1")).doubleValue(), 1e-9);
         assertEquals(52.5, ((Number) payload.get("t2")).doubleValue(), 1e-9);
         assertEquals("HOTSTOCKS_NONFNO_EQUITY", payload.get("tradeLabel"));
+    }
+
+    @Test
+    void split_nonFnoGetsSlotEvenWhenFnoOverflows() {
+        // Ranked: 10 F&O first, then 3 non-F&O. With caps fno=6 nonFno=2, expect 8 opens (6+2).
+        // Before the split, F&O would have consumed the whole 6-slot budget and non-F&O
+        // would never see a slot — the regression this test exists to prevent.
+        List<StockMetrics> ranked = new ArrayList<>();
+        for (int i = 0; i < 10; i++) ranked.add(fno(String.valueOf(1000 + i), "F" + i, 500.0));
+        for (int i = 0; i < 3; i++) ranked.add(nonFno("NF" + i, 100.0));
+
+        when(service.loadRankedList()).thenReturn(ranked);
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+        // Resolver returns distinct scripCodes for non-F&O symbols so each passes dedup.
+        when(resolver.resolve("NF0")).thenReturn(java.util.Optional.of("50000"));
+        when(resolver.resolve("NF1")).thenReturn(java.util.Optional.of("50001"));
+        when(resolver.resolve("NF2")).thenReturn(java.util.Optional.of("50002"));
+
+        newJob(6, 2).openPositions();
+
+        // 6 F&O + 2 non-F&O = 8 total POSTs.
+        verify(rest, times(8)).postForEntity(endsWith("/api/strategy-trades"),
+            any(HttpEntity.class), eq(Map.class));
+    }
+
+    @Test
+    void split_nonFnoCapZeroDisablesNonFno() {
+        // Kill-switch path: setting non-F&O cap to 0 stops non-F&O opens entirely.
+        List<StockMetrics> ranked = new ArrayList<>();
+        ranked.add(fno("1000", "F0", 500.0));
+        ranked.add(nonFno("NF0", 100.0));
+
+        when(service.loadRankedList()).thenReturn(ranked);
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+        when(resolver.resolve("NF0")).thenReturn(java.util.Optional.of("50000"));
+
+        newJob(6, 0).openPositions();
+
+        // Only the F&O pick opens; non-F&O blocked by nonFno=0 budget.
+        verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
+            any(HttpEntity.class), eq(Map.class));
     }
 
     @Test

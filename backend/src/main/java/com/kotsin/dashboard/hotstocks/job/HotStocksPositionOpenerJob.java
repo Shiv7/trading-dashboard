@@ -36,9 +36,10 @@ public class HotStocksPositionOpenerJob {
     private static final Logger log = LoggerFactory.getLogger(HotStocksPositionOpenerJob.class);
     private static final String LOG_PREFIX = "[HOTSTOCKS-OPENER]";
     private static final double POSITION_SIZE_RUPEES = 150_000.0;  // 1.5 L per position
-    // Positional strategy: up to 6 NEW entries per day, up to 50 concurrent active positions.
-    // Replaces legacy MAX_POSITIONS=6 which capped TOTAL active — wrong for positional multi-day holds.
-    static final int MAX_NEW_PER_DAY = 6;
+    // Positional strategy: up to MAX_NEW_FNO_PER_DAY + MAX_NEW_NONFNO_PER_DAY NEW entries per day,
+    // up to MAX_CONCURRENT concurrent active positions.
+    // Split budgets (vs single MAX_NEW_PER_DAY) so F&O doesn't starve non-F&O Tier-2 picks —
+    // before the split, F&O always filled the 6-slot cap and non-F&O never opened.
     static final int MAX_CONCURRENT = 50;
     private static final double SL_PCT = 0.05;     // 5% stop loss
     // Staircase tuned from retrospective backtest (2026-04-15):
@@ -60,6 +61,15 @@ public class HotStocksPositionOpenerJob {
 
     @Value("${tradeexec.base-url:http://localhost:8089}")
     private String tradeExecUrl;
+
+    // F&O daily new-entry budget. Default 6 preserves pre-split behaviour.
+    @Value("${hotstocks.opener.max.new.fno.per.day:6}")
+    private int maxNewFnoPerDay;
+
+    // Non-F&O (Tier-2 cash equity) daily new-entry budget. Default 2 — small because Tier-2 is
+    // newer + analytically lower conviction than F&O Tier-1. Zero disables non-F&O opens.
+    @Value("${hotstocks.opener.max.new.nonfno.per.day:2}")
+    private int maxNewNonFnoPerDay;
 
     public HotStocksPositionOpenerJob(HotStocksService service,
                                       StringRedisTemplate redis,
@@ -89,18 +99,22 @@ public class HotStocksPositionOpenerJob {
         }
 
         int concurrentBefore = countActiveHotStocksPositions();
-        log.info("{} strategy=HOTSTOCKS action=START concurrentBefore={} maxConcurrent={} maxNewPerDay={} rankedCount={}",
-            LOG_PREFIX, concurrentBefore, MAX_CONCURRENT, MAX_NEW_PER_DAY, ranked.size());
+        int totalCap = maxNewFnoPerDay + maxNewNonFnoPerDay;
+        log.info("{} strategy=HOTSTOCKS action=START concurrentBefore={} maxConcurrent={} fnoCap={} nonFnoCap={} totalCap={} rankedCount={}",
+            LOG_PREFIX, concurrentBefore, MAX_CONCURRENT, maxNewFnoPerDay, maxNewNonFnoPerDay, totalCap, ranked.size());
 
         int opened = 0;
+        int openedFno = 0;
+        int openedNonFno = 0;
         int skippedDedup = 0;
         int skippedCapReached = 0;
         int skippedNoScripCode = 0;
+        int skippedBudgetFull = 0;
         int failed = 0;
         for (StockMetrics m : ranked) {
-            if (opened >= MAX_NEW_PER_DAY) {
-                log.info("{} strategy=HOTSTOCKS action=STOP_DAILY_CAP opened={} maxNewPerDay={}",
-                    LOG_PREFIX, opened, MAX_NEW_PER_DAY);
+            if (opened >= totalCap) {
+                log.info("{} strategy=HOTSTOCKS action=STOP_DAILY_CAP opened={} fno={} nonFno={} totalCap={}",
+                    LOG_PREFIX, opened, openedFno, openedNonFno, totalCap);
                 break;
             }
             if (concurrentBefore + opened >= MAX_CONCURRENT) {
@@ -108,6 +122,18 @@ public class HotStocksPositionOpenerJob {
                 log.warn("{} strategy=HOTSTOCKS scrip={} symbol={} action=SKIP reason=concurrent_max_{} concurrentNow={}",
                     LOG_PREFIX, m.getScripCode(), m.getSymbol(), MAX_CONCURRENT, concurrentBefore + opened);
                 break;
+            }
+
+            // Per-tier budget gate — ranked list may be heavy on F&O; we don't want F&O to
+            // consume the non-F&O slots (the whole point of the split) or vice-versa.
+            boolean isFno = m.isFnoEligible();
+            if (isFno && openedFno >= maxNewFnoPerDay) {
+                skippedBudgetFull++;
+                continue;  // F&O budget exhausted — keep scanning for non-F&O picks
+            }
+            if (!isFno && openedNonFno >= maxNewNonFnoPerDay) {
+                skippedBudgetFull++;
+                continue;  // Non-F&O budget exhausted — keep scanning for remaining F&O picks
             }
 
             // Resolve a tradable scripCode. F&O picks already carry one in the metrics
@@ -135,14 +161,16 @@ public class HotStocksPositionOpenerJob {
             try {
                 openOne(m, tradableScripCode);
                 opened++;
+                if (isFno) openedFno++; else openedNonFno++;
             } catch (Exception e) {
                 failed++;
                 log.warn("{} strategy=HOTSTOCKS scrip={} symbol={} action=FAIL reason={}",
                     LOG_PREFIX, tradableScripCode, m.getSymbol(), e.getMessage());
             }
         }
-        log.info("{} strategy=HOTSTOCKS action=COMPLETE opened={} skippedDedup={} skippedCapReached={} skippedNoScripCode={} failed={} concurrentAfter={}",
-            LOG_PREFIX, opened, skippedDedup, skippedCapReached, skippedNoScripCode, failed, concurrentBefore + opened);
+        log.info("{} strategy=HOTSTOCKS action=COMPLETE opened={} (fno={} nonFno={}) skippedDedup={} skippedCapReached={} skippedNoScripCode={} skippedBudgetFull={} failed={} concurrentAfter={}",
+            LOG_PREFIX, opened, openedFno, openedNonFno, skippedDedup, skippedCapReached,
+            skippedNoScripCode, skippedBudgetFull, failed, concurrentBefore + opened);
     }
 
     /**
