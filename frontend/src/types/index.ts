@@ -68,6 +68,9 @@ export interface Position {
   tradeLabel?: string;    // e.g. "FUT FALLBACK due to Illiquid Opt"
   exitReason?: string;    // "1% DD", "SL-EQ", "SL-OP", "T1-OP", "T2-EQ", "EOD", etc.
   confidence?: number;
+  // F5 — orphan remediation feed state
+  feedState?: 'HEALTHY' | 'DEGRADED' | 'ORPHAN_PROXY' | 'ORPHAN_BLIND' | 'EXITING';
+  feedStateAt?: number;   // epoch ms when current feedState was entered
   equityLtp?: number;     // live equity/futures price for dual display
   // Transaction charges (Zerodha round-trip)
   totalCharges?: number;

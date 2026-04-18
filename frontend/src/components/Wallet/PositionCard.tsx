@@ -14,7 +14,9 @@ interface PositionCardProps {
 export default function PositionCard({ position, onUpdate, exited }: PositionCardProps) {
   const [expanded, setExpanded] = useState(false)
   const isLong = position.side === 'LONG'
-  const isOpen = position.quantity > 0
+  // Backend sends total trade qty (not remaining) for exited trades in /api/live todayExits,
+  // so quantity > 0 alone wrongly treats exits as open — gate on the explicit `exited` prop first.
+  const isOpen = !exited && position.quantity > 0
   // Exited context: show realized PnL from exits; Active context: show unrealized PnL
   const displayPnl = exited ? (position.realizedPnl || 0) : (isOpen ? position.unrealizedPnl : position.realizedPnl)
   const pnlColor = displayPnl >= 0 ? 'num-positive' : 'num-negative'
@@ -123,6 +125,34 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
             {position.tradeLabel && (
               <span className="inline-flex items-center px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-semibold tracking-wide bg-amber-500/15 text-amber-400 border border-amber-500/30">
                 {position.tradeLabel}
+              </span>
+            )}
+            {/* F5 — Feed state badge. Appears only when feed is not HEALTHY.
+                 DEGRADED = amber (tick feed slow, still monitoring real LTP)
+                 ORPHAN_PROXY = orange (89s+ silent; SL/targets checked against greek-estimated price)
+                 ORPHAN_BLIND = red (89s+ silent AND underlying also dead — no price visibility)
+                 EXITING = red solid (force-exit in progress) */}
+            {position.feedState && position.feedState !== 'HEALTHY' && (
+              <span className={`inline-flex items-center gap-1 px-1 sm:px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-bold tracking-wide border ${
+                position.feedState === 'DEGRADED' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                : position.feedState === 'ORPHAN_PROXY' ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+                : position.feedState === 'ORPHAN_BLIND' ? 'bg-red-500/25 text-red-200 border-red-500/50'
+                : position.feedState === 'EXITING' ? 'bg-red-600/30 text-red-100 border-red-600/60'
+                : 'bg-slate-500/15 text-slate-400 border-slate-500/30'
+              }`}
+                title={
+                  position.feedState === 'DEGRADED' ? 'Feed slow: 30s+ since last tick'
+                  : position.feedState === 'ORPHAN_PROXY' ? 'Tick feed dead — monitoring via greek-estimated price'
+                  : position.feedState === 'ORPHAN_BLIND' ? 'Both option and equity feeds dead — no price visibility'
+                  : position.feedState === 'EXITING' ? 'Force-exit in progress'
+                  : undefined
+                }>
+                {position.feedState !== 'DEGRADED' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                )}
+                {position.feedState === 'ORPHAN_PROXY' ? 'ORPHAN🔬'
+                 : position.feedState === 'ORPHAN_BLIND' ? 'ORPHAN⚠️'
+                 : position.feedState}
               </span>
             )}
             {position.executionMode === 'MANUAL' && (
