@@ -48,6 +48,11 @@ public class SignalAuditController {
             + "?limit=" + limit + "&sinceMinutes=" + sinceMinutes);
     }
 
+    @GetMapping("/drift-stats")
+    public ResponseEntity<?> getDriftStats(@RequestParam(defaultValue = "1440") int sinceMinutes) {
+        return proxy("/api/audit/drift-stats?sinceMinutes=" + sinceMinutes);
+    }
+
     private ResponseEntity<?> proxy(String path) {
         try {
             return http.getForEntity(tradeExecBaseUrl + path, Object.class);

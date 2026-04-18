@@ -50,6 +50,13 @@ interface AuditRow {
   holdDurationMs?: number;
   firstSeenAt?: string;
   lastUpdatedAt?: string;
+  // Entry-drift decomposition (2026-04-18)
+  liveQuoteAtReceive?: number;
+  liveQuoteAtBatch?: number;
+  driftPctSignalToReceive?: number;
+  driftPctReceiveToBatch?: number;
+  driftPctBatchToFill?: number;
+  driftPctTotal?: number;
 }
 
 function cellClass(status: 'ok' | 'fail' | 'pending' | 'none'): string {
@@ -182,6 +189,7 @@ export default function SignalAuditPage() {
                 <th className="text-left py-1.5 px-2">Exec</th>
                 <th className="text-left py-1.5 px-2">Exit</th>
                 <th className="text-right py-1.5 px-2">PnL</th>
+                <th className="text-right py-1.5 px-2" title="Total entry drift: (filledPrice − entryPrice) / entryPrice. Positive = paid more than signal price.">Drift%</th>
                 <th className="text-right py-1.5 px-2">Lag</th>
               </tr>
             </thead>
@@ -214,6 +222,15 @@ export default function SignalAuditPage() {
                   <td className="py-1.5 px-2 text-slate-400">{r.executionOutcome ?? '—'}</td>
                   <td className="py-1.5 px-2 text-slate-400">{r.exitReason ?? '—'}</td>
                   <td className="py-1.5 px-2 text-right tabular-nums">{fmtPnl(r.realizedPnl, r.realizedPnlPct)}</td>
+                  <td className={`py-1.5 px-2 text-right tabular-nums ${
+                    r.driftPctTotal == null ? 'text-slate-500'
+                    : Math.abs(r.driftPctTotal) < 0.1 ? 'text-slate-400'
+                    : r.driftPctTotal > 0 ? 'text-red-400' : 'text-emerald-400'
+                  }`}
+                  title={r.driftPctTotal == null ? undefined
+                    : `Signal→Rcv: ${(r.driftPctSignalToReceive ?? 0).toFixed(3)}% · Rcv→Bat: ${(r.driftPctReceiveToBatch ?? 0).toFixed(3)}% · Bat→Fill: ${(r.driftPctBatchToFill ?? 0).toFixed(3)}%`}>
+                    {r.driftPctTotal == null ? '—' : `${r.driftPctTotal >= 0 ? '+' : ''}${r.driftPctTotal.toFixed(2)}`}
+                  </td>
                   <td className="py-1.5 px-2 text-right text-slate-500 tabular-nums">{r.receiveLagMs != null ? `${r.receiveLagMs}ms` : '—'}</td>
                 </tr>
               ))}
