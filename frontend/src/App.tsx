@@ -25,6 +25,7 @@ import AdminPage from './pages/AdminPage'
 import WatchlistPage from './pages/WatchlistPage'
 import PnLDashboardPage from './pages/PnLDashboardPage'
 import SignalAuditPage from './pages/SignalAuditPage'
+import WsAuditPage from './pages/WsAuditPage'
 import OrderManagementPage from './pages/OrderManagementPage'
 import StrategyWalletsPage from './pages/StrategyWalletsPage'
 import MLShadowPage from './pages/MLShadowPage'
@@ -338,6 +339,16 @@ function App() {
             <ProtectedRoute requiredPage="dashboard">
               <Layout>
                 <SignalAuditPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ws-audit"
+          element={
+            <ProtectedRoute requiredPage="dashboard">
+              <Layout>
+                <WsAuditPage />
               </Layout>
             </ProtectedRoute>
           }
