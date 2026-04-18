@@ -13,6 +13,7 @@ import StalePriceModal from './StalePriceModal';
 import CrossInstrumentLevels from './CrossInstrumentLevels';
 import ConfluenceBadge from './ConfluenceBadge';
 import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
+import CounterTrendBanner from './CounterTrendBanner';
 
 type SortField = 'strength' | 'confidence' | 'rr' | 'time' | 'volume' | 'timestamp';
 type DirectionFilter = 'ALL' | 'BULLISH' | 'BEARISH';
@@ -81,6 +82,7 @@ interface FukaaTrigger {
   gqsCandleOpposesGap?: boolean;
   gqsGapRecoveryPct?: number;
   effectiveKii?: number;
+  effectiveKaa?: number;
   gapPct?: number;
   excessGapPct?: number;
   // Option enrichment from backend (real LTP, strike, lot size)
@@ -912,8 +914,42 @@ const FukaaCard: React.FC<{
           />
         )}
 
+        {/* ── F14 COUNTER-TREND ALERT (shadow mode) ── */}
+        <CounterTrendBanner sig={trigger as any} />
+
         {/* ── RETEST BADGE ── */}
         <RetestBadge active={trigger.retestActive} aligned={trigger.retestDirectionAligned} boost={trigger.retestBoost} source={trigger.retestSource} level={trigger.retestLevel} stage={trigger.retestStage} />
+
+        {/* ── OPT CHOICE — which option was selected for this trade (F3) ── */}
+        {trigger.optionAvailable && trigger.optionScripCode && (
+          <div className="mt-2 flex items-center gap-2 text-[10px] bg-slate-900/50 rounded px-2 py-1 border border-slate-700/40 flex-wrap">
+            <span className="text-slate-500 font-semibold">OPT</span>
+            <span className="text-slate-200 font-medium">
+              {trigger.optionStrike != null ? trigger.optionStrike : <span className="text-slate-500 italic">DM</span>}
+            </span>
+            <span className={`px-1.5 py-0.5 rounded font-bold ${
+              trigger.optionType === 'CE' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+              : trigger.optionType === 'PE' ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+              : 'bg-slate-700/50 text-slate-500'
+            }`}>
+              {trigger.optionType ?? <span className="italic">DM</span>}
+            </span>
+            <span className="text-slate-400">LTP {trigger.optionLtp != null ? trigger.optionLtp.toFixed(2) : <span className="text-slate-500 italic">DM</span>}</span>
+            {trigger.greekDelta != null && trigger.greekDelta !== 0 && (
+              <span className="text-slate-400">{'\u03B4 '}{trigger.greekDelta.toFixed(2)}</span>
+            )}
+            {trigger.greekMoneynessType && (
+              <span className={`text-[9px] px-1 py-0.5 rounded border ${
+                trigger.greekMoneynessType === 'DEEP_OTM' || trigger.greekMoneynessType === 'DEEP_ITM'
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                  : trigger.greekMoneynessType === 'ATM'
+                  ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                  : 'bg-slate-700/40 text-slate-400 border-slate-600/40'
+              }`}>{trigger.greekMoneynessType}</span>
+            )}
+            <span className="text-slate-600 ml-auto text-[9px]">scrip {trigger.optionScripCode}</span>
+          </div>
+        )}
 
         {/* ── TRANSLATED GREEKS ── */}
         {trigger.greekEnriched && (() => {
@@ -1092,7 +1128,8 @@ const FukaaCard: React.FC<{
           <span className={`px-1 rounded whitespace-nowrap ${(trigger.gapQualityScore ?? 1) < 0.10 ? 'bg-red-500/40 text-red-300 font-bold' : (trigger.gapQualityScore ?? 1) < 0.50 ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-600/50 text-slate-300'}`}>
             GQS={trigger.gapQualityScore?.toFixed(3) ?? '1.000'}
           </span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">eKII={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
+          <span className="px-1 rounded bg-emerald-700/40 text-emerald-200 whitespace-nowrap font-bold">eKAA={trigger.effectiveKaa?.toFixed(0) ?? 'DM'}</span>
+          <span className="px-1 rounded bg-slate-600/30 text-slate-400 whitespace-nowrap text-[10px]">eKII={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
         </div>
@@ -1126,9 +1163,15 @@ const FukaaCard: React.FC<{
         ) : sizing.disabled ? (
           <button
             disabled
-            className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
+            className="w-full h-12 rounded-xl mt-4 text-slate-400 font-semibold text-sm bg-slate-700/40 border border-slate-600/40 cursor-not-allowed flex flex-col items-center justify-center gap-0.5 px-3"
+            title={`Sizing unavailable — confidence ${confidence}% < 60% threshold. Contract details shown for reference.`}
           >
-            Confidence {confidence}% &lt; 60% — No Trade
+            <span className="text-[12px] truncate w-full text-center">
+              {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName || trigger.symbol || trigger.scripCode} @ &#8377;{fmt(premium)}
+            </span>
+            <span className="text-[9px] text-slate-500 font-normal">
+              eKAA {trigger.effectiveKaa?.toFixed(0) ?? 'DM'} &middot; conf {confidence}% &middot; lot {lotSize} &middot; sizing unavailable
+            </span>
           </button>
         ) : (
           <div className="relative mt-4">
