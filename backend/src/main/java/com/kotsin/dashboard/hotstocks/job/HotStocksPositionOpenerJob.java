@@ -1,5 +1,7 @@
 package com.kotsin.dashboard.hotstocks.job;
 
+import com.kotsin.dashboard.hotstocks.data.ConfluenceTargetsClient;
+import com.kotsin.dashboard.hotstocks.data.EquityScripCodeResolver;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
 import com.kotsin.dashboard.hotstocks.service.HotStocksService;
 import org.slf4j.Logger;
@@ -18,6 +20,7 @@ import org.springframework.web.client.RestTemplate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Opens virtual positions for the top-ranked Hot Stocks picks at market open.
@@ -52,16 +55,22 @@ public class HotStocksPositionOpenerJob {
     private final HotStocksService service;
     private final StringRedisTemplate redis;
     private final RestTemplate rest;
+    private final EquityScripCodeResolver scripCodeResolver;
+    private final ConfluenceTargetsClient confluenceClient;
 
     @Value("${tradeexec.base-url:http://localhost:8089}")
     private String tradeExecUrl;
 
     public HotStocksPositionOpenerJob(HotStocksService service,
                                       StringRedisTemplate redis,
-                                      @Qualifier("hotStocksRestTemplate") RestTemplate rest) {
+                                      @Qualifier("hotStocksRestTemplate") RestTemplate rest,
+                                      EquityScripCodeResolver scripCodeResolver,
+                                      ConfluenceTargetsClient confluenceClient) {
         this.service = service;
         this.redis = redis;
         this.rest = rest;
+        this.scripCodeResolver = scripCodeResolver;
+        this.confluenceClient = confluenceClient;
     }
 
     @Scheduled(cron = "0 15 9 * * MON-FRI", zone = "Asia/Kolkata")
@@ -86,7 +95,7 @@ public class HotStocksPositionOpenerJob {
         int opened = 0;
         int skippedDedup = 0;
         int skippedCapReached = 0;
-        int skippedNotFno = 0;
+        int skippedNoScripCode = 0;
         int failed = 0;
         for (StockMetrics m : ranked) {
             if (opened >= MAX_NEW_PER_DAY) {
@@ -100,27 +109,40 @@ public class HotStocksPositionOpenerJob {
                     LOG_PREFIX, m.getScripCode(), m.getSymbol(), MAX_CONCURRENT, concurrentBefore + opened);
                 break;
             }
-            if (!m.isFnoEligible()) {
-                skippedNotFno++;
-                continue;
+
+            // Resolve a tradable scripCode. F&O picks already carry one in the metrics
+            // (set during Tier-1 scan via FivePaisaHistoryClient). Non-F&O picks arrive with
+            // scripCode=null from HotStocksNonFnoScanJob and need a cash-equity lookup against
+            // the 5paisa master (scripData collection).
+            String tradableScripCode = m.getScripCode();
+            if (tradableScripCode == null || tradableScripCode.isBlank()) {
+                Optional<String> resolved = scripCodeResolver.resolve(m.getSymbol());
+                if (resolved.isEmpty()) {
+                    skippedNoScripCode++;
+                    log.info("{} strategy=HOTSTOCKS symbol={} action=SKIP reason=no_scrip_code_master",
+                        LOG_PREFIX, m.getSymbol());
+                    continue;
+                }
+                tradableScripCode = resolved.get();
             }
-            if (hotStocksPositionExists(m.getScripCode())) {
+
+            if (hotStocksPositionExists(tradableScripCode)) {
                 skippedDedup++;
                 log.info("{} strategy=HOTSTOCKS scrip={} symbol={} action=SKIP reason=already_held",
-                    LOG_PREFIX, m.getScripCode(), m.getSymbol());
+                    LOG_PREFIX, tradableScripCode, m.getSymbol());
                 continue;
             }
             try {
-                openOne(m);
+                openOne(m, tradableScripCode);
                 opened++;
             } catch (Exception e) {
                 failed++;
                 log.warn("{} strategy=HOTSTOCKS scrip={} symbol={} action=FAIL reason={}",
-                    LOG_PREFIX, m.getScripCode(), m.getSymbol(), e.getMessage());
+                    LOG_PREFIX, tradableScripCode, m.getSymbol(), e.getMessage());
             }
         }
-        log.info("{} strategy=HOTSTOCKS action=COMPLETE opened={} skippedDedup={} skippedCapReached={} skippedNotFno={} failed={} concurrentAfter={}",
-            LOG_PREFIX, opened, skippedDedup, skippedCapReached, skippedNotFno, failed, concurrentBefore + opened);
+        log.info("{} strategy=HOTSTOCKS action=COMPLETE opened={} skippedDedup={} skippedCapReached={} skippedNoScripCode={} failed={} concurrentAfter={}",
+            LOG_PREFIX, opened, skippedDedup, skippedCapReached, skippedNoScripCode, failed, concurrentBefore + opened);
     }
 
     /**
@@ -182,7 +204,7 @@ public class HotStocksPositionOpenerJob {
         }
     }
 
-    private void openOne(StockMetrics m) {
+    private void openOne(StockMetrics m, String tradableScripCode) {
         double entry = m.getLtpYesterday();
         if (entry <= 0) {
             throw new IllegalStateException("invalid entry price: " + entry);
@@ -191,25 +213,52 @@ public class HotStocksPositionOpenerJob {
         if (qty <= 0) {
             throw new IllegalStateException("computed qty <= 0 for entry=" + entry);
         }
-        // Use SL from the enriched action cue if available, else fall back to percentage stop
-        double sl = m.getSuggestedSlPrice() > 0 ? m.getSuggestedSlPrice() : entry * (1 - SL_PCT);
-        // Positional staircase: T1 5% / T2 8% / T3 12% / T4 15%. Opener owns these defaults;
-        // the daily recalibrator (later) may overwrite T1-T4 based on fresh volatility + greeks.
-        double t1 = entry * (1 + T1_PCT);
-        double t2 = entry * (1 + T2_PCT);
-        double t3 = entry * (1 + T3_PCT);
-        double t4 = entry * (1 + T4_PCT);
+
+        // Target computation:
+        //   - F&O-eligible picks → hardcoded % staircase (calibrated from Apr-15 backtest: +1.27%/trade mean).
+        //   - Non-F&O picks → ConfluentTargetEngine via streamingcandle HTTP. Pivot-confluence SL/T1-T4.
+        //     Falls back to the same % staircase if confluence is unavailable (network / no pivots cached).
+        double sl, t1, t2, t3, t4;
+        String targetSource;
+        if (!m.isFnoEligible()) {
+            Optional<ConfluenceTargetsClient.EquityTargets> targets =
+                confluenceClient.computeEquityTargets(tradableScripCode, entry, /*isLong*/ true);
+            if (targets.isPresent() && targets.get().isActionable()) {
+                ConfluenceTargetsClient.EquityTargets t = targets.get();
+                sl = t.stopLoss();
+                t1 = t.target1();
+                t2 = t.target2() != null ? t.target2() : entry * (1 + T2_PCT);
+                t3 = t.target3() != null ? t.target3() : entry * (1 + T3_PCT);
+                t4 = t.target4() != null ? t.target4() : entry * (1 + T4_PCT);
+                targetSource = "CONFLUENCE_" + (t.tradeGrade() != null ? t.tradeGrade() : "?");
+            } else {
+                // Confluence unavailable — use the same % staircase as F&O so the trade still proceeds.
+                sl = m.getSuggestedSlPrice() > 0 ? m.getSuggestedSlPrice() : entry * (1 - SL_PCT);
+                t1 = entry * (1 + T1_PCT);
+                t2 = entry * (1 + T2_PCT);
+                t3 = entry * (1 + T3_PCT);
+                t4 = entry * (1 + T4_PCT);
+                targetSource = "STAIRCASE_FALLBACK";
+            }
+        } else {
+            sl = m.getSuggestedSlPrice() > 0 ? m.getSuggestedSlPrice() : entry * (1 - SL_PCT);
+            t1 = entry * (1 + T1_PCT);
+            t2 = entry * (1 + T2_PCT);
+            t3 = entry * (1 + T3_PCT);
+            t4 = entry * (1 + T4_PCT);
+            targetSource = "STAIRCASE_FNO";
+        }
 
         // Fetch slippage estimate from trade-exec. Required by StrategyTradeExecutor;
         // missing field triggers NPE on Math.abs(req.getEstimatedEntrySlippage()).
-        Map<String, Object> slip = fetchSlippage(m.getScripCode(), m.getSymbol(), qty, entry);
+        Map<String, Object> slip = fetchSlippage(tradableScripCode, m.getSymbol(), qty, entry);
 
         Map<String, Object> payload = new HashMap<>();
         // identity
-        payload.put("scripCode", m.getScripCode());
+        payload.put("scripCode", tradableScripCode);
         payload.put("instrumentSymbol", m.getSymbol());
         payload.put("instrumentType", "EQUITY");
-        payload.put("underlyingScripCode", m.getScripCode());
+        payload.put("underlyingScripCode", tradableScripCode);
         payload.put("underlyingSymbol", m.getSymbol());
 
         // side + sizing
@@ -247,7 +296,9 @@ public class HotStocksPositionOpenerJob {
         payload.put("direction", "LONG");
         payload.put("confidence", 0.75);
         payload.put("executionMode", "AUTO");
-        payload.put("tradeLabel", "HOTSTOCKS_POSITIONAL");
+        payload.put("tradeLabel", m.isFnoEligible() ? "HOTSTOCKS_POSITIONAL" : "HOTSTOCKS_NONFNO_EQUITY");
+        payload.put("targetSource", targetSource);
+        payload.put("fnoEligible", m.isFnoEligible());
 
         // Slippage fields — REQUIRED by StrategyTradeExecutor (unboxed via Math.abs).
         payload.put("estimatedEntrySlippage",
@@ -264,8 +315,9 @@ public class HotStocksPositionOpenerJob {
 
         ResponseEntity<Map> response = rest.postForEntity(
             tradeExecUrl + "/api/strategy-trades", request, Map.class);
-        log.info("HotStocksPositionOpenerJob: opened {} qty={} entry={} sl={} t1={} status={}",
-            m.getSymbol(), qty, entry, sl, t1, response.getStatusCode());
+        log.info("{} scrip={} symbol={} fnoEligible={} qty={} entry={} sl={} t1={} t2={} t3={} t4={} targetSource={} status={}",
+            LOG_PREFIX, tradableScripCode, m.getSymbol(), m.isFnoEligible(),
+            qty, entry, sl, t1, t2, t3, t4, targetSource, response.getStatusCode());
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

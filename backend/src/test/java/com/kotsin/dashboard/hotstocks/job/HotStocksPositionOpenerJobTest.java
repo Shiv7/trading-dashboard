@@ -1,5 +1,7 @@
 package com.kotsin.dashboard.hotstocks.job;
 
+import com.kotsin.dashboard.hotstocks.data.ConfluenceTargetsClient;
+import com.kotsin.dashboard.hotstocks.data.EquityScripCodeResolver;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
 import com.kotsin.dashboard.hotstocks.service.HotStocksService;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +38,8 @@ class HotStocksPositionOpenerJobTest {
     private StringRedisTemplate redis;
     private ValueOperations<String, String> ops;
     private RestTemplate rest;
+    private EquityScripCodeResolver resolver;
+    private ConfluenceTargetsClient confluence;
 
     @BeforeEach
     void setUp() {
@@ -47,6 +51,15 @@ class HotStocksPositionOpenerJobTest {
         when(redis.opsForValue()).thenReturn(ops);
         when(ops.get("hotstocks:v1:kill_switch")).thenReturn(null);
         rest = mock(RestTemplate.class);
+        resolver = mock(EquityScripCodeResolver.class);
+        confluence = mock(ConfluenceTargetsClient.class);
+
+        // Default: resolver returns empty (only F&O picks resolved automatically via metrics).
+        when(resolver.resolve(anyString())).thenReturn(java.util.Optional.empty());
+        // Default: confluence returns empty → falls back to % staircase.
+        when(confluence.computeEquityTargets(anyString(), org.mockito.ArgumentMatchers.anyDouble(),
+            org.mockito.ArgumentMatchers.anyBoolean()))
+            .thenReturn(java.util.Optional.empty());
 
         // Slippage endpoint returns sensible defaults for all tests.
         when(rest.postForEntity(endsWith("/api/slippage/estimate"), any(HttpEntity.class), eq(Map.class)))
@@ -58,6 +71,10 @@ class HotStocksPositionOpenerJobTest {
         // Strategy-trade endpoint returns success.
         when(rest.postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class)))
             .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
+    }
+
+    private HotStocksPositionOpenerJob newJob() {
+        return new HotStocksPositionOpenerJob(service, redis, rest, resolver, confluence);
     }
 
     private static StockMetrics fno(String scripCode, String symbol, double ltp) {
@@ -80,7 +97,7 @@ class HotStocksPositionOpenerJobTest {
         when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
 
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         job.openPositions();
 
         // MAX_NEW_PER_DAY=6 → 6 POSTs to /api/strategy-trades.
@@ -111,7 +128,7 @@ class HotStocksPositionOpenerJobTest {
         }
         when(service.loadRankedList()).thenReturn(ranked);
 
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         job.openPositions();
 
         // Already at 50 concurrent; zero new POSTs.
@@ -140,7 +157,7 @@ class HotStocksPositionOpenerJobTest {
         }
         when(service.loadRankedList()).thenReturn(ranked);
 
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         job.openPositions();
 
         // 48 already + room for 2 more = 2 new POSTs.
@@ -154,7 +171,7 @@ class HotStocksPositionOpenerJobTest {
         when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
 
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         job.openPositions();
 
         // Capture the /api/strategy-trades payload.
@@ -195,7 +212,7 @@ class HotStocksPositionOpenerJobTest {
         when(ops.get("virtual:positions:4684"))
             .thenReturn("{\"signalSource\":\"HOTSTOCKS\",\"status\":\"OPEN\",\"qtyOpen\":263}");
 
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         job.openPositions();
 
         // Already held → no new POST.
@@ -223,15 +240,120 @@ class HotStocksPositionOpenerJobTest {
         when(ops.get("virtual:positions:5"))
             .thenReturn("{\"signalSource\":\"HOTSTOCKS\",\"status\":\"OPEN\",\"qtyOpen\":263}");
 
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         assertEquals(2, job.countActiveHotStocksPositions());
     }
 
     @Test
     void countActiveHotStocksPositions_returnsZeroOnRedisFailure() {
         when(redis.keys(anyString())).thenThrow(new RuntimeException("connection refused"));
-        HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(service, redis, rest);
+        HotStocksPositionOpenerJob job = newJob();
         assertEquals(0, job.countActiveHotStocksPositions(),
             "on failure, returns 0 (permissive) so the cap check still fires mid-loop");
+    }
+
+    // ── Non-F&O equity branch ───────────────────────────────────────────────────
+
+    private static StockMetrics nonFno(String symbol, double ltp) {
+        StockMetrics m = new StockMetrics();
+        // Non-F&O picks arrive from HotStocksNonFnoScanJob with scripCode=null.
+        m.setScripCode(null);
+        m.setSymbol(symbol);
+        m.setLtpYesterday(ltp);
+        m.setFnoEligible(false);
+        return m;
+    }
+
+    @Test
+    void nonFno_skipsWhenScripCodeResolverReturnsEmpty() {
+        when(service.loadRankedList()).thenReturn(List.of(nonFno("NOTLISTED", 100.0)));
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+        when(resolver.resolve("NOTLISTED")).thenReturn(java.util.Optional.empty());
+
+        newJob().openPositions();
+
+        // No scripCode → no POST to trade-exec.
+        verify(rest, times(0)).postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
+    }
+
+    @Test
+    void nonFno_usesConfluenceTargetsWhenActionable() {
+        StockMetrics m = nonFno("AGIIL", 100.0);
+        when(service.loadRankedList()).thenReturn(List.of(m));
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+
+        when(resolver.resolve("AGIIL")).thenReturn(java.util.Optional.of("24445"));
+        ConfluenceTargetsClient.EquityTargets targets = new ConfluenceTargetsClient.EquityTargets(
+            /*sl*/ 95.0, /*t1*/ 102.0, /*t2*/ 105.0, /*t3*/ 108.0, /*t4*/ 112.0,
+            /*rr*/ 2.4, /*atr*/ 1.5, "A", null,
+            /*pivotSource*/ true, /*zones*/ 14, /*fortress*/ 18.0, /*roomRatio*/ 2.1,
+            /*lotAlloc*/ "40,30,20,10");
+        when(confluence.computeEquityTargets("24445", 100.0, true))
+            .thenReturn(java.util.Optional.of(targets));
+
+        // Capture the payload to trade-exec.
+        org.mockito.ArgumentCaptor<HttpEntity<Map<String, Object>>> captor =
+            org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+        when(rest.postForEntity(endsWith("/api/strategy-trades"), captor.capture(), eq(Map.class)))
+            .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
+
+        newJob().openPositions();
+
+        verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
+            any(HttpEntity.class), eq(Map.class));
+        Map<String, Object> payload = captor.getValue().getBody();
+        assertEquals("24445", payload.get("scripCode"), "resolved non-F&O scripCode");
+        assertEquals(false, payload.get("fnoEligible"));
+        assertEquals("EQUITY", payload.get("instrumentType"));
+        assertEquals("HOTSTOCKS_NONFNO_EQUITY", payload.get("tradeLabel"));
+        assertEquals("CONFLUENCE_A", payload.get("targetSource"));
+        assertEquals(95.0, ((Number) payload.get("sl")).doubleValue(), 1e-9);
+        assertEquals(102.0, ((Number) payload.get("t1")).doubleValue(), 1e-9);
+        assertEquals(105.0, ((Number) payload.get("t2")).doubleValue(), 1e-9);
+    }
+
+    @Test
+    void nonFno_fallsBackToStaircaseWhenConfluenceUnavailable() {
+        StockMetrics m = nonFno("OLAELEC", 50.0);
+        when(service.loadRankedList()).thenReturn(List.of(m));
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+
+        when(resolver.resolve("OLAELEC")).thenReturn(java.util.Optional.of("24777"));
+        when(confluence.computeEquityTargets("24777", 50.0, true))
+            .thenReturn(java.util.Optional.empty()); // confluence offline
+
+        org.mockito.ArgumentCaptor<HttpEntity<Map<String, Object>>> captor =
+            org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+        when(rest.postForEntity(endsWith("/api/strategy-trades"), captor.capture(), eq(Map.class)))
+            .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
+
+        newJob().openPositions();
+
+        verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
+            any(HttpEntity.class), eq(Map.class));
+        Map<String, Object> payload = captor.getValue().getBody();
+        assertEquals("STAIRCASE_FALLBACK", payload.get("targetSource"));
+        // T1 = 2% of 50 = 51, T2 = 5% = 52.5, T3 = 8% = 54, T4 = 12% = 56
+        assertEquals(51.0, ((Number) payload.get("t1")).doubleValue(), 1e-9);
+        assertEquals(52.5, ((Number) payload.get("t2")).doubleValue(), 1e-9);
+        assertEquals("HOTSTOCKS_NONFNO_EQUITY", payload.get("tradeLabel"));
+    }
+
+    @Test
+    void fnoEligible_alwaysUsesStaircaseEvenIfConfluenceAvailable() {
+        // F&O picks never hit the confluence client — their SL/targets come from the opener's
+        // hardcoded % staircase tuned from the Apr-15 backtest.
+        StockMetrics m = fno("4684", "SONACOMS", 500.0);
+        when(service.loadRankedList()).thenReturn(List.of(m));
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+
+        newJob().openPositions();
+
+        verify(confluence, times(0)).computeEquityTargets(anyString(),
+            org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 }
