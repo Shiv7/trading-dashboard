@@ -121,16 +121,11 @@ public class MarketPulseRedisClient {
             JsonNode root = mapper.readTree(json);
             if (!root.isArray()) return Collections.emptyList();
             List<Deal> out = new ArrayList<>();
+            int dropped = 0;
             for (JsonNode n : root) {
                 String dateStr = n.path("date").asText();
-                LocalDate d;
-                try {
-                    // Deal dates come in as "dd-MMM-yyyy" uppercased; reuse the formatter with
-                    // case-insensitive reparse via lowercasing month abbreviations if needed.
-                    d = LocalDate.parse(normalizeMonthCase(dateStr), DD_MMM_YYYY);
-                } catch (Exception ex) {
-                    continue;
-                }
+                LocalDate d = parseDealDate(dateStr);
+                if (d == null) { dropped++; continue; }
                 out.add(new Deal(
                     d,
                     n.path("symbol").asText(),
@@ -143,6 +138,10 @@ public class MarketPulseRedisClient {
                     isBlock
                 ));
             }
+            if (dropped > 0) {
+                log.warn("[MARKET-PULSE-REDIS] dropped {} deal(s) with unparseable date (block={})",
+                    dropped, isBlock);
+            }
             return out;
         } catch (Exception e) {
             log.warn("Failed to parse deal array: {}", e.getMessage());
@@ -150,8 +149,29 @@ public class MarketPulseRedisClient {
         }
     }
 
-    private String normalizeMonthCase(String dateStr) {
-        // Input like "10-APR-2026" → "10-Apr-2026" for DateTimeFormatter
+    /**
+     * Accept two date formats that have appeared in the NSE deals feed over time:
+     * <ul>
+     *   <li>{@code 17-APR-2026} — legacy NSE CSV style (DD-MMM-YYYY, case-insensitive)</li>
+     *   <li>{@code 2026-04-17} — modern ISO yyyy-MM-dd, introduced ~Apr 2026 in the nsepython
+     *       get_bulkdeals() return shape. Python scraper stores the raw NSE value.</li>
+     * </ul>
+     * Returns null on unparseable input so the caller can drop the row without throwing.
+     */
+    static LocalDate parseDealDate(String dateStr) {
+        if (dateStr == null || dateStr.isBlank()) return null;
+        // ISO first — it's the modern format and most rows will hit this branch.
+        try {
+            return LocalDate.parse(dateStr, ISO);
+        } catch (Exception ignored) { /* fall through */ }
+        // Legacy DD-MMM-YYYY (any case).
+        try {
+            return LocalDate.parse(normalizeMonthCase(dateStr), DD_MMM_YYYY);
+        } catch (Exception ignored) { /* fall through */ }
+        return null;
+    }
+
+    private static String normalizeMonthCase(String dateStr) {
         if (dateStr == null || dateStr.length() < 8) return dateStr;
         String[] parts = dateStr.split("-");
         if (parts.length != 3) return dateStr;
