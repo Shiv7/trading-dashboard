@@ -1,5 +1,6 @@
 package com.kotsin.dashboard.hotstocks.job;
 
+import com.kotsin.dashboard.calendar.NseCalendarHelper;
 import com.kotsin.dashboard.hotstocks.data.ConfluenceTargetsClient;
 import com.kotsin.dashboard.hotstocks.data.EquityScripCodeResolver;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
@@ -40,6 +41,7 @@ class HotStocksPositionOpenerJobTest {
     private RestTemplate rest;
     private EquityScripCodeResolver resolver;
     private ConfluenceTargetsClient confluence;
+    private NseCalendarHelper calendar;
 
     @BeforeEach
     void setUp() {
@@ -53,6 +55,8 @@ class HotStocksPositionOpenerJobTest {
         rest = mock(RestTemplate.class);
         resolver = mock(EquityScripCodeResolver.class);
         confluence = mock(ConfluenceTargetsClient.class);
+        calendar = mock(NseCalendarHelper.class);
+        when(calendar.isTradingDay(any())).thenReturn(true);
 
         // Default: resolver returns empty (only F&O picks resolved automatically via metrics).
         when(resolver.resolve(anyString())).thenReturn(java.util.Optional.empty());
@@ -79,7 +83,7 @@ class HotStocksPositionOpenerJobTest {
 
     private HotStocksPositionOpenerJob newJob(int fnoCap, int nonFnoCap) {
         HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(
-            service, redis, rest, resolver, confluence);
+            service, redis, rest, resolver, confluence, calendar);
         // @Value defaults don't fire without a Spring context — set the caps explicitly.
         org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewFnoPerDay", fnoCap);
         org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewNonFnoPerDay", nonFnoCap);
@@ -93,6 +97,29 @@ class HotStocksPositionOpenerJobTest {
         m.setLtpYesterday(ltp);
         m.setFnoEligible(true);
         return m;
+    }
+
+    @Test
+    void opener_skipsOnNonTradingDay_unlessForced() {
+        // Calendar says today is a non-trading day (weekend/holiday).
+        when(calendar.isTradingDay(any())).thenReturn(false);
+
+        List<StockMetrics> ranked = new ArrayList<>();
+        ranked.add(fno("1000", "F0", 500.0));
+        when(service.loadRankedList()).thenReturn(ranked);
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+
+        HotStocksPositionOpenerJob job = newJob();
+
+        // Non-forced call must NOT fetch ranked list nor POST any trades.
+        job.openPositions();
+        verify(rest, org.mockito.Mockito.never())
+            .postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
+
+        // Forced call on a non-trading day bypasses guard and opens the position.
+        job.openPositions(true);
+        verify(rest, times(1))
+            .postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
     }
 
     @Test

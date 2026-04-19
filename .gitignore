@@ -27,3 +27,5 @@ logs/
 build/
 out/
 
+
+backend/nohup.out

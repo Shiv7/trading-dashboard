@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.HashMap;
@@ -55,13 +56,16 @@ public class HotStocksAdminController {
     }
 
     @PostMapping("/run-position-opener")
-    public Map<String, Object> runPositionOpener() {
-        log.info("HotStocksAdminController: manual position opener trigger received");
+    public Map<String, Object> runPositionOpener(
+            @RequestParam(required = false, defaultValue = "false") boolean force) {
+        log.info("HotStocksAdminController: manual position opener trigger received (force={})", force);
         // Dedup guard in openPositions() prevents double-opening if called multiple times.
-        positionOpenerJob.openPositions();
+        // Trading-day guard in openPositions(force) rejects weekend/holiday runs unless force=true.
+        positionOpenerJob.openPositions(force);
         Map<String, Object> result = new HashMap<>();
         result.put("status", "triggered");
-        result.put("note", "position opener ran synchronously — check backend logs for per-scrip detail");
+        result.put("force", force);
+        result.put("note", "position opener ran synchronously — check backend logs for per-scrip detail. Pass ?force=true to bypass NSE trading-day guard.");
         return result;
     }
 

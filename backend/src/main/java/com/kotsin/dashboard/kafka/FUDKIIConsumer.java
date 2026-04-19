@@ -499,6 +499,39 @@ public class FUDKIIConsumer implements OptionSwapAware {
         if (root.has("prevClose")) data.put("prevClose", root.path("prevClose").asDouble(0));
         if (root.has("price")) data.put("price", root.path("triggerPrice").asDouble(0));
 
+        // F14 Counter-Trend Scorer fields (shadow mode — backend computed, frontend displays red banner)
+        if (root.has("f14Score")) data.put("f14Score", root.path("f14Score").asInt(0));
+        if (root.has("f14ShouldFlip")) data.put("f14ShouldFlip", root.path("f14ShouldFlip").asBoolean(false));
+        if (root.has("f14Reasons")) data.put("f14Reasons", root.path("f14Reasons").asText(""));
+        if (root.has("f14CounterDirection")) data.put("f14CounterDirection", root.path("f14CounterDirection").asText(""));
+        if (root.has("f14WickRatio")) data.put("f14WickRatio", root.path("f14WickRatio").asDouble(0));
+        if (root.has("f14ClosedOpposite")) data.put("f14ClosedOpposite", root.path("f14ClosedOpposite").asBoolean(false));
+        if (root.has("f14RangeAtr")) data.put("f14RangeAtr", root.path("f14RangeAtr").asDouble(0));
+        if (root.has("f14BodyPct")) data.put("f14BodyPct", root.path("f14BodyPct").asDouble(0));
+        if (root.has("f14GapPctOvernight")) data.put("f14GapPctOvernight", root.path("f14GapPctOvernight").asDouble(0));
+
+        // Trigger candle OHLC (used by frontend for context)
+        if (root.has("triggerCandleOpen")) data.put("triggerCandleOpen", root.path("triggerCandleOpen").asDouble(0));
+        if (root.has("triggerCandleHigh")) data.put("triggerCandleHigh", root.path("triggerCandleHigh").asDouble(0));
+        if (root.has("triggerCandleLow")) data.put("triggerCandleLow", root.path("triggerCandleLow").asDouble(0));
+        if (root.has("triggerCandleClose")) data.put("triggerCandleClose", root.path("triggerCandleClose").asDouble(0));
+        if (root.has("triggerCandleVolume")) data.put("triggerCandleVolume", root.path("triggerCandleVolume").asLong(0));
+
+        // Flipped trade plan from ConfluentTargetEngine.compute(!isLong)
+        if (root.has("flippedGrade")) data.put("flippedGrade", root.path("flippedGrade").asText(""));
+        if (root.has("flippedRR")) data.put("flippedRR", root.path("flippedRR").asDouble(0));
+        if (root.has("flippedSL")) data.put("flippedSL", root.path("flippedSL").asDouble(0));
+        if (root.has("flippedT1")) data.put("flippedT1", root.path("flippedT1").asDouble(0));
+        if (root.has("flippedT2")) data.put("flippedT2", root.path("flippedT2").asDouble(0));
+        if (root.has("flippedT3")) data.put("flippedT3", root.path("flippedT3").asDouble(0));
+        if (root.has("flippedT4")) data.put("flippedT4", root.path("flippedT4").asDouble(0));
+        if (root.has("flippedOptionSL")) data.put("flippedOptionSL", root.path("flippedOptionSL").asDouble(0));
+        if (root.has("flippedOptionT1")) data.put("flippedOptionT1", root.path("flippedOptionT1").asDouble(0));
+        if (root.has("flippedOptionT2")) data.put("flippedOptionT2", root.path("flippedOptionT2").asDouble(0));
+        if (root.has("flippedOptionT3")) data.put("flippedOptionT3", root.path("flippedOptionT3").asDouble(0));
+        if (root.has("flippedOptionT4")) data.put("flippedOptionT4", root.path("flippedOptionT4").asDouble(0));
+        if (root.has("flippedFortressScore")) data.put("flippedFortressScore", root.path("flippedFortressScore").asDouble(0));
+
         return data;
     }
 

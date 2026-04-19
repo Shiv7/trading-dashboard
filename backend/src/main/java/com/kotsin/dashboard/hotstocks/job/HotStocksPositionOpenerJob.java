@@ -1,5 +1,6 @@
 package com.kotsin.dashboard.hotstocks.job;
 
+import com.kotsin.dashboard.calendar.NseCalendarHelper;
 import com.kotsin.dashboard.hotstocks.data.ConfluenceTargetsClient;
 import com.kotsin.dashboard.hotstocks.data.EquityScripCodeResolver;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
@@ -17,6 +18,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +61,7 @@ public class HotStocksPositionOpenerJob {
     private final RestTemplate rest;
     private final EquityScripCodeResolver scripCodeResolver;
     private final ConfluenceTargetsClient confluenceClient;
+    private final NseCalendarHelper calendar;
 
     @Value("${tradeexec.base-url:http://localhost:8089}")
     private String tradeExecUrl;
@@ -75,17 +79,37 @@ public class HotStocksPositionOpenerJob {
                                       StringRedisTemplate redis,
                                       @Qualifier("hotStocksRestTemplate") RestTemplate rest,
                                       EquityScripCodeResolver scripCodeResolver,
-                                      ConfluenceTargetsClient confluenceClient) {
+                                      ConfluenceTargetsClient confluenceClient,
+                                      NseCalendarHelper calendar) {
         this.service = service;
         this.redis = redis;
         this.rest = rest;
         this.scripCodeResolver = scripCodeResolver;
         this.confluenceClient = confluenceClient;
+        this.calendar = calendar;
     }
 
     @Scheduled(cron = "0 15 9 * * MON-FRI", zone = "Asia/Kolkata")
     public void openPositions() {
-        log.info("HotStocksPositionOpenerJob starting");
+        openPositions(false);
+    }
+
+    /**
+     * @param force  if true, skip the NSE trading-day guard. Default path (cron + non-forced admin
+     *               trigger) refuses to open positions on weekends or NSE holidays because entry
+     *               would be pinned to last-close with no live feed to drive exits — producing
+     *               zero-PnL artifacts that pollute wallet state (root cause of the 15 Sat-opened
+     *               positions cleaned up 2026-04-18).
+     */
+    public void openPositions(boolean force) {
+        log.info("HotStocksPositionOpenerJob starting (force={})", force);
+
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        if (!force && !calendar.isTradingDay(today)) {
+            log.warn("{} strategy=HOTSTOCKS action=SKIP reason=non_trading_day date={} — pass force=true to override",
+                LOG_PREFIX, today);
+            return;
+        }
 
         if ("TRIPPED".equals(redis.opsForValue().get(KILL_SWITCH_KEY))) {
             log.warn("HotStocksPositionOpenerJob: kill switch TRIPPED — skipping all position opens");

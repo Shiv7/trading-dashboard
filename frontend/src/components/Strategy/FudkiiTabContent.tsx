@@ -12,6 +12,7 @@ import FundTopUpModal from '../Wallet/FundTopUpModal';
 import StalePriceModal from './StalePriceModal';
 import ConfluenceBadge from './ConfluenceBadge';
 import { LiquiditySourceBadge, RetestBadge } from './SignalBadges';
+import CounterTrendBanner from './CounterTrendBanner';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES & INTERFACES
@@ -119,6 +120,36 @@ interface FudkiiSignal {
   futuresExchange?: string;
   futuresExchangeType?: string;
   futuresVolume?: number;
+  // F14 Counter-Trend Scorer (backend-computed, shadow mode)
+  f14Score?: number;
+  f14ShouldFlip?: boolean;
+  f14Reasons?: string;
+  f14CounterDirection?: 'BULLISH' | 'BEARISH';
+  f14WickRatio?: number;
+  f14ClosedOpposite?: boolean;
+  f14RangeAtr?: number;
+  f14BodyPct?: number;
+  f14GapPctOvernight?: number;
+  // Trigger candle OHLC for context
+  triggerCandleOpen?: number;
+  triggerCandleHigh?: number;
+  triggerCandleLow?: number;
+  triggerCandleClose?: number;
+  triggerCandleVolume?: number;
+  // Flipped trade plan (counter-trend recompute via ConfluentTargetEngine.compute(!isLong))
+  flippedGrade?: string;
+  flippedRR?: number;
+  flippedSL?: number;
+  flippedT1?: number;
+  flippedT2?: number;
+  flippedT3?: number;
+  flippedT4?: number;
+  flippedOptionSL?: number;
+  flippedOptionT1?: number;
+  flippedOptionT2?: number;
+  flippedOptionT3?: number;
+  flippedOptionT4?: number;
+  flippedFortressScore?: number;
   // Greek enrichment from Streaming Candle (Black-Scholes)
   greekEnriched?: boolean;
   greekDelta?: number;
@@ -851,7 +882,29 @@ const FudkiiTradingCard: React.FC<{
   const [revisedData, setRevisedData] = useState<any>(null);
   const [loadingRevised, setLoadingRevised] = useState(false);
   const [ltpDriftPct, setLtpDriftPct] = useState<number | null>(null);
+  const [counterOtm, setCounterOtm] = useState<any>(null);
   const isLong = sig.direction === 'BULLISH';
+
+  // ── F14 Counter-Trend Score — backend-computed by F14CounterTrendScorer ──
+  // Backend stamps: f14Score, f14ShouldFlip, f14Reasons, f14CounterDirection,
+  // flippedGrade, flippedRR, flippedSL, flippedT1-4, flippedOptionSL, flippedOptionT1-4
+  const f14 = (() => {
+    const score = sig.f14Score ?? 0;
+    const triggered = sig.f14ShouldFlip === true || score >= 50;
+    const reasonsRaw = sig.f14Reasons || '';
+    const reasons = reasonsRaw ? String(reasonsRaw).split('|').filter(Boolean) : [];
+    return { triggered, score, reasons };
+  })();
+
+  // Fetch counter-trend OTM when F14 triggers
+  useEffect(() => {
+    if (!f14.triggered || !sig.symbol || counterOtm) return;
+    fetch(`/api/counter-trend/otm/${encodeURIComponent(sig.symbol)}/${sig.direction}`)
+      .then(r => r.json())
+      .then(d => setCounterOtm(d))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f14.triggered, sig.symbol, sig.direction]);
 
   // Signal timing
   const signalAgeMs = sig.triggerTimeEpoch ? Date.now() - sig.triggerTimeEpoch : 0;
@@ -1180,6 +1233,121 @@ const FudkiiTradingCard: React.FC<{
           />
         )}
 
+        {/* ── F14 COUNTER-TREND ALERT (shadow mode — uses shared CounterTrendBanner) ── */}
+        <CounterTrendBanner sig={sig as any} />
+
+        {false && f14.triggered && (
+          <div className="mt-3 rounded-xl border-2 border-red-500/60 bg-red-500/15 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-red-400 text-lg">⚠</span>
+                <span className="text-red-300 font-bold text-xs uppercase tracking-wide">
+                  Counter-Trend Setup
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-red-500/30 text-red-200 text-[9px] font-bold">SHADOW</span>
+                <span className="px-1.5 py-0.5 rounded bg-red-600/40 text-red-100 text-[10px] font-bold font-mono">
+                  F14={f14.score}
+                </span>
+              </div>
+              <span className="text-red-300 text-[10px]">
+                <strong>{sig.direction}</strong> → <strong>{sig.direction === 'BEARISH' ? 'BULLISH' : 'BEARISH'}</strong>
+              </span>
+            </div>
+            <div className="text-[10px] text-red-200 space-y-0.5">
+              {f14.reasons.map((r, i) => (
+                <div key={i}>• {r}</div>
+              ))}
+            </div>
+            {/* Flipped trade plan from ConfluentTargetEngine.compute(!isLong) */}
+            {(sig.flippedGrade || sig.flippedSL) && (
+              <div className="rounded-lg bg-red-950/40 border border-red-500/30 p-2 mt-1">
+                <div className="text-[10px] text-red-300 font-bold mb-1">Flipped Trade Plan (recomputed):</div>
+                <div className="grid grid-cols-4 gap-2 text-[10px] text-red-100">
+                  <div><span className="text-red-400">Grade </span><span className="font-mono font-bold">{sig.flippedGrade ?? '—'}</span></div>
+                  <div><span className="text-red-400">RR </span><span className="font-mono">{(sig.flippedRR ?? 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">Fort </span><span className="font-mono">{(sig.flippedFortressScore ?? 0).toFixed(1)}</span></div>
+                  <div><span className="text-red-400">— </span></div>
+                </div>
+                <div className="grid grid-cols-5 gap-1 text-[10px] text-red-100 mt-1 border-t border-red-500/20 pt-1">
+                  <div><span className="text-red-400">SL </span><span className="font-mono">{(sig.flippedSL ?? 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">T1 </span><span className="font-mono">{(sig.flippedT1 ?? 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">T2 </span><span className="font-mono">{(sig.flippedT2 ?? 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">T3 </span><span className="font-mono">{(sig.flippedT3 ?? 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">T4 </span><span className="font-mono">{(sig.flippedT4 ?? 0).toFixed(2)}</span></div>
+                </div>
+                {sig.flippedOptionSL && (
+                  <div className="grid grid-cols-5 gap-1 text-[10px] text-red-100/80 mt-1">
+                    <div><span className="text-red-400">OptSL </span><span className="font-mono">{(sig.flippedOptionSL ?? 0).toFixed(2)}</span></div>
+                    <div><span className="text-red-400">OptT1 </span><span className="font-mono">{(sig.flippedOptionT1 ?? 0).toFixed(2)}</span></div>
+                    <div><span className="text-red-400">OptT2 </span><span className="font-mono">{(sig.flippedOptionT2 ?? 0).toFixed(2)}</span></div>
+                    <div><span className="text-red-400">OptT3 </span><span className="font-mono">{(sig.flippedOptionT3 ?? 0).toFixed(2)}</span></div>
+                    <div><span className="text-red-400">OptT4 </span><span className="font-mono">{(sig.flippedOptionT4 ?? 0).toFixed(2)}</span></div>
+                  </div>
+                )}
+              </div>
+            )}
+            {counterOtm?.available ? (
+              <div className="mt-2 rounded-lg bg-red-950/40 border border-red-500/30 p-2 space-y-1">
+                <div className="text-[10px] text-red-300 font-bold mb-1">Counter-Trend OTM Recommendation:</div>
+                {/* Header row: contract + entry premium */}
+                <div className="flex items-center justify-between text-[11px]">
+                  <div className="font-mono font-semibold text-red-100">{counterOtm.contractName}</div>
+                  <div className="text-red-100">
+                    <span className="text-red-400 text-[10px]">Entry: </span>
+                    <span className="font-mono font-bold text-yellow-300">₹{(counterOtm.ltp || 0).toFixed(2)}</span>
+                  </div>
+                </div>
+                {/* Greeks row */}
+                <div className="grid grid-cols-4 gap-2 text-[10px] text-red-100">
+                  <div><span className="text-red-400">δ</span> <span className="font-mono">{(counterOtm.delta || 0).toFixed(3)}</span></div>
+                  <div><span className="text-red-400">γ</span> <span className="font-mono">{(counterOtm.gamma || 0).toFixed(4)}</span></div>
+                  <div><span className="text-red-400">θ</span> <span className="font-mono">{(counterOtm.theta || 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">IV</span> <span className="font-mono">{(counterOtm.impliedVol || 0).toFixed(1)}%</span></div>
+                </div>
+                {/* Liquidity / orderbook row */}
+                <div className="grid grid-cols-3 gap-2 text-[10px] text-red-100">
+                  <div>
+                    <span className="text-red-400">Spread </span>
+                    <span className={`font-mono ${(counterOtm.spreadPct || -1) > 5 ? 'text-amber-400' : 'text-red-100'}`}>
+                      {counterOtm.spreadPct > 0 ? `${counterOtm.spreadPct.toFixed(2)}%` : 'N/A'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-red-400">Vol </span>
+                    <span className="font-mono">{Math.round(counterOtm.avgVolPerMin || 0).toLocaleString()}/min</span>
+                  </div>
+                  <div>
+                    <span className="text-red-400">Surge </span>
+                    <span className={`font-mono ${(counterOtm.volumeSurgeRatio || 0) > 1.5 ? 'text-emerald-300' : 'text-red-100'}`}>
+                      {(counterOtm.volumeSurgeRatio || 0).toFixed(2)}x
+                    </span>
+                  </div>
+                </div>
+                {/* Spot / strike / depth / DTE row */}
+                <div className="grid grid-cols-4 gap-2 text-[10px] text-red-100 border-t border-red-500/20 pt-1">
+                  <div><span className="text-red-400">Spot </span><span className="font-mono">{(counterOtm.spotPrice || 0).toFixed(2)}</span></div>
+                  <div><span className="text-red-400">Strike </span><span className="font-mono">{counterOtm.strike} {counterOtm.counterType}</span></div>
+                  <div><span className="text-red-400">Depth </span><span className="font-mono">{counterOtm.topOfBookDepth > 0 ? `₹${(counterOtm.topOfBookDepth/1e5).toFixed(1)}L` : 'N/A'}</span></div>
+                  <div><span className="text-red-400">DTE </span><span className="font-mono">{counterOtm.daysToExpiry}d</span></div>
+                </div>
+                {/* ScripCode footer */}
+                <div className="text-[9px] text-red-400 pt-1">
+                  ScripCode {counterOtm.scripCode} · Expiry {counterOtm.expiry} · Liquidity {Math.round(counterOtm.liquidityScore || 0).toLocaleString()}
+                </div>
+              </div>
+            ) : counterOtm ? (
+              <div className="text-[10px] text-red-300 italic mt-1">
+                Counter OTM lookup: {counterOtm.reason || 'unavailable'}
+              </div>
+            ) : (
+              <div className="text-[10px] text-red-400 italic mt-1">Loading counter-trend OTM...</div>
+            )}
+            <div className="text-[9px] text-red-400/70 italic mt-1 border-t border-red-500/20 pt-1">
+              ⓘ Shadow mode — does NOT auto-trade. Review for manual decision.
+            </div>
+          </div>
+        )}
+
         {/* ── RETEST BADGE ── */}
         <RetestBadge active={sig.retestActive} aligned={sig.retestDirectionAligned} boost={sig.retestBoost} source={sig.retestSource} level={sig.retestLevel} stage={sig.retestStage} />
 
@@ -1344,9 +1512,15 @@ const FudkiiTradingCard: React.FC<{
         ) : sizing.disabled ? (
           <button
             disabled
-            className="w-full h-12 rounded-xl mt-3 text-slate-400 font-semibold text-sm bg-slate-700/50 cursor-not-allowed"
+            className="w-full h-12 rounded-xl mt-3 text-slate-400 font-semibold text-sm bg-slate-700/40 border border-slate-600/40 cursor-not-allowed flex flex-col items-center justify-center gap-0.5 px-3"
+            title={`Sizing unavailable — KII ${effectiveKii} below threshold or no funds. Contract details shown for reference.`}
           >
-            KII {effectiveKii} &mdash; Sizing Unavailable
+            <span className="text-[12px] truncate w-full text-center">
+              {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName || sig.symbol || sig.scripCode} @ &#8377;{fmt(premium)}
+            </span>
+            <span className="text-[9px] text-slate-500 font-normal">
+              KII {effectiveKii} &middot; lot {lotSize} &middot; sizing unavailable
+            </span>
           </button>
         ) : (
           <div className="relative mt-3">
