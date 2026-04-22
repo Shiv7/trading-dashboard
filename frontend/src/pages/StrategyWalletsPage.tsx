@@ -1043,14 +1043,24 @@ export default function StrategyWalletsPage() {
 
           return (
             <>
-              {/* Shared filter bar — one state drives both Active + Exited.
-                  Always rendered so filters are usable even when Active is empty
-                  (user can still filter Exited Today with no Active positions). */}
-              <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-                <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
-                  Filter — Active & Exited
-                </span>
-                <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
+              {/* Shared filter bar — sticky below the top header so it stays
+                  reachable while scrolling through Exited Today even when
+                  Active Trades is empty. One filter state drives both sections. */}
+              <div className="sticky top-[64px] sm:top-[72px] z-20 -mx-1.5 sm:-mx-4 px-1.5 sm:px-4 py-2 bg-slate-900/95 backdrop-blur border-y border-cyan-500/20 shadow-lg shadow-cyan-500/5">
+                <div className="bg-slate-800/80 border border-cyan-500/30 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+                  <span className="text-[11px] uppercase tracking-wider text-cyan-300 font-bold flex items-center gap-1.5">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                    </svg>
+                    Filter — Active & Exited
+                    {activeFilter.active.size > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-cyan-500/30 text-cyan-100 text-[10px] font-bold">
+                        {activeFilter.active.size}
+                      </span>
+                    )}
+                  </span>
+                  <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
+                </div>
               </div>
 
               {activePositions.length > 0 && (
