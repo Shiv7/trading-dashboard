@@ -48,7 +48,7 @@ export default function LandingPage() {
         <nav className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
             <img src="/kotsin-logo.svg" alt="Kotsin Logo" className="w-12 h-12 rounded-xl shadow-lg shadow-amber-500/20" />
-            <span className="text-2xl font-display font-bold text-white">KOTSIN</span>
+            <span className="text-2xl font-display font-bold text-amber-400">KOTSIN</span>
           </div>
           <div className="flex items-center gap-4">
             <Link

@@ -127,7 +127,7 @@ export default function Layout({ children }: LayoutProps) {
           <NavLink to="/dashboard" className="flex items-center gap-2.5 min-w-0">
             <img src="/kotsin-logo.svg" alt="Kotsin" className="w-8 h-8 rounded-lg flex-shrink-0" />
             {!sidebarCollapsed && (
-              <span className="text-lg font-display font-bold text-white tracking-wide truncate">KOTSIN</span>
+              <span className="text-lg font-display font-bold text-amber-400 tracking-wide truncate">KOTSIN</span>
             )}
           </NavLink>
         </div>

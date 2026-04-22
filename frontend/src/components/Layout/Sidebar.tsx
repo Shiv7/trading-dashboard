@@ -242,11 +242,9 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="h-14 flex items-center px-4 border-b border-slate-800/80">
         <Link to="/dashboard" className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-sm font-black text-slate-900 flex-shrink-0">
-            K
-          </div>
+          <img src="/kotsin-logo.svg" alt="Kotsin" className="w-8 h-8 rounded-lg flex-shrink-0" />
           {!collapsed && (
-            <span className="text-sm font-bold text-white tracking-wide truncate">KOTSIN</span>
+            <span className="text-lg font-display font-bold text-amber-400 tracking-wide truncate">KOTSIN</span>
           )}
         </Link>
       </div>
