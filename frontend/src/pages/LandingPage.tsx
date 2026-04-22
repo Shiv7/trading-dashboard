@@ -208,10 +208,10 @@ export default function LandingPage() {
             Join thousands of traders using institutional-grade analytics
           </p>
           <Link
-            to="/signup"
+            to="/login"
             className="inline-flex px-8 py-4 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold text-lg rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all shadow-xl shadow-amber-500/30"
           >
-            Create Free Account
+            Log In
           </Link>
         </div>
       </section>
@@ -221,7 +221,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <img src="/kotsin-logo.svg" alt="Kotsin" className="w-8 h-8 rounded-lg" />
-            <span className="text-slate-400">Kotsin Trading Platform</span>
+            <span className="text-slate-400">Kotsin Quant</span>
           </div>
           <div className="text-slate-500 text-sm">
             Institutional-Grade Quantitative Analytics
