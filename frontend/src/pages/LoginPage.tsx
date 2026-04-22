@@ -105,24 +105,6 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
-          {/* Divider */}
-          <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-700" />
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-4 bg-slate-800/50 text-slate-500">New to Kotsin?</span>
-            </div>
-          </div>
-
-          {/* Sign Up Link */}
-          <Link
-            to="/signup"
-            className="block w-full py-3 text-center text-amber-400 font-medium border border-amber-500/30 rounded-xl hover:bg-amber-500/10 transition-all"
-          >
-            Create an Account
-          </Link>
         </div>
 
         {/* Back to Home */}
@@ -130,14 +112,6 @@ export default function LoginPage() {
           <Link to="/" className="text-slate-400 hover:text-white transition-colors text-sm">
             ← Back to Home
           </Link>
-        </div>
-
-        {/* Demo Credentials Hint */}
-        <div className="mt-6 bg-slate-800/30 border border-slate-700/50 rounded-xl p-4 text-center">
-          <p className="text-slate-500 text-xs mb-1">Demo Admin Access</p>
-          <p className="text-slate-400 text-sm">
-            Username: <span className="text-amber-400 font-mono">admin</span> | Password: <span className="text-amber-400 font-mono">admin123</span>
-          </p>
         </div>
       </div>
     </div>
