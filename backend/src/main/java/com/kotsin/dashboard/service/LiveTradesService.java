@@ -307,6 +307,18 @@ public class LiveTradesService {
     Map<String, Object> buildTodayExit(Document doc) {
         Map<String, Object> out = new LinkedHashMap<>();
 
+        // Unique per-exit identifier so the frontend React key is unique.
+        // Multiple tranche fills of the same trade share the same signalId
+        // (ST-{STRATEGY}-{epochMs}) — prior emit fell back to scripCode which
+        // caused duplicate React keys across tranches → rendered card count
+        // diverged from the filtered/matched count. Using Mongo _id is unique
+        // per exit doc by definition.
+        Object mongoId = doc.get("_id");
+        String uniqueId = mongoId != null ? mongoId.toString() : null;
+        out.put("positionId", uniqueId);
+        out.put("tradeId", uniqueId);
+        out.put("signalId", doc.getString("signalId"));
+
         out.put("scripCode", doc.getString("scripCode"));
         out.put("symbol", doc.getString("companyName"));
         out.put("instrumentSymbol", doc.getString("instrumentSymbol"));
