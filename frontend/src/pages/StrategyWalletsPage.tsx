@@ -1039,20 +1039,29 @@ export default function StrategyWalletsPage() {
 
           const filteredActive = filterPos(activePositions, activeFilter)
           const filteredExited = filterPos(exitedPositions, exitedFilter)
+          const hasAnyFilter = activeFilter.active.size > 0
+          const showSharedBar = activePositions.length > 0 || exitedPositions.length > 0
 
           return (
             <>
+              {/* Shared filter bar — one state drives both Active + Exited sections */}
+              {showSharedBar && (
+                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+                  <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
+                    Filter — Active & Exited
+                  </span>
+                  <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
+                </div>
+              )}
+
               {activePositions.length > 0 && (
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Briefcase className="w-4 h-4 text-cyan-400" />
-                      <h2 className="text-sm font-bold text-white">Active Trades</h2>
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
-                        {activeFilter.active.size > 0 ? `${filteredActive.length}/${activePositions.length}` : activePositions.length}
-                      </span>
-                    </div>
-                    <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-cyan-400" />
+                    <h2 className="text-sm font-bold text-white">Active Trades</h2>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
+                      {hasAnyFilter ? `${filteredActive.length}/${activePositions.length}` : activePositions.length}
+                    </span>
                   </div>
                   <div className="p-2 sm:p-4">
                     {filteredActive.length > 0 ? (
@@ -1074,15 +1083,12 @@ export default function StrategyWalletsPage() {
               {/* ── Exited Today ── */}
               {exitedPositions.length > 0 && (
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Briefcase className="w-4 h-4 text-slate-400" />
-                      <h2 className="text-sm font-bold text-white">Exited Today</h2>
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
-                        {exitedFilter.active.size > 0 ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
-                      </span>
-                    </div>
-                    <SectionFilterBar active={exitedFilter.active} onToggle={exitedFilter.toggle} onClear={exitedFilter.clear} />
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-slate-400" />
+                    <h2 className="text-sm font-bold text-white">Exited Today</h2>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
+                      {hasAnyFilter ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
+                    </span>
                   </div>
                   <div className="p-2 sm:p-4">
                     {filteredExited.length > 0 ? (
