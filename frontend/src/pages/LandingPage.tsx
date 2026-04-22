@@ -50,20 +50,6 @@ export default function LandingPage() {
             <img src="/kotsin-logo.svg" alt="Kotsin Logo" className="w-12 h-12 rounded-xl shadow-lg shadow-amber-500/20" />
             <span className="text-2xl font-display font-bold text-amber-400">KOTSIN</span>
           </div>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/login"
-              className="px-5 py-2.5 text-slate-300 hover:text-white transition-colors font-medium"
-            >
-              Login
-            </Link>
-            <Link
-              to="/signup"
-              className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all shadow-lg shadow-amber-500/25"
-            >
-              Get Started
-            </Link>
-          </div>
         </nav>
       </header>
 
@@ -90,17 +76,11 @@ export default function LandingPage() {
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
-              to="/signup"
+              to="/login"
               className="px-8 py-4 bg-gradient-to-r from-amber-500 to-amber-600 text-slate-900 font-bold text-lg rounded-xl hover:from-amber-400 hover:to-amber-500 transition-all shadow-xl shadow-amber-500/30 flex items-center gap-2"
             >
-              Start Trading Now
+              Log In
               <span className="text-xl">→</span>
-            </Link>
-            <Link
-              to="/login"
-              className="px-8 py-4 bg-slate-800 text-white font-semibold text-lg rounded-xl border border-slate-700 hover:bg-slate-700 hover:border-slate-600 transition-all"
-            >
-              Sign In
             </Link>
           </div>
 
