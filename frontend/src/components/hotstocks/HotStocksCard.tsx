@@ -23,6 +23,24 @@ export function HotStocksCard({ metrics: m }: Props) {
               {m.fnoEligible && (
                 <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded">F&amp;O</span>
               )}
+              {/* HS Score badge — signed v2 score on a 100-point scale (F&O ±100, non-F&O ±80).
+                  Color: green for strong positive, amber mid, red negative. */}
+              {m.v2Score !== null && m.v2Score !== undefined && (() => {
+                const s = m.v2Score as number;
+                const color = s >= 50 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : s >= 20 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : s >= 0  ? 'bg-slate-600/30 text-slate-300 border-slate-600/40'
+                            :           'bg-red-500/20 text-red-300 border-red-500/40'
+                const sign = s > 0 ? '+' : ''
+                return (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${color}`}
+                    title={`HotStocks v2 score: ${s}/100 (${m.v2Tier}). Buckets: flow=${m.v2Bucket1} momentum=${m.v2Bucket2} OI=${m.v2Bucket3} RS=${m.v2Bucket4} vol=${m.v2Bucket5}`}
+                  >
+                    HS {sign}{s}
+                  </span>
+                )
+              })()}
               {showUrgency && (
                 <span className="text-[10px] text-amber-400">⚡{m.daysToNearestEvent}d</span>
               )}

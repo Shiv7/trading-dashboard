@@ -93,6 +93,21 @@ export interface StockMetrics {
   confidenceScore: number | null;
   scoringRegime: string | null;
   scoringModel: string | null;
+
+  // HotStocks v2 signed-directional score. Range [-100,+100] for F&O
+  // (BUCKET1_CAP 30 + B2 25 + B3 20 + B4 15 + B5 10), [-80,+80] for non-F&O
+  // (no OI bucket). Positive = bullish; negative = distribution; zero = no edge.
+  v2Score: number | null;
+  v2PreClampScore: number | null;
+  v2Tier: string | null;
+  v2DataConfidence: number | null;
+  v2Bucket1: number | null;   // institutional flow
+  v2Bucket2: number | null;   // price momentum
+  v2Bucket3: number | null;   // OI / futures congruence
+  v2Bucket4: number | null;   // relative strength
+  v2Bucket5: number | null;   // volume regime
+  v2OiChange5dPct: number | null;
+  v2NetInstitutionalCr: number | null;
 }
 
 export interface HotStocksListResponse {
