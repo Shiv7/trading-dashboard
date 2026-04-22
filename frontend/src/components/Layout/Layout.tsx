@@ -40,6 +40,7 @@ const sidebarItems = [
   { to: '/ml-shadow', key: 'ml-shadow', label: 'ML Shadow', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /> },
   { to: '/pivotboss', key: 'pivotboss', label: 'PivotBoss', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 13l4-4 4 4 6-6 4 4M3 17h18" /> },
   { to: '/pivotboss-analytics', key: 'pivotboss-analytics', label: 'PB Analytics', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> },
+  { to: '/monday-ship', key: 'monday-ship', label: 'Monday Ship', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /> },
 ]
 
 export default function Layout({ children }: LayoutProps) {
@@ -124,7 +125,7 @@ export default function Layout({ children }: LayoutProps) {
         {/* Logo */}
         <div className="h-14 flex items-center px-4 border-b border-slate-800/80">
           <NavLink to="/dashboard" className="flex items-center gap-2.5 min-w-0">
-            <img src="/kotsin-logo.svg" alt="Kotsin" className="w-8 h-8 rounded-lg flex-shrink-0" />
+            <img src="/logo.jpeg" alt="Kotsin" className="w-8 h-8 rounded-lg flex-shrink-0" />
             {!sidebarCollapsed && (
               <span className="text-sm font-bold text-white tracking-wide truncate">KOTSIN</span>
             )}
@@ -206,7 +207,7 @@ export default function Layout({ children }: LayoutProps) {
             {/* Left: Mobile logo + Search */}
             <div className="flex items-center gap-3">
               <Link to="/dashboard" className="lg:hidden">
-                <img src="/kotsin-logo.svg" alt="Kotsin" className="w-7 h-7 rounded-lg" />
+                <img src="/logo.jpeg" alt="Kotsin" className="w-7 h-7 rounded-lg" />
               </Link>
 
               <div className="w-full max-w-md">
