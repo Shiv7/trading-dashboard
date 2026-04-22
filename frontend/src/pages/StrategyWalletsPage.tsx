@@ -635,11 +635,11 @@ export default function StrategyWalletsPage() {
   const [sortField, setSortField] = useState<SortField>('exitTime')
 
   // Section-level filters (independent per section)
+  // Two independent filter bars — one per section. User can filter Active
+  // and Exited separately; labels are normalized in the backend so the
+  // frontend tag matcher always sees canonical strategy keys.
   const activeFilter = useSectionFilter()
-  // Exited section shares the active filter so toggling strategy/exchange/PnL
-  // on either bar filters both views — fixes the bug where filtering
-  // {FUDKII,FUKAA,FUDKOI} on Active still showed MICROALPHA in Exited.
-  const exitedFilter = activeFilter
+  const exitedFilter = useSectionFilter()
   const weeklyFilter = useSectionFilter()
 
   // Fund top-up modal
@@ -1039,65 +1039,23 @@ export default function StrategyWalletsPage() {
 
           const filteredActive = filterPos(activePositions, activeFilter)
           const filteredExited = filterPos(exitedPositions, exitedFilter)
-          const hasAnyFilter = activeFilter.active.size > 0
+          const hasActiveFilter = activeFilter.active.size > 0
+          const hasExitedFilter = exitedFilter.active.size > 0
 
           return (
             <>
-              {/* Shared filter bar — sticky below the top header so it stays
-                  reachable while scrolling through Exited Today even when
-                  Active Trades is empty. One filter state drives both sections. */}
-              <div className="sticky top-[64px] sm:top-[72px] z-20 -mx-1.5 sm:-mx-4 px-1.5 sm:px-4 py-2 bg-slate-900/95 backdrop-blur border-y border-cyan-500/20 shadow-lg shadow-cyan-500/5">
-                <div className="bg-slate-800/80 border border-cyan-500/30 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
-                  <span className="text-[11px] uppercase tracking-wider text-cyan-300 font-bold flex items-center gap-1.5">
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                    </svg>
-                    Filter — Active & Exited
-                    {activeFilter.active.size > 0 && (
-                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-cyan-500/30 text-cyan-100 text-[10px] font-bold">
-                        {activeFilter.active.size}
-                      </span>
-                    )}
-                  </span>
-                  <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
-                </div>
-              </div>
-
-              {activePositions.length > 0 && (
-                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
-                    <Briefcase className="w-4 h-4 text-cyan-400" />
-                    <h2 className="text-sm font-bold text-white">Active Trades</h2>
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
-                      {hasAnyFilter ? `${filteredActive.length}/${activePositions.length}` : activePositions.length}
-                    </span>
-                  </div>
-                  <div className="p-2 sm:p-4">
-                    {filteredActive.length > 0 ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                        {filteredActive.map(pos => (
-                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-center py-6 text-xs text-slate-500">
-                        No trades match filters
-                        <button onClick={activeFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* ── Exited Today ── */}
+              {/* Exited first (larger count, user focus today when no active) */}
               {exitedPositions.length > 0 && (
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2">
-                    <Briefcase className="w-4 h-4 text-slate-400" />
-                    <h2 className="text-sm font-bold text-white">Exited Today</h2>
-                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
-                      {hasAnyFilter ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
-                    </span>
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="w-4 h-4 text-slate-400" />
+                      <h2 className="text-sm font-bold text-white">Exited Today</h2>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
+                        {hasExitedFilter ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
+                      </span>
+                    </div>
+                    <SectionFilterBar active={exitedFilter.active} onToggle={exitedFilter.toggle} onClear={exitedFilter.clear} />
                   </div>
                   <div className="p-2 sm:p-4">
                     {filteredExited.length > 0 ? (
@@ -1108,13 +1066,44 @@ export default function StrategyWalletsPage() {
                       </div>
                     ) : (
                       <div className="text-center py-6 text-xs text-slate-500">
-                        No trades match filters
+                        No exited trades match filters
                         <button onClick={exitedFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
                       </div>
                     )}
                   </div>
                 </div>
               )}
+
+              {/* Active Trades — own filter bar, always renders the card even
+                  when empty so the filter stays accessible for pre-selection. */}
+              <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-cyan-400" />
+                    <h2 className="text-sm font-bold text-white">Active Trades</h2>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-500/20 text-cyan-400">
+                      {hasActiveFilter ? `${filteredActive.length}/${activePositions.length}` : activePositions.length}
+                    </span>
+                  </div>
+                  <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
+                </div>
+                <div className="p-2 sm:p-4">
+                  {filteredActive.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                      {filteredActive.map(pos => (
+                        <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6 text-xs text-slate-500">
+                      {activePositions.length === 0 ? 'No active trades' : 'No active trades match filters'}
+                      {hasActiveFilter && (
+                        <button onClick={activeFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             </>
           )
         })()}
