@@ -298,7 +298,8 @@ public class LiveTradesService {
         return exits;
     }
 
-    private Map<String, Object> buildTodayExit(Document doc) {
+    // package-private for unit tests (LiveTradesServiceBuildTodayExitTest)
+    Map<String, Object> buildTodayExit(Document doc) {
         Map<String, Object> out = new LinkedHashMap<>();
 
         out.put("scripCode", doc.getString("scripCode"));
@@ -342,7 +343,10 @@ public class LiveTradesService {
         out.put("exchange", doc.getString("exchange") != null ? doc.getString("exchange") : "N");
         out.put("instrumentType", doc.getString("instrumentType") != null ? doc.getString("instrumentType") : "EQUITY");
         out.put("isWin", pnl > 0);
-        out.put("strategy", doc.getString("strategy"));
+        // Normalized via StrategyNameResolver so the frontend wallet filter matches exit cards (W5).
+        // Previously passed raw doc.getString("strategy"), which broke filtering when the raw
+        // value differed from canonical (e.g. lowercase, signalSource-only trades).
+        out.put("strategy", StrategyNameResolver.extractFromDocument(doc));
 
         // Enrichment metrics (stored by TradeOutcomeConsumer from signal data)
         out.put("confidence", getDocDouble(doc, "confidence"));
@@ -352,6 +356,32 @@ public class LiveTradesService {
         out.put("rMultiple", getDocDouble(doc, "rMultiple"));
         out.put("stopLoss", getDocDouble(doc, "stopLoss"));
         out.put("totalCharges", round2(getDocDouble(doc, "totalCharges")));
+
+        // W3: Exit-time trailed SL fields — exit cards should display these instead of the
+        // static signal-time stopLoss. Trailed SL can differ materially (e.g. M&M 3200PE
+        // 2026-04-22: signal SL=47.89, trailed optionSl=49.97, actual exit=49.65).
+        out.put("equitySl", getDocDouble(doc, "equitySl"));
+        out.put("optionSl", getDocDouble(doc, "optionSl"));
+
+        // W4: Target fields — mirrors buildActivePosition (lines 234-243) so exit cards render
+        // the same T1..T4 row the active cards do. Without these, exit cards only show the
+        // aggregate targetsHit count (1..4) with no price context.
+        out.put("target1", getDocDouble(doc, "target1"));
+        out.put("target2", getDocDouble(doc, "target2"));
+        out.put("target3", getDocDouble(doc, "target3"));
+        out.put("target4", getDocDouble(doc, "target4"));
+        out.put("equityT1", getDocDouble(doc, "equityT1"));
+        out.put("equityT2", getDocDouble(doc, "equityT2"));
+        out.put("equityT3", getDocDouble(doc, "equityT3"));
+        out.put("equityT4", getDocDouble(doc, "equityT4"));
+        out.put("optionT1", getDocDouble(doc, "optionT1"));
+        out.put("optionT2", getDocDouble(doc, "optionT2"));
+        out.put("optionT3", getDocDouble(doc, "optionT3"));
+        out.put("optionT4", getDocDouble(doc, "optionT4"));
+        out.put("target1Hit", Boolean.TRUE.equals(doc.getBoolean("target1Hit")));
+        out.put("target2Hit", Boolean.TRUE.equals(doc.getBoolean("target2Hit")));
+        out.put("target3Hit", Boolean.TRUE.equals(doc.getBoolean("target3Hit")));
+        out.put("target4Hit", Boolean.TRUE.equals(doc.getBoolean("target4Hit")));
 
         // Target hits
         boolean t1 = Boolean.TRUE.equals(doc.getBoolean("target1Hit"));
