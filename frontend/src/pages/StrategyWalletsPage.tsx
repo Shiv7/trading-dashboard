@@ -636,7 +636,10 @@ export default function StrategyWalletsPage() {
 
   // Section-level filters (independent per section)
   const activeFilter = useSectionFilter()
-  const exitedFilter = useSectionFilter()
+  // Exited section shares the active filter so toggling strategy/exchange/PnL
+  // on either bar filters both views — fixes the bug where filtering
+  // {FUDKII,FUKAA,FUDKOI} on Active still showed MICROALPHA in Exited.
+  const exitedFilter = activeFilter
   const weeklyFilter = useSectionFilter()
 
   // Fund top-up modal

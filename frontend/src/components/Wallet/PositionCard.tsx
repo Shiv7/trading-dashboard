@@ -374,8 +374,8 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
           )}
           {position.exitReason && position.exitReason.length > 0 && (
             <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold ${
-              position.exitReason.startsWith('T') ? 'bg-green-500/15 text-green-400 border border-green-500/30'
-              : position.exitReason === 'EOD' ? 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/30'
+              /^T[1-4]/.test(position.exitReason) ? 'bg-green-500/15 text-green-400 border border-green-500/30'
+              : position.exitReason.startsWith('EOD') ? 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/30'
               : position.exitReason === 'MANUAL_CLOSE' ? 'bg-slate-500/15 text-slate-400 border border-slate-500/30'
               : 'bg-red-500/15 text-red-400 border border-red-500/30'
             }`}>{position.exitReason}</span>
