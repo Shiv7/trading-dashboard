@@ -1044,38 +1044,8 @@ export default function StrategyWalletsPage() {
 
           return (
             <>
-              {/* Exited first (larger count, user focus today when no active) */}
-              {exitedPositions.length > 0 && (
-                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <Briefcase className="w-4 h-4 text-slate-400" />
-                      <h2 className="text-sm font-bold text-white">Exited Today</h2>
-                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
-                        {hasExitedFilter ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
-                      </span>
-                    </div>
-                    <SectionFilterBar active={exitedFilter.active} onToggle={exitedFilter.toggle} onClear={exitedFilter.clear} />
-                  </div>
-                  <div className="p-2 sm:p-4">
-                    {filteredExited.length > 0 ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                        {filteredExited.map(pos => (
-                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} exited />
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-center py-6 text-xs text-slate-500">
-                        No exited trades match filters
-                        <button onClick={exitedFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Active Trades — own filter bar, always renders the card even
-                  when empty so the filter stays accessible for pre-selection. */}
+              {/* Active Trades first — conventional order. Always renders so
+                  the filter stays accessible even when the list is empty. */}
               <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
                 <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1104,6 +1074,36 @@ export default function StrategyWalletsPage() {
                   )}
                 </div>
               </div>
+
+              {/* Exited Today — below Active. Independent filter bar. */}
+              {exitedPositions.length > 0 && (
+                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-700/50 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="w-4 h-4 text-slate-400" />
+                      <h2 className="text-sm font-bold text-white">Exited Today</h2>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-600/40 text-slate-400">
+                        {hasExitedFilter ? `${filteredExited.length}/${exitedPositions.length}` : exitedPositions.length}
+                      </span>
+                    </div>
+                    <SectionFilterBar active={exitedFilter.active} onToggle={exitedFilter.toggle} onClear={exitedFilter.clear} />
+                  </div>
+                  <div className="p-2 sm:p-4">
+                    {filteredExited.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                        {filteredExited.map(pos => (
+                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} exited />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 text-xs text-slate-500">
+                        No exited trades match filters
+                        <button onClick={exitedFilter.clear} className="ml-2 text-blue-400 hover:text-blue-300">Clear</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           )
         })()}
