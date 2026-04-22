@@ -1040,19 +1040,18 @@ export default function StrategyWalletsPage() {
           const filteredActive = filterPos(activePositions, activeFilter)
           const filteredExited = filterPos(exitedPositions, exitedFilter)
           const hasAnyFilter = activeFilter.active.size > 0
-          const showSharedBar = activePositions.length > 0 || exitedPositions.length > 0
 
           return (
             <>
-              {/* Shared filter bar — one state drives both Active + Exited sections */}
-              {showSharedBar && (
-                <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-                  <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
-                    Filter — Active & Exited
-                  </span>
-                  <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
-                </div>
-              )}
+              {/* Shared filter bar — one state drives both Active + Exited.
+                  Always rendered so filters are usable even when Active is empty
+                  (user can still filter Exited Today with no Active positions). */}
+              <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
+                  Filter — Active & Exited
+                </span>
+                <SectionFilterBar active={activeFilter.active} onToggle={activeFilter.toggle} onClear={activeFilter.clear} />
+              </div>
 
               {activePositions.length > 0 && (
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700/50 rounded-xl overflow-hidden">

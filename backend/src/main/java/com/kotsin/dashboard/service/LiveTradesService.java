@@ -188,8 +188,13 @@ public class LiveTradesService {
         out.put("delta", getDouble(targets, "greekDelta"));
         out.put("optionHighFiveMin", getDouble(targets, "optionHighFiveMin"));
 
-        // Strategy
-        out.put("strategy", getString(targets, "strategy", ""));
+        // Strategy — normalized via StrategyNameResolver so the frontend filter
+        // in StrategyWalletsPage matches active cards against the same canonical
+        // tags used for exited cards (line 349). Raw getString(...) would skip
+        // positions whose targets.strategy is empty/lowercase/compound (e.g.
+        // "FUDKII_LONG") because getStrategyTag() only matches canonical keys.
+        // 2026-04-22.
+        out.put("strategy", StrategyNameResolver.extractFromRedis(targets));
 
         // Recalibration metadata (from RecalibrationService, updated every 30s)
         out.put("recalDelta", getDouble(targets, "recalDelta"));
