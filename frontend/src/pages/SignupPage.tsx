@@ -48,7 +48,7 @@ export default function SignupPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <Link to="/" className="inline-flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <img src="/logo.jpeg" alt="Kotsin Logo" className="w-16 h-16 rounded-2xl shadow-lg shadow-amber-500/20" />
+            <img src="/kotsin-logo.svg" alt="Kotsin Logo" className="w-16 h-16 rounded-2xl shadow-lg shadow-amber-500/20" />
           </Link>
           <h1 className="text-3xl font-display font-bold text-white mt-4">Create Account</h1>
           <p className="text-slate-400 mt-2">Join Kotsin and start trading with quantitative intelligence</p>

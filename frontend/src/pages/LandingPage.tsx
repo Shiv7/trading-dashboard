@@ -47,7 +47,7 @@ export default function LandingPage() {
       <header className="relative z-10 py-6 px-8">
         <nav className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <img src="/logo.jpeg" alt="Kotsin Logo" className="w-12 h-12 rounded-xl shadow-lg shadow-amber-500/20" />
+            <img src="/kotsin-logo.svg" alt="Kotsin Logo" className="w-12 h-12 rounded-xl shadow-lg shadow-amber-500/20" />
             <span className="text-2xl font-display font-bold text-white">KOTSIN</span>
           </div>
           <div className="flex items-center gap-4">
@@ -240,7 +240,7 @@ export default function LandingPage() {
       <footer className="relative z-10 py-8 px-8 border-t border-slate-800">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <img src="/logo.jpeg" alt="Kotsin" className="w-8 h-8 rounded-lg" />
+            <img src="/kotsin-logo.svg" alt="Kotsin" className="w-8 h-8 rounded-lg" />
             <span className="text-slate-400">Kotsin Trading Platform</span>
           </div>
           <div className="text-slate-500 text-sm">
