@@ -59,7 +59,15 @@ public class LiveTradesService {
 
             for (String targetKey : targetKeys) {
                 try {
-                    String scripCode = targetKey.replace(TARGETS_PREFIX, "");
+                    // Phase 2: parse both legacy "strategy:targets:{scripCode}" and
+                    // new per-strategy "strategy:targets:{STRATEGY}:{scripCode}"
+                    // formats. The suffix after TARGETS_PREFIX may contain a colon
+                    // (strategy:scripCode) — split on first colon when present.
+                    String tail = targetKey.substring(TARGETS_PREFIX.length());
+                    int colonIdx = tail.indexOf(':');
+                    String keyStrategy = colonIdx > 0 ? tail.substring(0, colonIdx) : null;
+                    String scripCode = colonIdx > 0 ? tail.substring(colonIdx + 1) : tail;
+
                     String targetsJson = redisTemplate.opsForValue().get(targetKey);
                     if (targetsJson == null) continue;
 
@@ -69,8 +77,16 @@ public class LiveTradesService {
                     int remainingQty = getInt(targets, "remainingQty");
                     if (remainingQty <= 0) continue;
 
-                    // Read corresponding virtual:positions for live price/P&L
-                    Map<String, Object> position = readPosition(scripCode);
+                    // Read corresponding virtual:positions — per-strategy first
+                    // (matches Phase 2 writer output), then legacy fallback for
+                    // pre-migration positions.
+                    Map<String, Object> position = Collections.emptyMap();
+                    if (keyStrategy != null) {
+                        position = readPosition(keyStrategy + ":" + scripCode);
+                    }
+                    if (position.isEmpty()) {
+                        position = readPosition(scripCode);   // legacy fallback
+                    }
 
                     Map<String, Object> active = buildActivePosition(scripCode, targets, position);
                     if (active != null) {
