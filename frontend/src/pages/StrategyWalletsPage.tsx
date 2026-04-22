@@ -1061,7 +1061,7 @@ export default function StrategyWalletsPage() {
                   {filteredActive.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                       {filteredActive.map(pos => (
-                        <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} />
+                        <PositionCard key={`${pos.strategy || 'UNKNOWN'}:${pos.scripCode}:${pos.positionId}`} position={pos} onUpdate={loadData} />
                       ))}
                     </div>
                   ) : (
@@ -1092,7 +1092,7 @@ export default function StrategyWalletsPage() {
                     {filteredExited.length > 0 ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                         {filteredExited.map(pos => (
-                          <PositionCard key={pos.positionId} position={pos} onUpdate={loadData} exited />
+                          <PositionCard key={`${pos.strategy || 'UNKNOWN'}:${pos.scripCode}:${pos.positionId}`} position={pos} onUpdate={loadData} exited />
                         ))}
                       </div>
                     ) : (
