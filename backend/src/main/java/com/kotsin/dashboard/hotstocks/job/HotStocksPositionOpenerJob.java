@@ -4,6 +4,7 @@ import com.kotsin.dashboard.calendar.NseCalendarHelper;
 import com.kotsin.dashboard.hotstocks.data.ConfluenceTargetsClient;
 import com.kotsin.dashboard.hotstocks.data.EquityScripCodeResolver;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
+import com.kotsin.dashboard.hotstocks.service.HotStocksPositionGate;
 import com.kotsin.dashboard.hotstocks.service.HotStocksService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +65,12 @@ public class HotStocksPositionOpenerJob {
     private final NseCalendarHelper calendar;
     private final com.kotsin.dashboard.hotstocks.service.LiveLtpResolver liveLtpResolver;
 
+    // Optional — legacy ctor (tests) wires null; enrichment-path ctor wires bean.
+    private HotStocksPositionGate positionGate;
+
+    @Value("${hotstocks.position.gate.alreadyheld.enabled:true}")
+    private boolean positionGateEnabled;
+
     @Value("${tradeexec.base-url:http://localhost:8089}")
     private String tradeExecUrl;
 
@@ -90,6 +97,17 @@ public class HotStocksPositionOpenerJob {
         this.confluenceClient = confluenceClient;
         this.calendar = calendar;
         this.liveLtpResolver = liveLtpResolver;
+    }
+
+    /**
+     * Spring setter-injects the gate so the legacy test ctor still compiles
+     * without a gate. When the gate bean is present and
+     * {@code hotstocks.position.gate.alreadyheld.enabled=true}, the opener
+     * skips held scrips that haven't printed a fresh deal today.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setPositionGate(HotStocksPositionGate positionGate) {
+        this.positionGate = positionGate;
     }
 
     @Scheduled(cron = "0 15 9 * * MON-FRI", zone = "Asia/Kolkata")
@@ -185,6 +203,18 @@ public class HotStocksPositionOpenerJob {
                     LOG_PREFIX, tradableScripCode, m.getSymbol());
                 continue;
             }
+
+            // Fresh-deal gate — block re-entry on a held scrip that hasn't printed a
+            // new deal today. Runs after the existing dedup so we still short-circuit
+            // on the explicit redis key check above. Kill-switch:
+            // hotstocks.position.gate.alreadyheld.enabled=false (skips gate entirely).
+            if (positionGate != null && positionGateEnabled && !positionGate.mayOpen(m)) {
+                skippedDedup++;
+                log.info("{} skip scrip={} — already held with no fresh deal today",
+                    LOG_PREFIX, tradableScripCode);
+                continue;
+            }
+
             try {
                 openOne(m, tradableScripCode);
                 opened++;
