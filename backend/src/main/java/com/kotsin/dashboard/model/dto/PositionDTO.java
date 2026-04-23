@@ -66,6 +66,10 @@ public class PositionDTO {
     private String instrumentType;  // OPTION, FUTURES, or null for legacy
     private Double delta;
 
+    // Lot metadata (populated for OPTION/FUTURES; equity reports 1/1)
+    private Integer lotSize;
+    private Integer lots;
+
     // Exit info (for closed positions)
     private String exitReason;      // T1-OP, T2-EQ, SL-OP, EOD, MANUAL_CLOSE, etc.
     private Double equityLtp;       // Current equity/futures LTP for dual display

@@ -290,6 +290,13 @@ public class WalletService {
             Boolean slHit = data.get("slHit") != null ? Boolean.TRUE.equals(data.get("slHit")) : null;
             String instrumentType = data.get("instrumentType") != null ? data.get("instrumentType").toString() : null;
             Double delta = data.get("delta") != null ? ((Number) data.get("delta")).doubleValue() : null;
+
+            // Lot metadata: lotSize read from VirtualPosition; lots derived if absent
+            Integer lotSize = data.get("lotSize") != null ? ((Number) data.get("lotSize")).intValue() : null;
+            Integer lots = data.get("lots") != null ? ((Number) data.get("lots")).intValue() : null;
+            if (lots == null && lotSize != null && lotSize > 0 && qtyOpen > 0) {
+                lots = qtyOpen / lotSize;
+            }
             String exitReason = data.get("exitReason") != null ? data.get("exitReason").toString() : null;
             Double equityLtp = data.get("equityLtp") != null ? ((Number) data.get("equityLtp")).doubleValue() : null;
 
@@ -355,6 +362,8 @@ public class WalletService {
                     .slHit(slHit)
                     .instrumentType(instrumentType)
                     .delta(delta)
+                    .lotSize(lotSize)
+                    .lots(lots)
                     .exitReason(exitReason)
                     .equityLtp(equityLtp)
                     .totalCharges(totalCharges)

@@ -44,6 +44,11 @@ public class UserTrade {
     private double exitPrice;
     private int quantity;
 
+    // Lot metadata for instrument-aware qty display. instrumentType ∈ {EQUITY, OPTION, FUTURES}.
+    private String instrumentType;
+    private int lotSize;
+    private int lots;
+
     private double stopLoss;
     private double target1;
     private double target2;

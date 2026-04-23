@@ -567,6 +567,9 @@ public class UserPnLService {
                 .entryPrice(pt.getEntryPrice())
                 .exitPrice(pt.getExitPrice())
                 .quantity(pt.getQuantity())
+                .lotSize(pt.getLotSize())
+                .lots(pt.getLotSize() > 0 ? pt.getQuantity() / pt.getLotSize() : 0)
+                .instrumentType(deriveInstrumentType(pt.getSignalType(), pt.getLotSize()))
                 .stopLoss(pt.getStopLoss())
                 .target1(pt.getTargetPrice())
                 .pnl(pt.getRealizedPnL())
@@ -586,6 +589,22 @@ public class UserPnLService {
 
     private String resolveCompanyName(String scripCode) {
         return scripLookup.resolve(scripCode);
+    }
+
+    /**
+     * Derive instrumentType for journal display. PaperTrade lacks a direct instrumentType
+     * field, so we infer from signalType (option-buying strategies) and fall back to the
+     * lotSize signal (lotSize > 1 implies derivatives).
+     */
+    static String deriveInstrumentType(String signalType, int lotSize) {
+        if (signalType != null) {
+            String s = signalType.toUpperCase();
+            if (s.equals("FUDKII") || s.equals("FUDKOI") || s.equals("FUKAA")
+                    || s.equals("MICROALPHA") || s.equals("MERE")) {
+                return "OPTION";
+            }
+        }
+        return lotSize > 1 ? "OPTION" : "EQUITY";
     }
 
     // ==================== NOTES (unchanged - only works for user_trades) ====================
