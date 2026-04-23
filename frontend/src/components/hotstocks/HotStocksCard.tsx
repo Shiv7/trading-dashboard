@@ -3,6 +3,14 @@ import type { StockMetrics } from '../../types/hotstocks';
 
 interface Props { metrics: StockMetrics }
 
+/** Render an ISO timestamp as HH:MM:SS IST for the lineage footer. Falls back to raw string. */
+function formatRankedTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString('en-IN', { hour12: false });
+}
+
 /**
  * Compact positional-trade card for a single F&O stock.
  * Renders header → smart-trader thesis → 3-column icon grid → action cue.
@@ -11,6 +19,18 @@ export function HotStocksCard({ metrics: m }: Props) {
   const priceColor = m.change1dPct >= 0 ? 'text-emerald-400' : 'text-red-400';
   const arrow = m.change1dPct >= 0 ? '↑' : '↓';
   const showUrgency = m.daysToNearestEvent !== null && m.daysToNearestEvent !== undefined && m.daysToNearestEvent <= 5;
+  // Integrity-pass badge gates (all fields optional on backend; guard each individually).
+  const showAlreadyHeld = m.alreadyHeld === true;
+  const showNewDealToday = m.hasNewDealToday === true;
+  const showSmartMoneyExit = m.smartMoneyExit === true;
+  const showRotation = m.scripDealFlow === 'ROTATION';
+  const rotationTooltip = showRotation
+    ? `Institutional flow mostly rotating (conviction ${(m.conviction ?? 0).toFixed(2)}×) — signal dampened`
+    : undefined;
+  const dealsDates = m.dealsSourceDates;
+  const hasLineage = Array.isArray(dealsDates) && dealsDates.length > 0;
+  const showTodayMissing = m.dealsTodayPresent === false;
+  const showFlowLabel = m.scripDealFlow && m.scripDealFlow !== 'DEAL_NET_BUY' && m.scripDealFlow !== 'DEAL_NET_SELL';
 
   return (
     <Link to={`/research/${encodeURIComponent(m.symbol)}`} className="block">
@@ -43,6 +63,29 @@ export function HotStocksCard({ metrics: m }: Props) {
               })()}
               {showUrgency && (
                 <span className="text-[10px] text-amber-400">⚡{m.daysToNearestEvent}d</span>
+              )}
+              {showAlreadyHeld && (
+                <span className="text-[10px] px-1.5 py-0.5 bg-slate-500/15 text-slate-400 border border-slate-500/30 rounded uppercase tracking-wide">
+                  Already Held
+                </span>
+              )}
+              {showNewDealToday && (
+                <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/15 text-blue-400 border border-blue-500/30 rounded uppercase tracking-wide">
+                  NEW DEAL TODAY
+                </span>
+              )}
+              {showSmartMoneyExit && (
+                <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded uppercase tracking-wide">
+                  ⚠ SMART MONEY EXIT
+                </span>
+              )}
+              {showRotation && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 bg-orange-500/15 text-orange-400 border border-orange-500/30 rounded uppercase tracking-wide"
+                  title={rotationTooltip}
+                >
+                  ROTATION
+                </span>
               )}
             </div>
             <div className="text-xs text-slate-400">
@@ -93,6 +136,20 @@ export function HotStocksCard({ metrics: m }: Props) {
         <div className="mt-3 pt-2 border-t border-slate-700/50">
           <div className="text-xs font-mono text-amber-200">{m.actionCueText}</div>
         </div>
+
+        {/* Data lineage — where did this ranking's deal data come from. */}
+        <p className="text-[10px] text-slate-500 mt-2">
+          Ranked {formatRankedTime(m.lastUpdatedIst)}
+          {hasLineage && (
+            <> · Deals from {dealsDates![dealsDates!.length - 1]} to {dealsDates![0]}</>
+          )}
+          {showTodayMissing && (
+            <span className="text-amber-500/70"> · Today's data not yet available</span>
+          )}
+          {showFlowLabel && (
+            <> · Flow: {m.scripDealFlow}</>
+          )}
+        </p>
 
         <div className="mt-2 text-[10px] text-slate-500 text-right">tap to open →</div>
       </div>

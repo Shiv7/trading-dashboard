@@ -108,6 +108,24 @@ export interface StockMetrics {
   v2Bucket5: number | null;   // volume regime
   v2OiChange5dPct: number | null;
   v2NetInstitutionalCr: number | null;
+
+  // HotStocks integrity pass (2026-04-26): deal-flow transparency + observability.
+  // All optional — backend may not send if feature flags are off (back-compat with old payloads).
+  scripDealFlow?: 'DEAL_NET_BUY' | 'DEAL_NET_SELL' | 'ROTATION' | 'INSUFFICIENT';
+  conviction?: number;                    // 0..1, how one-sided the deal flow is
+  dealsSourceDates?: string[];            // ISO dates (sorted newest-first per backend convention)
+  dealsTodayPresent?: boolean;            // was today's deal data populated when ranked?
+  alreadyHeld?: boolean;                  // scrip currently in HotStocks wallet
+  hasNewDealToday?: boolean;              // any deal with today's date
+  smartMoneyExit?: boolean;               // sell-side deal today on held scrip
+
+  // Shadow fields — observability only, not visually featured yet.
+  shadowFiiDiiRegime?: string;
+  shadowFiiDiiMultiplier?: number;
+  shadowBucket1WithFiiDii?: number;
+  shadowSmartClientDeals?: number;
+  shadowNeutralClientDeals?: number;
+  shadowShellClientDeals?: number;
 }
 
 export interface HotStocksListResponse {
