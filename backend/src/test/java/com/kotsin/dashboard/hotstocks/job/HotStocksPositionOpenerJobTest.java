@@ -5,6 +5,7 @@ import com.kotsin.dashboard.hotstocks.data.ConfluenceTargetsClient;
 import com.kotsin.dashboard.hotstocks.data.EquityScripCodeResolver;
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
 import com.kotsin.dashboard.hotstocks.service.HotStocksService;
+import com.kotsin.dashboard.hotstocks.service.LiveLtpResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -42,6 +43,7 @@ class HotStocksPositionOpenerJobTest {
     private EquityScripCodeResolver resolver;
     private ConfluenceTargetsClient confluence;
     private NseCalendarHelper calendar;
+    private LiveLtpResolver liveLtpResolver;
 
     @BeforeEach
     void setUp() {
@@ -57,6 +59,11 @@ class HotStocksPositionOpenerJobTest {
         confluence = mock(ConfluenceTargetsClient.class);
         calendar = mock(NseCalendarHelper.class);
         when(calendar.isTradingDay(any())).thenReturn(true);
+        liveLtpResolver = mock(LiveLtpResolver.class);
+        // Default: pass-through to ltpYesterday so existing tests keep their price assumptions.
+        // Individual tests can override this to test the live-LTP path explicitly.
+        when(liveLtpResolver.resolveEntry(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble()))
+            .thenAnswer(inv -> (double) inv.getArgument(2));
 
         // Default: resolver returns empty (only F&O picks resolved automatically via metrics).
         when(resolver.resolve(anyString())).thenReturn(java.util.Optional.empty());
@@ -83,7 +90,7 @@ class HotStocksPositionOpenerJobTest {
 
     private HotStocksPositionOpenerJob newJob(int fnoCap, int nonFnoCap) {
         HotStocksPositionOpenerJob job = new HotStocksPositionOpenerJob(
-            service, redis, rest, resolver, confluence, calendar);
+            service, redis, rest, resolver, confluence, calendar, liveLtpResolver);
         // @Value defaults don't fire without a Spring context — set the caps explicitly.
         org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewFnoPerDay", fnoCap);
         org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewNonFnoPerDay", nonFnoCap);

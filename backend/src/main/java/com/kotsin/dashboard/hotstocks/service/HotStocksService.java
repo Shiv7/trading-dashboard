@@ -216,22 +216,59 @@ public class HotStocksService {
         }
     }
 
+    /**
+     * Merged ranked list consumed by {@link com.kotsin.dashboard.hotstocks.job.HotStocksPositionOpenerJob}.
+     *
+     * Combines the F&O-Tier-1 universe (written at 00:15 IST by enrichment cron) with the
+     * non-F&O Tier-2 picks (written at 17:45 IST by {@code HotStocksNonFnoScanJob}).
+     *
+     * Pre-2026-04-23: only F&O universe was returned → non-F&O picks died in the scan
+     * job's log output and never produced trades (zero non-F&O opens across many days).
+     *
+     * Sort is by v2Score descending so budget allocation in the opener is quality-ordered.
+     */
     public List<StockMetrics> loadRankedList() {
-        String json = redis.opsForValue().get(REDIS_PREFIX + "universe");
+        List<StockMetrics> fno = loadList(REDIS_PREFIX + "universe");
+        List<StockMetrics> nonFno = loadList(REDIS_PREFIX + "universe:nonfno");
+        if (fno.isEmpty() && nonFno.isEmpty()) return Collections.emptyList();
+        List<StockMetrics> merged = new ArrayList<>(fno.size() + nonFno.size());
+        merged.addAll(fno);
+        merged.addAll(nonFno);
+        merged.sort((a, b) -> Integer.compare(b.getV2Score(), a.getV2Score()));
+        return merged;
+    }
+
+    /** Cache the F&O-Tier-1 ranked list (unchanged writer). */
+    public void cacheRankedList(List<StockMetrics> ranked) {
+        cacheList(REDIS_PREFIX + "universe", ranked);
+    }
+
+    /**
+     * Cache the non-F&O Tier-2 ranked list (2026-04-23 fix). Written by
+     * {@link com.kotsin.dashboard.hotstocks.job.HotStocksNonFnoScanJob} at 17:45 IST.
+     * Read by {@link #loadRankedList()} and merged with F&O picks so the opener
+     * sees a unified candidate list at 09:15 IST the next day.
+     */
+    public void cacheNonFnoRankedList(List<StockMetrics> ranked) {
+        cacheList(REDIS_PREFIX + "universe:nonfno", ranked);
+    }
+
+    private List<StockMetrics> loadList(String key) {
+        String json = redis.opsForValue().get(key);
         if (json == null) return Collections.emptyList();
         try {
             return mapper.readValue(json, new TypeReference<List<StockMetrics>>() {});
         } catch (Exception e) {
-            log.error("Failed to parse ranked list: {}", e.getMessage());
+            log.error("Failed to parse list at {}: {}", key, e.getMessage());
             return Collections.emptyList();
         }
     }
 
-    public void cacheRankedList(List<StockMetrics> ranked) {
+    private void cacheList(String key, List<StockMetrics> ranked) {
         try {
-            redis.opsForValue().set(REDIS_PREFIX + "universe", mapper.writeValueAsString(ranked), REDIS_TTL);
+            redis.opsForValue().set(key, mapper.writeValueAsString(ranked), REDIS_TTL);
         } catch (Exception e) {
-            log.error("Failed to cache ranked list: {}", e.getMessage());
+            log.error("Failed to cache list at {}: {}", key, e.getMessage());
         }
     }
 }

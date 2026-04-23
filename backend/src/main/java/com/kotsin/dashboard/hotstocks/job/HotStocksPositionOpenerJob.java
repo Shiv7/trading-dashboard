@@ -62,6 +62,7 @@ public class HotStocksPositionOpenerJob {
     private final EquityScripCodeResolver scripCodeResolver;
     private final ConfluenceTargetsClient confluenceClient;
     private final NseCalendarHelper calendar;
+    private final com.kotsin.dashboard.hotstocks.service.LiveLtpResolver liveLtpResolver;
 
     @Value("${tradeexec.base-url:http://localhost:8089}")
     private String tradeExecUrl;
@@ -80,13 +81,15 @@ public class HotStocksPositionOpenerJob {
                                       @Qualifier("hotStocksRestTemplate") RestTemplate rest,
                                       EquityScripCodeResolver scripCodeResolver,
                                       ConfluenceTargetsClient confluenceClient,
-                                      NseCalendarHelper calendar) {
+                                      NseCalendarHelper calendar,
+                                      com.kotsin.dashboard.hotstocks.service.LiveLtpResolver liveLtpResolver) {
         this.service = service;
         this.redis = redis;
         this.rest = rest;
         this.scripCodeResolver = scripCodeResolver;
         this.confluenceClient = confluenceClient;
         this.calendar = calendar;
+        this.liveLtpResolver = liveLtpResolver;
     }
 
     @Scheduled(cron = "0 15 9 * * MON-FRI", zone = "Asia/Kolkata")
@@ -257,7 +260,13 @@ public class HotStocksPositionOpenerJob {
     }
 
     private void openOne(StockMetrics m, String tradableScripCode) {
-        double entry = m.getLtpYesterday();
+        // Live-LTP entry (2026-04-23 fix). Pulls the latest tick price from Redis
+        // (price:N:{scrip}, written by streamingcandle per-tick, TTL 300s). Falls back
+        // to StockMetrics.ltpYesterday only if the live feed is unavailable — which
+        // should be vanishingly rare after 09:15:00 since ticks start flowing immediately.
+        // Before this fix: entry = m.getLtpYesterday() → phantom day-1 P&L equal to the
+        // overnight gap (NTPC 2026-04-23: yesterday=405.40, today-open=404.00 → −₹518/370-lot).
+        double entry = liveLtpResolver.resolveEntry(tradableScripCode, "N", m.getLtpYesterday());
         if (entry <= 0) {
             throw new IllegalStateException("invalid entry price: " + entry);
         }
@@ -344,7 +353,10 @@ public class HotStocksPositionOpenerJob {
         // deltas + strategy routing
         payload.put("delta", 1.0);
         payload.put("strategy", "HOTSTOCKS");  // wallet routing key
-        payload.put("exchange", "NSE");
+        // Single-char "N" matches the convention used by every other write+read site.
+        // Using "NSE" here caused WsOrphanService's HOTSTOCKS-on-NSE gate to misfire and
+        // force-exit every multi-day position at 15:36 IST on 2026-04-23.
+        payload.put("exchange", "N");
         payload.put("direction", "LONG");
         payload.put("confidence", 0.75);
         payload.put("executionMode", "AUTO");
@@ -378,7 +390,7 @@ public class HotStocksPositionOpenerJob {
         req.put("scripCode", scripCode);
         req.put("qty", qty);
         req.put("price", price);
-        req.put("exchange", "NSE");
+        req.put("exchange", "N");
         req.put("lotSize", 1);
         req.put("instrumentType", "EQUITY");
         req.put("symbol", symbol);

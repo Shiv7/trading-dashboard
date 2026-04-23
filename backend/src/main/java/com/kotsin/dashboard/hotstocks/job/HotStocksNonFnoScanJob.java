@@ -123,6 +123,14 @@ public class HotStocksNonFnoScanJob {
             top.forEach(s -> log.info("[HS-NONFNO-SCAN] pick sym={} score={} net={}Cr",
                 s.getSymbol(), s.getV2Score(),
                 s.getV2NetInstitutionalCr() != null ? String.format("%+.0f", s.getV2NetInstitutionalCr()) : "?"));
+
+            // Persist top picks to hotstocks:v1:universe:nonfno (2026-04-23 fix).
+            // Before this line, picks lived only in the log — opener never saw them,
+            // so zero non-F&O trades ever opened. HotStocksService.loadRankedList()
+            // now merges this list with the F&O universe so the opener's nonFno
+            // budget (maxNewNonFnoPerDay, default 2) has candidates to allocate.
+            service.cacheNonFnoRankedList(top);
+            log.info("[HS-NONFNO-SCAN] persisted {} picks to hotstocks:v1:universe:nonfno", top.size());
         } catch (Exception e) {
             log.error("[HS-NONFNO-SCAN] failed", e);
         }
