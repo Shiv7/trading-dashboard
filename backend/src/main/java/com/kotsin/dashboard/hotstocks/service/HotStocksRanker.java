@@ -72,7 +72,8 @@ public class HotStocksRanker {
     public void enrichWithV2Score(StockMetrics m) {
         if (scoringEngine == null) return;
         HotStocksScoringEngine.FlowInput flow =
-                new HotStocksScoringEngine.FlowInput(m.getSmartBuyCr(), m.getSmartSellCr(), m.getDealDays());
+                new HotStocksScoringEngine.FlowInput(m.getSmartBuyCr(), m.getSmartSellCr(),
+                        m.getDealDays(), m.getConviction());
         Double oi5d = null;
         if (m.isFnoEligible() && oiSeriesProvider != null) {
             oi5d = oiSeriesProvider.fiveDayOiChangePct(m.getSymbol()).orElse(null);

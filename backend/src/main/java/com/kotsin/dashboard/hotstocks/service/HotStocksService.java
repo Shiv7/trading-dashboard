@@ -19,12 +19,17 @@ import com.kotsin.dashboard.hotstocks.repository.HotStockMetricsDoc;
 import com.kotsin.dashboard.hotstocks.repository.HotStockMetricsRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -32,6 +37,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Orchestrator: composes raw inputs (candles, deals, events, delivery%, strategies-watching)
@@ -61,6 +68,15 @@ public class HotStocksService {
     private final HotStockMetricsRepository repo;
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+
+    @Autowired(required = false)
+    private ClientQualityClassifier clientQualityClassifier;
+
+    @Autowired(required = false)
+    private HotStocksPositionGate positionGate;
+
+    @Value("${hotstocks.aggregate.time.decay.enabled:true}")
+    private boolean timeDecayEnabled;
 
     public HotStocksService(PriceFactsComputer priceFactsComputer,
                             VolumeLiquidityComputer volumeLiquidityComputer,
@@ -108,6 +124,26 @@ public class HotStocksService {
             Double oiChange5d,
             List<MarketPulseRedisClient.Deal> recentDeals,
             List<CorporateEvent> events) {
+        return computeFromInputs(scripCode, symbol, fnoEligible, candles, deliveryPct,
+                sector5dPct, nifty5dPct, oiChange5d, recentDeals, events,
+                Collections.emptySet());
+    }
+
+    /**
+     * Overload that accepts the pre-fetched HOTSTOCKS-wallet held scripCodes.
+     * The enrichment job calls {@link #fetchActivePositions()} once per run and
+     * threads the result here for per-stock stamping — avoids an N-way Redis
+     * round-trip in a 200+ scrip universe.
+     */
+    public StockMetrics computeFromInputs(
+            String scripCode, String symbol, boolean fnoEligible,
+            List<DailyCandle> candles,
+            Double deliveryPct,
+            double sector5dPct, double nifty5dPct,
+            Double oiChange5d,
+            List<MarketPulseRedisClient.Deal> recentDeals,
+            List<CorporateEvent> events,
+            Set<String> heldScripCodes) {
 
         StockMetrics m = new StockMetrics();
         m.setScripCode(scripCode);
@@ -132,7 +168,9 @@ public class HotStocksService {
             oiComputer.compute(m, oiChange5d);
         }
 
-        aggregateDeals(m, recentDeals);
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        aggregateDeals(m, recentDeals, today);
+        stampHoldingsContext(m, heldScripCodes, recentDeals, today);
         applyEvents(m, events);
 
         m.setStrategiesWatching(strategyClient.fetchWatchers(scripCode));
@@ -141,25 +179,111 @@ public class HotStocksService {
         return m;
     }
 
-    private void aggregateDeals(StockMetrics m, List<MarketPulseRedisClient.Deal> deals) {
-        if (deals == null || deals.isEmpty()) return;
+    /**
+     * Time-decay weight by calendar-age of the deal date:
+     *   ≤1 day   →  1.00  (today or T-1 — NSE publishes T-1 bulk/block deals post-close)
+     *   2-3 days →  0.50
+     *   4-5 days →  0.25
+     *   >5 days  →  0.00  (out of window — deal ignored)
+     *
+     * Future-dated rows are ignored (negative age). When the kill switch
+     * {@code hotstocks.aggregate.time.decay.enabled=false} is set, every deal
+     * carries weight 1.0 (pre-2026-04-23 behavior) so we can roll back without
+     * a code change if the decay schedule misbehaves.
+     */
+    double decayWeight(LocalDate dealDate, LocalDate today) {
+        if (!timeDecayEnabled) return 1.0;
+        if (dealDate == null || today == null) return 0.0;
+        long ageDays = ChronoUnit.DAYS.between(dealDate, today);
+        if (ageDays < 0) return 0.0;
+        if (ageDays <= 1) return 1.00;
+        if (ageDays <= 3) return 0.50;
+        if (ageDays <= 5) return 0.25;
+        return 0.0;
+    }
+
+    // Shadow-mode Redis log TTL: 30 days.
+    private static final long SHADOW_CLIENT_QUALITY_TTL_SECONDS = 30L * 24 * 60 * 60;
+
+    /**
+     * Aggregate bulk + block (+ short-sell, when present) deals into StockMetrics
+     * with:
+     *   - time-decayed buy/sell sums
+     *   - rotation-aware {@code scripDealFlow} label
+     *   - {@code conviction} = |net| / gross in [0,1]
+     *   - lineage stamps: {@code dealsSourceDates}, {@code dealsTodayPresent}
+     *   - shadow client-quality aggregates (SMART/NEUTRAL/SHELL counts and
+     *     shadow-weighted buy/sell Cr), plus a per-deal Redis LPUSH audit
+     *     trail so we can calibrate weights offline before flipping live.
+     *
+     * Deals list may include short-selling disclosures (Agent B ships the
+     * Redis reader changes). Short-sells arrive with {@code buySell="SELL"}
+     * and flow into {@code weightedSellCr} naturally; no special handling.
+     */
+    void aggregateDeals(StockMetrics m, List<MarketPulseRedisClient.Deal> deals) {
+        aggregateDeals(m, deals, LocalDate.now(ZoneId.of("Asia/Kolkata")));
+    }
+
+    /** Test-visible overload — callers pin {@code today} for deterministic decay tests. */
+    void aggregateDeals(StockMetrics m, List<MarketPulseRedisClient.Deal> deals, LocalDate today) {
+        if (deals == null || deals.isEmpty()) {
+            m.setScripDealFlow("INSUFFICIENT");
+            m.setDominantFlow("MIXED");
+            return;
+        }
         double buyCr = 0, sellCr = 0;
         Set<LocalDate> dealDates = new HashSet<>();
+        Set<LocalDate> contributingDates = new TreeSet<>(Comparator.reverseOrder()); // newest first
         int bulk = 0, block = 0;
         List<String> buyClients = new ArrayList<>();
         List<String> sellClients = new ArrayList<>();
+        boolean dealsTodayPresent = false;
+        boolean hasNewDealToday = false;
+
+        // Shadow client-quality aggregates
+        int smartCount = 0, neutralCount = 0, shellCount = 0;
+        double shadowBuyCr = 0.0, shadowSellCr = 0.0;
+
         for (MarketPulseRedisClient.Deal d : deals) {
-            double value = d.valueCr();  // pre-computed by FastAnalytics
-            if ("BUY".equals(d.buySell())) {
-                buyCr += value;
+            double w = decayWeight(d.date(), today);
+            if (w <= 0.0) continue;  // out-of-window; do NOT include in lineage
+
+            double value = d.valueCr();
+            double weighted = value * w;
+            boolean isBuy = "BUY".equals(d.buySell());
+
+            if (isBuy) {
+                buyCr += weighted;
                 buyClients.add(d.clientName());
             } else {
-                sellCr += value;
+                sellCr += weighted;
                 sellClients.add(d.clientName());
             }
             dealDates.add(d.date());
+            contributingDates.add(d.date());
             if (d.isBlock()) block++; else bulk++;
+
+            // Lineage / freshness stamping
+            if (d.date() != null && d.date().equals(today)) {
+                dealsTodayPresent = true;
+                hasNewDealToday = true;
+            }
+
+            // Shadow client-quality tiering (OPT-IN via bean wiring)
+            if (clientQualityClassifier != null) {
+                ClientQualityClassifier.Tier tier = clientQualityClassifier.classify(d.clientName());
+                double tierWeight = clientQualityClassifier.shadowWeightFor(tier);
+                switch (tier) {
+                    case SMART -> smartCount++;
+                    case SHELL -> shellCount++;
+                    default    -> neutralCount++;
+                }
+                double shadowWeighted = weighted * tierWeight;
+                if (isBuy) shadowBuyCr += shadowWeighted; else shadowSellCr += shadowWeighted;
+                logShadowClientQuality(m.getScripCode(), d, tier, value, today);
+            }
         }
+
         m.setSmartBuyCr(buyCr);
         m.setSmartSellCr(sellCr);
         m.setDealDays(dealDates.size());
@@ -167,9 +291,107 @@ public class HotStocksService {
         m.setBlockDealCount(block);
         m.setSmartBuyClients(buyClients.stream().distinct().toList());
         m.setSmartSellClients(sellClients.stream().distinct().toList());
-        if (buyCr > sellCr * 1.2) m.setDominantFlow("DII_BUY");
-        else if (sellCr > buyCr * 1.2) m.setDominantFlow("DII_SELL");
+
+        // Conviction + scripDealFlow labeling (rotation-aware)
+        double net = buyCr - sellCr;
+        double gross = buyCr + sellCr;
+        double conviction = gross > 0 ? Math.abs(net) / gross : 0.0;
+        m.setConviction(conviction);
+
+        String scripDealFlow;
+        // Threshold expressed in INR units (5 Cr). Gross/net here are in Cr already.
+        if (gross < 5.0) scripDealFlow = "INSUFFICIENT";
+        else if (conviction < 0.30) scripDealFlow = "ROTATION";
+        else if (net > 0) scripDealFlow = "DEAL_NET_BUY";
+        else scripDealFlow = "DEAL_NET_SELL";
+        m.setScripDealFlow(scripDealFlow);
+
+        // Back-compat dominantFlow — keep a best-effort legacy mapping so old
+        // UIs don't break until they switch to scripDealFlow.
+        if (scripDealFlow.equals("DEAL_NET_BUY")) m.setDominantFlow("DII_BUY");
+        else if (scripDealFlow.equals("DEAL_NET_SELL")) m.setDominantFlow("DII_SELL");
         else m.setDominantFlow("MIXED");
+
+        // Lineage stamps
+        List<String> lineage = new ArrayList<>(contributingDates.size());
+        for (LocalDate d : contributingDates) lineage.add(d.format(DateTimeFormatter.ISO_LOCAL_DATE));
+        m.setDealsSourceDates(lineage);
+        m.setDealsTodayPresent(dealsTodayPresent);
+        m.setHasNewDealToday(hasNewDealToday);
+
+        // Smart-money-exit flag: a sell-side deal today on a currently-held
+        // position is a red flag. alreadyHeld is stamped by the orchestrator
+        // (stampHoldingsContext) — evaluated here against the dealsTodayPresent
+        // we just computed. If alreadyHeld wasn't set yet (e.g., unit test), we
+        // conservatively skip stamping; the orchestrator re-evaluates after held.
+        if (m.isAlreadyHeld() && dealsTodayPresent) {
+            // Check whether today's deals include any SELL
+            for (MarketPulseRedisClient.Deal d : deals) {
+                if (today.equals(d.date()) && !"BUY".equals(d.buySell())) {
+                    m.setSmartMoneyExit(true);
+                    break;
+                }
+            }
+        }
+
+        // Shadow client-quality persistence onto the metric
+        m.setShadowSmartClientDeals(smartCount);
+        m.setShadowNeutralClientDeals(neutralCount);
+        m.setShadowShellClientDeals(shellCount);
+        m.setShadowSmartBuyCr(shadowBuyCr);
+        m.setShadowSmartSellCr(shadowSellCr);
+    }
+
+    /**
+     * Bulk-fetch the HOTSTOCKS-wallet held scripCodes once per enrichment run
+     * and let the caller pass it into the per-stock {@code stampHoldingsContext}
+     * flow. Falls back to an empty set on any Redis issue.
+     */
+    public Set<String> fetchActivePositions() {
+        if (positionGate == null) return Collections.emptySet();
+        return positionGate.fetchHeldScripCodes();
+    }
+
+    /**
+     * Stamp alreadyHeld + smart-money-exit on the metrics row once per
+     * enrichment run. Called by the orchestrator AFTER {@code aggregateDeals}
+     * because smart-money-exit is the conjunction (held ∧ today-sell), which
+     * needs both signals resolved.
+     */
+    public void stampHoldingsContext(StockMetrics m, Set<String> heldScripCodes,
+                                     List<MarketPulseRedisClient.Deal> deals, LocalDate today) {
+        if (m == null) return;
+        boolean held = m.getScripCode() != null && heldScripCodes != null
+                && heldScripCodes.contains(m.getScripCode());
+        m.setAlreadyHeld(held);
+        if (!held || deals == null || deals.isEmpty()) return;
+        for (MarketPulseRedisClient.Deal d : deals) {
+            if (today.equals(d.date()) && !"BUY".equals(d.buySell())) {
+                m.setSmartMoneyExit(true);
+                break;
+            }
+        }
+    }
+
+    private void logShadowClientQuality(String scripCode,
+                                        MarketPulseRedisClient.Deal d,
+                                        ClientQualityClassifier.Tier tier,
+                                        double valueCr,
+                                        LocalDate today) {
+        try {
+            String key = "hotstocks:shadow:client-quality:" + today.format(DateTimeFormatter.ISO_LOCAL_DATE);
+            String payload = String.format(
+                    "{\"scripCode\":\"%s\",\"clientName\":%s,\"tier\":\"%s\",\"dealValueCr\":%.4f,\"buySell\":\"%s\"}",
+                    scripCode == null ? "" : scripCode,
+                    mapper.writeValueAsString(d.clientName() == null ? "" : d.clientName()),
+                    tier.name(),
+                    valueCr,
+                    d.buySell() == null ? "" : d.buySell());
+            redis.opsForList().leftPush(key, payload);
+            redis.expire(key, SHADOW_CLIENT_QUALITY_TTL_SECONDS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.debug("shadow client-quality log failed for {}: {}", scripCode, e.getMessage());
+        }
     }
 
     private void applyEvents(StockMetrics m, List<CorporateEvent> events) {

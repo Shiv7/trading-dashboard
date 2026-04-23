@@ -26,15 +26,40 @@ public class StockMetrics {
     private double vsNifty50Pct;
     private String vsNiftyLabel;
 
-    // Smart money (10-day window)
+    // Smart money (5-day window with time-decay: T/T-1=1.0, T-2/T-3=0.5, T-4/T-5=0.25)
     private int bulkDealCount;
     private int blockDealCount;
     private int dealDays;
-    private double smartBuyCr;
-    private double smartSellCr;
+    private double smartBuyCr;          // weighted BUY sum across window (post time-decay)
+    private double smartSellCr;         // weighted SELL sum (includes SHORT_DEALS as sell-side)
     private List<String> smartBuyClients = new ArrayList<>();
     private List<String> smartSellClients = new ArrayList<>();
-    private String dominantFlow;        // "FII_BUY" / "DII_BUY" / "FII_SELL" / "DII_SELL" / "MIXED"
+    private String dominantFlow;        // DEPRECATED — use scripDealFlow. Kept for API back-compat.
+    private String scripDealFlow;       // DEAL_NET_BUY | DEAL_NET_SELL | ROTATION | INSUFFICIENT
+
+    // Conviction = |net| / gross. 1.0 = pure one-sided, 0 = perfect rotation.
+    private double conviction;
+
+    // Data-lineage for UI transparency
+    private List<String> dealsSourceDates = new ArrayList<>();  // ISO dates included in aggregation
+    private boolean dealsTodayPresent;                           // was today's Redis key populated?
+
+    // Active-position gate (read from Redis virtual:positions:HOTSTOCKS:*)
+    private boolean alreadyHeld;
+    private boolean hasNewDealToday;     // any deal dated today for this scrip
+    private boolean smartMoneyExit;      // sell-side deal today on a held scrip
+
+    // ── Shadow-mode fields (computed but not applied; flip-to-live via kill-switches) ──
+    // FII/DII regime multiplier (shadow)
+    private String shadowFiiDiiRegime;           // BOTH_BUY | BOTH_SELL | FII_DIVERGE | DII_DIVERGE | FLAT
+    private double shadowFiiDiiMultiplier;       // proposed multiplier (1.10 / 0.85 / 1.00)
+    private int shadowBucket1WithFiiDii;         // what bucket-1 score WOULD have been after multiplier
+    // Client-quality classifier (shadow) — aggregated at scrip level
+    private int shadowSmartClientDeals;          // count of deals classified SMART
+    private int shadowNeutralClientDeals;
+    private int shadowShellClientDeals;
+    private double shadowSmartBuyCr;             // what buyCr would be if SMART deals weighted 1.3×, SHELL 0.8×
+    private double shadowSmartSellCr;
 
     // Delivery
     private double deliveryPctLatest;
@@ -313,4 +338,51 @@ public class StockMetrics {
     public void setScoringRegime(String scoringRegime) { this.scoringRegime = scoringRegime; }
     public String getScoringModel() { return scoringModel; }
     public void setScoringModel(String scoringModel) { this.scoringModel = scoringModel; }
+
+    // ── New fields (HotStocks integrity pass — 2026-04-23 night) ───────────
+    public String getScripDealFlow() { return scripDealFlow; }
+    public void setScripDealFlow(String scripDealFlow) { this.scripDealFlow = scripDealFlow; }
+
+    public double getConviction() { return conviction; }
+    public void setConviction(double conviction) { this.conviction = conviction; }
+
+    public List<String> getDealsSourceDates() { return dealsSourceDates; }
+    public void setDealsSourceDates(List<String> dealsSourceDates) { this.dealsSourceDates = dealsSourceDates; }
+
+    public boolean isDealsTodayPresent() { return dealsTodayPresent; }
+    public void setDealsTodayPresent(boolean dealsTodayPresent) { this.dealsTodayPresent = dealsTodayPresent; }
+
+    public boolean isAlreadyHeld() { return alreadyHeld; }
+    public void setAlreadyHeld(boolean alreadyHeld) { this.alreadyHeld = alreadyHeld; }
+
+    public boolean isHasNewDealToday() { return hasNewDealToday; }
+    public void setHasNewDealToday(boolean hasNewDealToday) { this.hasNewDealToday = hasNewDealToday; }
+
+    public boolean isSmartMoneyExit() { return smartMoneyExit; }
+    public void setSmartMoneyExit(boolean smartMoneyExit) { this.smartMoneyExit = smartMoneyExit; }
+
+    // Shadow-mode fields — computed but not applied until kill-switches flipped.
+    public String getShadowFiiDiiRegime() { return shadowFiiDiiRegime; }
+    public void setShadowFiiDiiRegime(String shadowFiiDiiRegime) { this.shadowFiiDiiRegime = shadowFiiDiiRegime; }
+
+    public double getShadowFiiDiiMultiplier() { return shadowFiiDiiMultiplier; }
+    public void setShadowFiiDiiMultiplier(double shadowFiiDiiMultiplier) { this.shadowFiiDiiMultiplier = shadowFiiDiiMultiplier; }
+
+    public int getShadowBucket1WithFiiDii() { return shadowBucket1WithFiiDii; }
+    public void setShadowBucket1WithFiiDii(int shadowBucket1WithFiiDii) { this.shadowBucket1WithFiiDii = shadowBucket1WithFiiDii; }
+
+    public int getShadowSmartClientDeals() { return shadowSmartClientDeals; }
+    public void setShadowSmartClientDeals(int shadowSmartClientDeals) { this.shadowSmartClientDeals = shadowSmartClientDeals; }
+
+    public int getShadowNeutralClientDeals() { return shadowNeutralClientDeals; }
+    public void setShadowNeutralClientDeals(int shadowNeutralClientDeals) { this.shadowNeutralClientDeals = shadowNeutralClientDeals; }
+
+    public int getShadowShellClientDeals() { return shadowShellClientDeals; }
+    public void setShadowShellClientDeals(int shadowShellClientDeals) { this.shadowShellClientDeals = shadowShellClientDeals; }
+
+    public double getShadowSmartBuyCr() { return shadowSmartBuyCr; }
+    public void setShadowSmartBuyCr(double shadowSmartBuyCr) { this.shadowSmartBuyCr = shadowSmartBuyCr; }
+
+    public double getShadowSmartSellCr() { return shadowSmartSellCr; }
+    public void setShadowSmartSellCr(double shadowSmartSellCr) { this.shadowSmartSellCr = shadowSmartSellCr; }
 }

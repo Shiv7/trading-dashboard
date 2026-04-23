@@ -1,10 +1,19 @@
 package com.kotsin.dashboard.hotstocks.service;
 
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * HotStocks v2 signed-directional scorer.
@@ -32,15 +41,58 @@ public class HotStocksScoringEngine {
     static final int BUCKET4_CAP = 15;   // relative strength
     static final int BUCKET5_CAP = 10;   // volume regime
 
-    /** Net institutional flow in INR Cr = buyCr - sellCr (time-decayed, deduped). */
+    // ── Rotation penalty tuning (applied in scoreFlow, kill-switch aware) ───
+    static final double ROTATION_HALF_THRESHOLD    = 0.30;  // below → 0.5×
+    static final double ROTATION_QUARTER_THRESHOLD = 0.50;  // [0.30, 0.50) → 0.75×
+
+    // Kill-switch + shadow collaborators (Spring-wired so unit tests without
+    // ApplicationContext keep working — the static helpers don't touch these).
+    @Value("${hotstocks.scoring.rotation.penalty.enabled:true}")
+    private boolean rotationPenaltyEnabled;
+
+    @Value("${hotstocks.fiidii.apply:false}")
+    private boolean fiiDiiApply;
+
+    @Autowired(required = false)
+    private FiiDiiRegimeResolver fiiDiiResolver;
+
+    @Autowired(required = false)
+    private StringRedisTemplate redis;
+
+    // Shadow FII/DII Redis log TTL (30 days).
+    private static final long SHADOW_FIIDII_TTL_SECONDS = 30L * 24 * 60 * 60;
+
+    /**
+     * Net institutional flow in INR Cr = buyCr - sellCr (time-decayed, deduped).
+     *
+     * {@code conviction} ∈ [0,1] reports rotation awareness — |net|/gross.
+     * 0 = perfect churn (pure rotation); 1 = pure one-sided flow. Feeds the
+     * rotation-penalty step in {@link #scoreFlow(FlowInput, StockMetrics)}.
+     */
     public static class FlowInput {
         public final double buyCr;
         public final double sellCr;
         public final int dealDays;
+        public final double conviction;
+
+        /** Legacy ctor — derives conviction from buy/sell if not supplied. */
         public FlowInput(double buyCr, double sellCr, int dealDays) {
-            this.buyCr = buyCr; this.sellCr = sellCr; this.dealDays = dealDays;
+            this(buyCr, sellCr, dealDays, defaultConviction(buyCr, sellCr));
         }
+
+        public FlowInput(double buyCr, double sellCr, int dealDays, double conviction) {
+            this.buyCr = buyCr;
+            this.sellCr = sellCr;
+            this.dealDays = dealDays;
+            this.conviction = conviction;
+        }
+
         public double net() { return buyCr - sellCr; }
+
+        private static double defaultConviction(double buyCr, double sellCr) {
+            double gross = buyCr + sellCr;
+            return gross > 0 ? Math.abs(buyCr - sellCr) / gross : 0.0;
+        }
     }
 
     /** 5-day OI change (percent). Null for non-F&O stocks. */
@@ -70,7 +122,7 @@ public class HotStocksScoringEngine {
         ScoreBreakdown out = new ScoreBreakdown();
         out.tier = oi.available() ? "FNO" : "NON_FNO";
 
-        out.bucket1 = scoreFlow(flow, m);
+        out.bucket1 = scoreFlow(flow, m, rotationPenaltyEnabled);
         out.bucket2 = scorePrice(m);
         out.bucket3 = scoreOi(oi, m, flow);
         out.bucket4 = scoreRelativeStrength(m);
@@ -87,12 +139,66 @@ public class HotStocksScoringEngine {
             clamped = (int) Math.round(clamped * 0.7);
         }
 
+        // ── Shadow FII/DII multiplier ─────────────────────────────────────
+        // Compute BEFORE clamping so the stamped shadow fields reflect the
+        // proposed bucket-1 scaling, not a post-clamp floor. When
+        // {@code hotstocks.fiidii.apply=false} (default), nothing is applied
+        // to finalScore — we just log what it WOULD have been.
+        applyShadowFiiDii(out, m, clamped);
+
         out.finalScore = Math.max(-100, Math.min(100, clamped));
         return out;
     }
 
+    /**
+     * Populate shadow FII/DII fields on the metrics row and persist a per-run
+     * Redis hash entry for offline audit. Never mutates finalScore unless
+     * {@code hotstocks.fiidii.apply=true} (currently OFF for calibration).
+     *
+     * Note on signature: we accept the already-clamped score so the
+     * "adjustedIfApplied" value reflects the same clamping pipeline the live
+     * score will eventually go through.
+     */
+    private void applyShadowFiiDii(ScoreBreakdown out, StockMetrics m, int clampedScoreNoFiiDii) {
+        if (fiiDiiResolver == null) {
+            // Unit tests without Spring context — skip silently.
+            return;
+        }
+        FiiDiiRegimeResolver.Regime regime = fiiDiiResolver.resolveLatestRegime();
+        double multiplier = fiiDiiResolver.multiplierFor(regime);
+        int shadowBucket1 = (int) Math.round(out.bucket1 * multiplier);
+        int delta = (int) Math.round(out.bucket1 * (multiplier - 1.0));
+        int adjustedIfApplied = clampedScoreNoFiiDii + delta;
+
+        m.setShadowFiiDiiRegime(regime.name());
+        m.setShadowFiiDiiMultiplier(multiplier);
+        m.setShadowBucket1WithFiiDii(shadowBucket1);
+
+        // Persist shadow to Redis for calibration. Key: one hash per (scrip, date).
+        if (redis != null && m.getScripCode() != null) {
+            try {
+                String key = "hotstocks:shadow:fiidii:" + m.getScripCode() + ":"
+                        + LocalDate.now(ZoneId.of("Asia/Kolkata")).format(DateTimeFormatter.ISO_LOCAL_DATE);
+                Map<String, String> fields = new HashMap<>();
+                fields.put("regime", regime.name());
+                fields.put("proposedMultiplier", Double.toString(multiplier));
+                fields.put("originalScore", Integer.toString(clampedScoreNoFiiDii));
+                fields.put("adjustedScoreIfApplied", Integer.toString(adjustedIfApplied));
+                redis.opsForHash().putAll(key, fields);
+                redis.expire(key, SHADOW_FIIDII_TTL_SECONDS, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // shadow persistence is best-effort; don't fail scoring on Redis hiccup
+            }
+        }
+    }
+
     // ── Bucket 1: Institutional flow ────────────────────────────────────────
+    /** Back-compat entrypoint used by existing tests — rotation penalty defaults ON. */
     static int scoreFlow(FlowInput flow, StockMetrics m) {
+        return scoreFlow(flow, m, true);
+    }
+
+    static int scoreFlow(FlowInput flow, StockMetrics m, boolean rotationPenaltyEnabled) {
         double net = flow.net();
         int s;
         if (net >= 50) s = 20;
@@ -100,6 +206,20 @@ public class HotStocksScoringEngine {
         else if (net > -20) s = 0;
         else if (net >= -50) s = -10;
         else s = -20;
+
+        // ── Rotation penalty ───────────────────────────────────────────────
+        // Halve when conviction < 0.30 (heavy churn), quarter-cut in [0.30,0.50).
+        // Intentionally runs BEFORE the delivery-institutional bonus + the
+        // DELHIVERY-class soft penalty so the rotation multiplier shrinks the
+        // raw net-tier contribution (the thing rotation actually erodes),
+        // not the mismatched delivery bonus.
+        if (rotationPenaltyEnabled) {
+            if (flow.conviction < ROTATION_HALF_THRESHOLD) {
+                s = (int) Math.round(s * 0.5);
+            } else if (flow.conviction < ROTATION_QUARTER_THRESHOLD) {
+                s = (int) Math.round(s * 0.75);
+            }
+        }
 
         // Soft net-flow penalty for DELHIVERY-class (net<-100 but not full distribution)
         if (net < -100 && flow.sellCr < 2 * Math.max(flow.buyCr, 0.01)) s -= 5;
