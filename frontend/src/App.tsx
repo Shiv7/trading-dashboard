@@ -35,6 +35,8 @@ import { HotStocksPage } from './pages/HotStocksPage'
 import { HotStocksDetailPage } from './pages/HotStocksDetailPage'
 import PivotBossPage from './pages/PivotBossPage'
 import PivotBossAnalyticsPage from './pages/PivotBossAnalyticsPage'
+import MondayShipPage from './pages/MondayShipPage'
+import HealthCheckPage from './pages/HealthCheckPage'
 import NoAccessPage from './pages/NoAccessPage'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
@@ -399,6 +401,26 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <PivotBossAnalyticsPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/monday-ship"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <MondayShipPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/health-check"
+          element={
+            <ProtectedRoute requireRole="ADMIN">
+              <Layout>
+                <HealthCheckPage />
               </Layout>
             </ProtectedRoute>
           }
