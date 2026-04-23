@@ -27,12 +27,20 @@ public final class HealthJobRegistry {
 
     public enum Category { SCRAPER, HOTSTOCKS, TRADE_EXEC, LIVE_FEED }
 
-    /** How to determine "did today's run succeed" — three flavors fit all 17 jobs. */
+    /** How to determine "did today's run succeed" — four flavors fit all 17 jobs. */
     public enum StatusSource {
         /** Redis has key {@code market-pulse:{feed}:{today_iso}} OR last-fetch epoch is within window. */
         REDIS_DATED_PAYLOAD,
         /** Redis last-update-epoch key is younger than stalenessSec. */
         REDIS_EPOCH_FRESHNESS,
+        /**
+         * Verifies {@code dataKeyPattern} formatted with today's (latest) NSE trading date
+         * actually exists AND contains ≥1 row. An explicit empty JSON array {@code []}
+         * is treated as EMPTY_BY_DESIGN — the scraper ran and NSE genuinely had zero
+         * records for the day. Distinguishes "scraper didn't run" from "no records
+         * published today".
+         */
+        DATA_KEY_PRESENT,
         /** Log pattern match in nohup.out since last restart. */
         LOG_PATTERN
     }
@@ -64,6 +72,12 @@ public final class HealthJobRegistry {
         /** True if this job is the "start of today's retry window" (i.e. first attempt of the day). */
         public final LocalTime retryWindowStart;
         public final LocalTime retryWindowEnd;
+        /**
+         * Format string with a single {@code %s} placeholder filled by the latest NSE
+         * trading date (ISO yyyy-MM-dd) for {@link StatusSource#DATA_KEY_PRESENT} jobs.
+         * Example: {@code "market-pulse:block-deals:%s"}. Unused for other sources.
+         */
+        public final String dataKeyPattern;
 
         HealthJob(String id, String name, String purpose, Category category,
                   String serviceName, String cronExpression, String humanSchedule,
@@ -72,6 +86,21 @@ public final class HealthJobRegistry {
                   List<String> affectedStrategies, String triggerEndpoint, String triggerService,
                   LocalTime nextRunTime, boolean tradingDayOnly,
                   LocalTime retryWindowStart, LocalTime retryWindowEnd) {
+            this(id, name, purpose, category, serviceName, cronExpression, humanSchedule,
+                statusSource, statusRedisKey, stalenessSec, logPattern, logFile,
+                affectedStrategies, triggerEndpoint, triggerService,
+                nextRunTime, tradingDayOnly, retryWindowStart, retryWindowEnd,
+                /* dataKeyPattern */ null);
+        }
+
+        HealthJob(String id, String name, String purpose, Category category,
+                  String serviceName, String cronExpression, String humanSchedule,
+                  StatusSource statusSource, String statusRedisKey, long stalenessSec,
+                  String logPattern, String logFile,
+                  List<String> affectedStrategies, String triggerEndpoint, String triggerService,
+                  LocalTime nextRunTime, boolean tradingDayOnly,
+                  LocalTime retryWindowStart, LocalTime retryWindowEnd,
+                  String dataKeyPattern) {
             this.id = id;
             this.name = name;
             this.purpose = purpose;
@@ -91,6 +120,7 @@ public final class HealthJobRegistry {
             this.tradingDayOnly = tradingDayOnly;
             this.retryWindowStart = retryWindowStart;
             this.retryWindowEnd = retryWindowEnd;
+            this.dataKeyPattern = dataKeyPattern;
         }
     }
 
@@ -147,13 +177,14 @@ public final class HealthJobRegistry {
             Category.SCRAPER, "fastanalytics",
             "every 15 min 09:30-15:40 IST",
             "Every 15 min in-session",
-            StatusSource.REDIS_EPOCH_FRESHNESS,
-            "market-pulse:last-fetch:block-deals", 24 * 3600,
+            StatusSource.DATA_KEY_PRESENT,
+            "market-pulse:block-deals:%s", 0,
             null, null,
             Arrays.asList("HOTSTOCKS"),
             "/api/market-pulse/refresh/block-deals", "fastanalytics",
             LocalTime.of(9, 30), true,
-            LocalTime.of(9, 30), LocalTime.of(15, 40)
+            LocalTime.of(9, 30), LocalTime.of(15, 40),
+            "market-pulse:block-deals:%s"
         ),
         new HealthJob("bulk-deals",
             "Bulk Deals",
@@ -161,13 +192,14 @@ public final class HealthJobRegistry {
             Category.SCRAPER, "fastanalytics",
             "every 15 min 16:30-20:00 IST",
             "Every 15 min until today-confirmed",
-            StatusSource.REDIS_EPOCH_FRESHNESS,
-            "market-pulse:last-fetch:bulk-deals", 8 * 3600,
+            StatusSource.DATA_KEY_PRESENT,
+            "market-pulse:bulk-deals:%s", 0,
             null, null,
             Arrays.asList("HOTSTOCKS"),
             "/api/market-pulse/refresh/bulk-deals", "fastanalytics",
             LocalTime.of(16, 30), true,
-            LocalTime.of(16, 30), LocalTime.of(20, 0)
+            LocalTime.of(16, 30), LocalTime.of(20, 0),
+            "market-pulse:bulk-deals:%s"
         ),
         new HealthJob("fii-dii",
             "FII/DII Flow",
@@ -189,13 +221,14 @@ public final class HealthJobRegistry {
             Category.SCRAPER, "fastanalytics",
             "every 15 min 18:00-21:00 IST",
             "Every 15 min until today-confirmed",
-            StatusSource.REDIS_EPOCH_FRESHNESS,
-            "market-pulse:last-fetch:short-selling", 8 * 3600,
+            StatusSource.DATA_KEY_PRESENT,
+            "market-pulse:short-selling:%s", 0,
             null, null,
             Arrays.asList("HOTSTOCKS"),
             null, null,
             LocalTime.of(18, 0), true,
-            LocalTime.of(18, 0), LocalTime.of(21, 0)
+            LocalTime.of(18, 0), LocalTime.of(21, 0),
+            "market-pulse:short-selling:%s"
         ),
         // ── HotStocks (dashboard backend) ──
         new HealthJob("hotstocks-enrichment",
@@ -348,6 +381,60 @@ public final class HealthJobRegistry {
             null, false,
             null, null
         )
+    );
+
+    /**
+     * Resolve the "latest trading date" as of {@code now} in the given zone.
+     *
+     * <p>If {@code now} is a trading day (Mon-Fri, not an NSE holiday), the latest
+     * trading date is today. Otherwise it walks backward until it finds a trading
+     * day. This intentionally does NOT gate on market hours — for scraper health
+     * checks we want the <em>calendar</em> date that should carry today's feed,
+     * which is simply the most recent NSE trading date.</p>
+     *
+     * <p>Weekends (Saturday, Sunday) and NSE-2026 holidays are skipped. The holiday
+     * set is kept in sync with {@link com.kotsin.dashboard.calendar.NseCalendarHelper}.</p>
+     */
+    public static LocalDate resolveLatestTradingDate(ZoneId zone) {
+        return resolveLatestTradingDate(ZonedDateTime.now(zone).toLocalDate());
+    }
+
+    /** Walk back from {@code from} (inclusive) to the nearest NSE trading day. */
+    static LocalDate resolveLatestTradingDate(LocalDate from) {
+        LocalDate d = from;
+        int guard = 30;   // upper bound — no realistic run of 30 consecutive non-trading days
+        while (guard-- > 0) {
+            if (isNseTradingDay(d)) return d;
+            d = d.minusDays(1);
+        }
+        return from;   // fallback — should never hit in practice
+    }
+
+    private static boolean isNseTradingDay(LocalDate d) {
+        if (d == null) return false;
+        DayOfWeek dow = d.getDayOfWeek();
+        if (dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY) return false;
+        return !NSE_HOLIDAYS_2026.contains(d);
+    }
+
+    /** NSE holidays 2026 — MUST match NseCalendarHelper / TradingCalendarService. */
+    private static final java.util.Set<LocalDate> NSE_HOLIDAYS_2026 = java.util.Set.of(
+        LocalDate.of(2026, 1, 15),
+        LocalDate.of(2026, 1, 26),
+        LocalDate.of(2026, 3, 3),
+        LocalDate.of(2026, 3, 26),
+        LocalDate.of(2026, 3, 31),
+        LocalDate.of(2026, 4, 3),
+        LocalDate.of(2026, 4, 14),
+        LocalDate.of(2026, 5, 1),
+        LocalDate.of(2026, 5, 28),
+        LocalDate.of(2026, 6, 26),
+        LocalDate.of(2026, 9, 14),
+        LocalDate.of(2026, 10, 2),
+        LocalDate.of(2026, 10, 20),
+        LocalDate.of(2026, 11, 10),
+        LocalDate.of(2026, 11, 24),
+        LocalDate.of(2026, 12, 25)
     );
 
     /**

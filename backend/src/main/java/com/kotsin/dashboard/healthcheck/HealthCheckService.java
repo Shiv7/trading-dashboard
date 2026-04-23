@@ -1,5 +1,7 @@
 package com.kotsin.dashboard.healthcheck;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kotsin.dashboard.healthcheck.HealthJobRegistry.HealthJob;
 import com.kotsin.dashboard.healthcheck.HealthJobRegistry.StatusSource;
 import lombok.RequiredArgsConstructor;
@@ -20,12 +22,13 @@ import java.util.ArrayDeque;
  * Computes live health status for the {@link HealthJobRegistry} inventory.
  *
  * Status semantics per job (resolved for today):
- *   FRESH   — data is confirmed for today's date or the live feed is within staleness window
- *   RETRYING — within the retry window AND not yet fresh (expected transient state)
- *   STALE    — past the retry cutoff without confirmation (actionable failure)
- *   MISSING  — no evidence of a run today (job may not have fired yet — or broken)
- *   PENDING  — job's scheduled time has not arrived today
- *   UNKNOWN  — couldn't resolve (Redis down, log missing)
+ *   FRESH            — data is confirmed for today's date or the live feed is within staleness window
+ *   EMPTY_BY_DESIGN — scraper ran and explicitly wrote an empty array (NSE had 0 records today)
+ *   RETRYING         — within the retry window AND not yet fresh (expected transient state)
+ *   STALE            — past the retry cutoff without confirmation (actionable failure)
+ *   MISSING          — no evidence of a run today (job may not have fired yet — or broken)
+ *   PENDING          — job's scheduled time has not arrived today
+ *   UNKNOWN          — couldn't resolve (Redis down, log missing)
  */
 @Service
 @Slf4j
@@ -36,11 +39,20 @@ public class HealthCheckService {
 
     private final StringRedisTemplate redis;
     private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper mapper = new ObjectMapper();
 
     @Value("${fastanalytics.base-url:http://localhost:8002}")
     private String fastAnalyticsBaseUrl;
 
-    public enum Status { FRESH, RETRYING, STALE, MISSING, PENDING, UNKNOWN }
+    /**
+     * Job-level lifecycle states reported to the dashboard.
+     *
+     * <p>{@link #EMPTY_BY_DESIGN} means the scraper ran and confirmed NSE genuinely
+     * had zero records for the latest trading date — an explicit empty JSON array
+     * was written. Semantically this is "FRESH but empty", distinct from MISSING
+     * (scraper never wrote anything).</p>
+     */
+    public enum Status { FRESH, RETRYING, STALE, MISSING, PENDING, UNKNOWN, EMPTY_BY_DESIGN }
 
     public static final class JobStatus {
         public String id;
@@ -91,6 +103,9 @@ public class HealthCheckService {
                     break;
                 case REDIS_DATED_PAYLOAD:
                     resolveFromDatedPayload(job, js, today);
+                    break;
+                case DATA_KEY_PRESENT:
+                    resolveFromDataKeyPresent(job, js);
                     break;
                 case LOG_PATTERN:
                     resolveFromLog(job, js, today);
@@ -145,6 +160,66 @@ public class HealthCheckService {
         } else {
             js.status = Status.FRESH;
             js.statusReason = "today's payload present";
+        }
+    }
+
+    /**
+     * {@link StatusSource#DATA_KEY_PRESENT}: verifies the per-date payload key
+     * actually exists <em>and</em> contains ≥1 row. Handles three distinct outcomes:
+     *
+     * <ul>
+     *   <li><b>FRESH</b> — JSON array with ≥1 row.</li>
+     *   <li><b>EMPTY_BY_DESIGN</b> — value is literally {@code "[]"} (or parses to empty
+     *       array). The scraper ran, NSE genuinely published zero records for today.</li>
+     *   <li><b>MISSING</b> — key is absent. Scraper either hasn't run yet (→ PENDING/RETRYING
+     *       via the retry window) or has failed silently.</li>
+     *   <li><b>UNKNOWN</b> — value exists but is unparseable JSON.</li>
+     * </ul>
+     *
+     * <p>The fix for the 2026-04-23 bug where {@code market-pulse:last-fetch:block-deals}
+     * pointed at a timestamp while {@code market-pulse:block-deals:2026-04-23} was missing —
+     * health showed FRESH, HotStocks got zero deals. This resolver tests the actual payload
+     * key and uses {@link HealthJobRegistry#resolveLatestTradingDate} so weekends still map
+     * to the prior Friday.</p>
+     */
+    private void resolveFromDataKeyPresent(HealthJob job, JobStatus js) {
+        if (job.dataKeyPattern == null || !job.dataKeyPattern.contains("%s")) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "dataKeyPattern missing for job " + job.id;
+            return;
+        }
+        LocalDate latest = HealthJobRegistry.resolveLatestTradingDate(IST);
+        String key = String.format(job.dataKeyPattern, latest.toString());
+        String raw = redis.opsForValue().get(key);
+        if (raw == null) {
+            js.status = Status.MISSING;
+            js.statusReason = "no key for " + latest + " (" + key + ")";
+            return;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.equals("[]")) {
+            js.status = Status.EMPTY_BY_DESIGN;
+            js.statusReason = "empty array — NSE had 0 records for " + latest;
+            return;
+        }
+        try {
+            JsonNode node = mapper.readTree(raw);
+            if (node.isArray() && node.size() > 0) {
+                js.status = Status.FRESH;
+                js.statusReason = node.size() + " rows for " + latest;
+                return;
+            }
+            if (node.isArray() && node.size() == 0) {
+                js.status = Status.EMPTY_BY_DESIGN;
+                js.statusReason = "parsed array is empty for " + latest;
+                return;
+            }
+            // Non-array payload (e.g. delivery-data is an object). Treat presence as FRESH.
+            js.status = Status.FRESH;
+            js.statusReason = "payload present for " + latest;
+        } catch (Exception e) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "unparseable JSON for key " + key;
         }
     }
 
