@@ -49,6 +49,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/strategy-state/**").permitAll()
                 .requestMatchers("/api/signal-audit/**").permitAll()
                 .requestMatchers("/api/ws-audit/**").permitAll()
+                .requestMatchers("/api/monday-ship/**").permitAll()
                 .requestMatchers("/api/strategy-wallets/**").permitAll()
                 .requestMatchers("/api/counter-trend/**").permitAll()
                 .requestMatchers("/api/f14/**").permitAll()
@@ -74,6 +75,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/analysis/**").permitAll()
                 .requestMatchers("/api/slippage/**").permitAll()
                 .requestMatchers("/api/stock/**").permitAll()
+                .requestMatchers("/api/health-check/**").permitAll()
                 // Admin-only
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // All other API endpoints require authentication
