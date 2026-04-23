@@ -42,7 +42,13 @@ public class MarketPulseRedisClient {
         this.redis = redis;
     }
 
-    /** Read a nested DTO for deals from Redis key shape. Pre-computed valueCr preserved. */
+    /**
+     * Read a nested DTO for deals from Redis key shape. Pre-computed valueCr preserved.
+     * <p>
+     * {@code isShortSell} is set when the deal was synthesized from the NSE short-selling
+     * disclosure feed (buySell = "SELL", clientName = "SHORT_SELL_DISCLOSURE").
+     * For bulk + block deals it stays {@code false}.
+     */
     public record Deal(
         LocalDate date,
         String symbol,
@@ -52,8 +58,16 @@ public class MarketPulseRedisClient {
         long quantity,
         double price,
         double valueCr,
-        boolean isBlock
-    ) {}
+        boolean isBlock,
+        boolean isShortSell
+    ) {
+        /** Back-compat ctor: defaults {@code isShortSell} to {@code false}. */
+        public Deal(LocalDate date, String symbol, String securityName, String clientName,
+                    String buySell, long quantity, double price, double valueCr, boolean isBlock) {
+            this(date, symbol, securityName, clientName, buySell,
+                quantity, price, valueCr, isBlock, false);
+        }
+    }
 
     /**
      * Returns all corporate events in the rolling 12-day window (populated daily by FastAnalytics).
@@ -113,6 +127,94 @@ public class MarketPulseRedisClient {
             d = d.plusDays(1);
         }
         return out;
+    }
+
+    /**
+     * Fetch bulk + block deals across an inclusive date range, optionally folding in
+     * SHORT_DEALS from {@code market-pulse:short-selling:{YYYY-MM-DD}} as synthesized
+     * sell-side {@link Deal} rows. Short-selling rows get:
+     * <ul>
+     *   <li>{@code buySell = "SELL"}</li>
+     *   <li>{@code isShortSell = true}</li>
+     *   <li>{@code isBlock = false}</li>
+     *   <li>{@code clientName = "SHORT_SELL_DISCLOSURE"} (no disclosed counterparty)</li>
+     *   <li>{@code valueCr = qty * price / 1e7}</li>
+     * </ul>
+     * When the {@code price} field is absent (older rows only had {@code quantity}),
+     * {@code price} defaults to 0 and {@code valueCr} falls to 0 too — the caller can
+     * still use quantity-weighted signals.
+     *
+     * @param includeShortSelling when {@code false}, behavior equals {@link #fetchDeals}.
+     */
+    public List<Deal> loadDealsWithOptionalShortSelling(LocalDate from, LocalDate to,
+                                                       boolean includeShortSelling) {
+        List<Deal> out = new ArrayList<>(fetchDeals(from, to));
+        if (!includeShortSelling) return out;
+        LocalDate d = from;
+        while (!d.isAfter(to)) {
+            String key = "market-pulse:short-selling:" + d.format(ISO);
+            String json = redis.opsForValue().get(key);
+            if (json != null && !json.isBlank()) {
+                out.addAll(parseShortSellingArray(json, d));
+            }
+            d = d.plusDays(1);
+        }
+        return out;
+    }
+
+    /**
+     * Parse the short-selling JSON array stored by FastAnalytics
+     * {@code fetch_short_selling()} into synthesized sell-side {@link Deal}s.
+     * <p>
+     * Schema (per FastAnalytics {@code nse_market_pulse_service.py}):
+     * <pre>
+     *   [{ "date": "2026-04-22", "symbol": "RELIANCE", "securityName": "...",
+     *      "quantity": 12345, "price": 2800.5 }, ...]
+     * </pre>
+     * The {@code price} field may be absent on older rows; in that case we still
+     * emit a row with quantity (and valueCr=0) so downstream count/qty aggregates
+     * remain correct.
+     *
+     * @param date fallback date if a row omits its own date field.
+     */
+    List<Deal> parseShortSellingArray(String json, LocalDate date) {
+        if (json == null || json.isBlank()) return Collections.emptyList();
+        try {
+            JsonNode root = mapper.readTree(json);
+            if (!root.isArray()) return Collections.emptyList();
+            List<Deal> out = new ArrayList<>();
+            int dropped = 0;
+            for (JsonNode n : root) {
+                String sym = n.path("symbol").asText("").trim();
+                if (sym.isEmpty()) { dropped++; continue; }
+                LocalDate d = parseDealDate(n.path("date").asText(""));
+                if (d == null) d = date;
+                long qty = n.path("quantity").asLong(0L);
+                double price = n.path("price").asDouble(0.0);
+                double valueCr = (qty > 0 && price > 0)
+                    ? Math.round((qty * price) / 1e7 * 100.0) / 100.0
+                    : 0.0;
+                out.add(new Deal(
+                    d,
+                    sym,
+                    n.path("securityName").asText(""),
+                    "SHORT_SELL_DISCLOSURE",
+                    "SELL",
+                    qty,
+                    price,
+                    valueCr,
+                    /* isBlock    */ false,
+                    /* isShortSell*/ true
+                ));
+            }
+            if (dropped > 0) {
+                log.warn("[MARKET-PULSE-REDIS] dropped {} short-selling row(s) with empty symbol", dropped);
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("Failed to parse short-selling array: {}", e.getMessage());
+            return Collections.emptyList();
+        }
     }
 
     private List<Deal> parseDealArray(String json, boolean isBlock) {
