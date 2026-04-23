@@ -4,6 +4,7 @@ import type { Position } from '../../types'
 import PositionActions from '../Trading/PositionActions'
 import { getStrategyBadgeClass } from '../../utils/strategyColors'
 import { estimateSlippage, estimateSlippagePct } from '../../utils/slippageUtils'
+import { formatPositionQty, formatExitQty } from '../../utils/qtyFormat'
 
 interface PositionCardProps {
   position: Position
@@ -174,8 +175,14 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
             )}
           </div>
           <div className="text-[10px] sm:text-xs text-slate-400 mt-0.5 sm:mt-1">
-            <span className="text-white font-medium">{originalQty || position.quantity}</span>
-            <span className="text-slate-500">QTY</span>
+            <span className="text-white font-medium">
+              {formatPositionQty({
+                instrumentType: position.instrumentType,
+                quantity: originalQty || position.quantity,
+                lots: position.lots,
+                lotSize: position.lotSize,
+              })}
+            </span>
             {' '}
             <span className={`font-medium ${
               instrumentLabel === 'FUT' ? 'text-purple-400'
@@ -402,7 +409,9 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
               <span key={i} className="text-[10px] font-mono">
                 <span className="text-green-400 font-bold">{ev.level}</span>
                 <span className="text-slate-500">: </span>
-                <span className="text-white font-medium">{ev.qty || ev.lots}QTY</span>
+                <span className="text-white font-medium">
+                  {formatExitQty({ instrumentType: position.instrumentType, lots: ev.lots, qty: ev.qty })}
+                </span>
                 <span className="text-slate-500"> exited</span>
                 <span className="text-slate-600"> @</span>
                 <span className="text-slate-300">{ev.price.toFixed(2)}/-</span>

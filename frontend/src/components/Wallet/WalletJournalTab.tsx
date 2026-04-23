@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { fetchJson, putJson } from '../../services/api'
 import { getStrategyTextColor } from '../../utils/strategyColors'
+import { formatPositionQty } from '../../utils/qtyFormat'
 
 interface TradeEntry {
   id: string
@@ -11,6 +12,9 @@ interface TradeEntry {
   entryPrice: number
   exitPrice: number
   quantity: number
+  lotSize?: number
+  lots?: number
+  instrumentType?: string
   pnl: number
   pnlPercent: number
   rMultiple: number
@@ -140,7 +144,7 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
                           <span className={`font-medium ${getStrategyTextColor(trade.strategy)}`}>{trade.strategy}</span>
                         </div>
                         <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
-                        <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>
+                        <div><span className="text-slate-500">Size:</span> <span className="text-white">{formatPositionQty({ instrumentType: trade.instrumentType, quantity: trade.quantity, lots: trade.lots, lotSize: trade.lotSize })}</span></div>
                       </div>
                       {trade.tags?.length > 0 && (
                         <div className="flex gap-1.5 flex-wrap mb-2">
@@ -230,7 +234,7 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
                                 <span className={`font-medium ${getStrategyTextColor(trade.strategy)}`}>{trade.strategy}</span>
                               </div>
                               <div><span className="text-slate-500">P&L %:</span> <span className={(trade.pnlPercent ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{formatPct(trade.pnlPercent ?? 0)}</span></div>
-                              <div><span className="text-slate-500">Qty:</span> <span className="text-white">{trade.quantity}</span></div>
+                              <div><span className="text-slate-500">Size:</span> <span className="text-white">{formatPositionQty({ instrumentType: trade.instrumentType, quantity: trade.quantity, lots: trade.lots, lotSize: trade.lotSize })}</span></div>
                             </div>
                             {trade.tags?.length > 0 && (
                               <div className="flex gap-2 mb-3">

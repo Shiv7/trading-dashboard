@@ -63,6 +63,9 @@ export interface Position {
   instrumentType?: string;
   exchange?: string;  // N=NSE, M=MCX, C=Currency, B=BSE
   delta?: number;
+  // Lot metadata (populated for OPTION/FUTURES; equity leaves these null)
+  lotSize?: number;
+  lots?: number;
   deltaFallbackReason?: string;  // null = real BS delta, non-null = why fallback to 0.5
   // Trade execution metadata
   tradeLabel?: string;    // e.g. "FUT FALLBACK due to Illiquid Opt"

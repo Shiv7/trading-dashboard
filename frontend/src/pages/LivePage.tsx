@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { isAnyMarketOpen } from '../utils/tradingUtils'
 import { estimateSlippage as estimateSlippageUtil, estimateSlippagePct as estimateSlippagePctUtil } from '../utils/slippageUtils'
+import { formatPositionQty } from '../utils/qtyFormat'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +44,8 @@ interface LivePosition {
   confidence?: number
   instrumentType?: string
   exchange?: string
+  lotSize?: number
+  lots?: number
   optionSl?: number
   optionT1?: number
   optionT2?: number
@@ -546,7 +549,12 @@ function ActivePositionCard({ position: p }: { position: LivePosition }) {
         {/* Qty + trailing row */}
         <div className="flex items-center justify-between text-[11px]">
           <span className="text-slate-500">
-            Qty: <span className="text-slate-300 font-semibold">{Math.abs(p.quantity).toLocaleString('en-IN')}</span>
+            Size: <span className="text-slate-300 font-semibold">{formatPositionQty({
+              instrumentType: p.instrumentType,
+              quantity: p.quantity,
+              lots: p.lots,
+              lotSize: p.lotSize ?? p.optionLotSize,
+            })}</span>
           </span>
           {p.exchange && (
             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
