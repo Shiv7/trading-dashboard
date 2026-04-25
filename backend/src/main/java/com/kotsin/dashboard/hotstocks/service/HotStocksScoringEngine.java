@@ -1,11 +1,14 @@
 package com.kotsin.dashboard.hotstocks.service;
 
 import com.kotsin.dashboard.hotstocks.model.StockMetrics;
+import org.bson.Document;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -58,6 +61,20 @@ public class HotStocksScoringEngine {
 
     @Autowired(required = false)
     private StringRedisTemplate redis;
+
+    /**
+     * Plan kickoff Item 1 fix (2026-04-25): persistent Mongo dual-write for
+     * shadow FII/DII data. Redis has 30-day TTL; Mongo retains forever for
+     * long-term calibration analyses.
+     */
+    @Autowired(required = false)
+    private MongoTemplate mongoTemplate;
+
+    @Value("${hotstocks.shadow.fiidii.mongo.dual.write.enabled:true}")
+    private boolean shadowFiidiiMongoDualWriteEnabled;
+
+    @Value("${hotstocks.shadow.fiidii.mongo.collection:hotstocks_shadow_fiidii}")
+    private String shadowFiidiiMongoCollection;
 
     // Shadow FII/DII Redis log TTL (30 days).
     private static final long SHADOW_FIIDII_TTL_SECONDS = 30L * 24 * 60 * 60;
@@ -188,6 +205,32 @@ public class HotStocksScoringEngine {
                 redis.expire(key, SHADOW_FIIDII_TTL_SECONDS, TimeUnit.SECONDS);
             } catch (Exception ignored) {
                 // shadow persistence is best-effort; don't fail scoring on Redis hiccup
+            }
+        }
+
+        // Plan kickoff Item 1 fix (2026-04-25): Mongo dual-write for permanent retention
+        // beyond Redis 30-day TTL. Allows calibration analyses to mine multi-month history.
+        // Best-effort, never blocks scoring on Mongo hiccup.
+        if (shadowFiidiiMongoDualWriteEnabled && mongoTemplate != null && m.getScripCode() != null) {
+            try {
+                String dateStr = LocalDate.now(ZoneId.of("Asia/Kolkata")).format(DateTimeFormatter.ISO_LOCAL_DATE);
+                String docId = m.getScripCode() + "_" + dateStr;
+                Document doc = new Document()
+                    .append("_id", docId)
+                    .append("scripCode", m.getScripCode())
+                    .append("symbol", m.getSymbol())
+                    .append("date", dateStr)
+                    .append("regime", regime.name())
+                    .append("proposedMultiplier", multiplier)
+                    .append("originalScore", clampedScoreNoFiiDii)
+                    .append("adjustedScoreIfApplied", adjustedIfApplied)
+                    .append("delta", delta)
+                    .append("updatedAt", Instant.now());
+                mongoTemplate.getCollection(shadowFiidiiMongoCollection).replaceOne(
+                    new Document("_id", docId), doc,
+                    new com.mongodb.client.model.ReplaceOptions().upsert(true));
+            } catch (Exception ignored) {
+                // best-effort; Redis path is the primary persistence
             }
         }
     }
