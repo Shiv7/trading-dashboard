@@ -424,8 +424,10 @@ public class FUKAAConsumer implements OptionSwapAware {
         // Liquidity source (DIRECT / PROXY / ON_DEMAND / DISABLED)
         if (root.has("liquiditySource")) data.put("liquiditySource", root.path("liquiditySource").asText("DIRECT"));
 
-        // FUKAA-specific quality score (shadow — UI displays as eKAA, ranking still uses compositeScore)
-        if (root.has("effectiveKaa")) data.put("effectiveKaa", root.path("effectiveKaa").asDouble(0));
+        // FUKAA-specific quality score — prefer eKAAv3 (ekaaV2 field, v3-enhanced) over v1 effectiveKaa.
+        // Dashboard displays as eKAAv3; gate uses the same score for admission.
+        if (root.has("ekaaV2")) data.put("effectiveKaa", root.path("ekaaV2").asDouble(0));
+        else if (root.has("effectiveKaa")) data.put("effectiveKaa", root.path("effectiveKaa").asDouble(0));
 
         // ConfluentTargetEngine v2 — equity SL/T1-T4 + RR (parity with FUDKII)
         if (root.has("confluenceSL")) data.put("confluenceSL", root.path("confluenceSL").asDouble(0));

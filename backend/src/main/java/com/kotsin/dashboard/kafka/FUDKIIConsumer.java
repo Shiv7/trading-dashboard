@@ -364,7 +364,10 @@ public class FUDKIIConsumer implements OptionSwapAware {
         if (root.has("blockTradeFlowLabel")) data.put("blockTradeFlowLabel", root.path("blockTradeFlowLabel").asText("NONE"));
 
         // KII quality adjustment fields (from MarketContextService in StreamingCandle)
-        if (root.has("effectiveKii")) data.put("effectiveKii", root.path("effectiveKii").asDouble(0));
+        // Prefer eKIIv3 (ekiiV2 field, v3-enhanced via BucketCv3Calculator) over legacy effectiveKii (v1).
+        // Dashboard displays this as eKIIv3 — gate uses the same v2/v3 score for trade selection.
+        if (root.has("ekiiV2")) data.put("effectiveKii", root.path("ekiiV2").asDouble(0));
+        else if (root.has("effectiveKii")) data.put("effectiveKii", root.path("effectiveKii").asDouble(0));
         if (root.has("rawKii")) data.put("rawKii", root.path("rawKii").asDouble(0));
         if (root.has("gapFactor")) data.put("gapFactor", root.path("gapFactor").asDouble(1.0));
         if (root.has("expiryFactor")) data.put("expiryFactor", root.path("expiryFactor").asDouble(1.0));

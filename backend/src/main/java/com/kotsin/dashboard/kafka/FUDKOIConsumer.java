@@ -365,8 +365,10 @@ public class FUDKOIConsumer implements OptionSwapAware {
         // Liquidity source (DIRECT / PROXY / ON_DEMAND / DISABLED)
         if (root.has("liquiditySource")) data.put("liquiditySource", root.path("liquiditySource").asText("DIRECT"));
 
-        // FUDKOI-specific quality score (shadow — UI displays as eKOI, ranking still uses oiChangeRatio)
-        if (root.has("effectiveKoi")) data.put("effectiveKoi", root.path("effectiveKoi").asDouble(0));
+        // FUDKOI-specific quality score — prefer eKOIv3 (ekoiV2 field, v3-enhanced) over v1 effectiveKoi.
+        // Dashboard displays as eKOIv3; gate uses the same score for admission.
+        if (root.has("ekoiV2")) data.put("effectiveKoi", root.path("ekoiV2").asDouble(0));
+        else if (root.has("effectiveKoi")) data.put("effectiveKoi", root.path("effectiveKoi").asDouble(0));
 
         // ConfluentTargetEngine v2 — equity SL/T1-T4 + RR (parity with FUDKII)
         if (root.has("confluenceSL")) data.put("confluenceSL", root.path("confluenceSL").asDouble(0));

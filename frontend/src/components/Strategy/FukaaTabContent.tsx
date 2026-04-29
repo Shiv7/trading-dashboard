@@ -1128,8 +1128,8 @@ const FukaaCard: React.FC<{
           <span className={`px-1 rounded whitespace-nowrap ${(trigger.gapQualityScore ?? 1) < 0.10 ? 'bg-red-500/40 text-red-300 font-bold' : (trigger.gapQualityScore ?? 1) < 0.50 ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-600/50 text-slate-300'}`}>
             GQS={trigger.gapQualityScore?.toFixed(3) ?? '1.000'}
           </span>
-          <span className="px-1 rounded bg-emerald-700/40 text-emerald-200 whitespace-nowrap font-bold">eKAA={trigger.effectiveKaa?.toFixed(0) ?? 'DM'}</span>
-          <span className="px-1 rounded bg-slate-600/30 text-slate-400 whitespace-nowrap text-[10px]">eKII={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
+          <span className="px-1 rounded bg-emerald-700/40 text-emerald-200 whitespace-nowrap font-bold">eKAAv3={trigger.effectiveKaa?.toFixed(0) ?? 'DM'}</span>
+          <span className="px-1 rounded bg-slate-600/30 text-slate-400 whitespace-nowrap text-[10px]">eKIIv3={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">oa={String(trigger.optionAvailable)}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">fa={String(trigger.futuresAvailable)}</span>
         </div>
@@ -1170,7 +1170,7 @@ const FukaaCard: React.FC<{
               {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName || trigger.symbol || trigger.scripCode} @ &#8377;{fmt(premium)}
             </span>
             <span className="text-[9px] text-slate-500 font-normal">
-              eKAA {trigger.effectiveKaa?.toFixed(0) ?? 'DM'} &middot; conf {confidence}% &middot; lot {lotSize} &middot; sizing unavailable
+              eKAAv3 {trigger.effectiveKaa?.toFixed(0) ?? 'DM'} &middot; conf {confidence}% &middot; lot {lotSize} &middot; sizing unavailable
             </span>
           </button>
         ) : (

@@ -1472,7 +1472,7 @@ const FudkiiTradingCard: React.FC<{
           <span className={`px-1 rounded whitespace-nowrap ${instrumentMode === 'NONE' ? 'bg-red-500/30 text-red-300' : instrumentMode === 'FUTURES' ? 'bg-blue-500/30 text-blue-300' : 'bg-green-500/30 text-green-300'}`}>
             {instrumentMode}
           </span>
-          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">eKII={effectiveKii}</span>
+          <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">eKIIv3={effectiveKii}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">gapF={sig.gapFactor?.toFixed(2) ?? '1.00'}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">expF={sig.expiryFactor?.toFixed(2) ?? '1.00'}</span>
           <span className={`px-1 rounded whitespace-nowrap ${(sig.gapQualityScore ?? 1) < 0.10 ? 'bg-red-500/40 text-red-300 font-bold' : (sig.gapQualityScore ?? 1) < 0.50 ? 'bg-amber-500/30 text-amber-300' : 'bg-slate-600/50 text-slate-300'}`}>

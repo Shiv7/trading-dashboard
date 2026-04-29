@@ -1088,8 +1088,8 @@ const FudkoiCard: React.FC<{
           <span className={`px-1 rounded whitespace-nowrap ${instrumentMode === 'NONE' ? 'bg-red-500/30 text-red-300' : instrumentMode === 'FUTURES' ? 'bg-blue-500/30 text-blue-300' : 'bg-green-500/30 text-green-300'}`}>
             {instrumentMode}
           </span>
-          <span className="px-1 rounded bg-teal-700/40 text-teal-200 whitespace-nowrap font-bold">eKOI={trigger.effectiveKoi?.toFixed(0) ?? 'DM'}</span>
-          <span className="px-1 rounded bg-slate-600/30 text-slate-400 whitespace-nowrap text-[10px]">eKII={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
+          <span className="px-1 rounded bg-teal-700/40 text-teal-200 whitespace-nowrap font-bold">eKOIv3={trigger.effectiveKoi?.toFixed(0) ?? 'DM'}</span>
+          <span className="px-1 rounded bg-slate-600/30 text-slate-400 whitespace-nowrap text-[10px]">eKIIv3={trigger.effectiveKii?.toFixed(0) ?? 'DM'}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">conf={confidence}%</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lots={sizing.lots}</span>
           <span className="px-1 rounded bg-slate-600/50 text-slate-300 whitespace-nowrap">lotSz={lotSize}</span>
@@ -1145,7 +1145,7 @@ const FudkoiCard: React.FC<{
               {instrumentMode === 'OPTION' ? 'BUY' : (isLong ? 'BUY' : 'SELL')} {displayInstrumentName || trigger.symbol || trigger.scripCode} @ &#8377;{fmt(premium)}
             </span>
             <span className="text-[9px] text-slate-500 font-normal">
-              eKOI {trigger.effectiveKoi?.toFixed(0) ?? 'DM'} &middot; conf {confidence}% &middot; lot {lotSize} &middot; sizing unavailable
+              eKOIv3 {trigger.effectiveKoi?.toFixed(0) ?? 'DM'} &middot; conf {confidence}% &middot; lot {lotSize} &middot; sizing unavailable
             </span>
           </button>
         ) : (
