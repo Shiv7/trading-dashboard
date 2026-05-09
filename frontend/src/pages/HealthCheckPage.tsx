@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Clock, PlayCircle, RefreshCw, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock, Info, PlayCircle, RefreshCw, XCircle } from 'lucide-react'
+import { API_BASE, fetchWithAuth } from '../services/api'
 
 /**
  * Health Check MVP — operational view for 17 critical cron/scraper/schedule jobs.
  * Polls /api/health-check every 60s, renders grouped table with status badges +
  * manual-trigger buttons for idempotent scrapers.
  */
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8085/api'
 
-type Status = 'FRESH' | 'RETRYING' | 'STALE' | 'MISSING' | 'PENDING' | 'UNKNOWN'
+type Status = 'FRESH' | 'RETRYING' | 'STALE' | 'MISSING' | 'PENDING' | 'UNKNOWN' | 'EMPTY_BY_DESIGN' | 'EXPECTED_AT_EOD'
 
 interface JobStatus {
   id: string
   name: string
   purpose: string
-  category: 'SCRAPER' | 'HOTSTOCKS' | 'TRADE_EXEC' | 'LIVE_FEED'
+  category: 'SCRAPER' | 'HOTSTOCKS' | 'TRADE_EXEC' | 'LIVE_FEED' | 'PLANNED'
   serviceName: string
   humanSchedule: string
   affectedStrategies: string[]
@@ -28,19 +28,30 @@ interface JobStatus {
 }
 
 const STATUS_STYLE: Record<Status, { icon: any; color: string; bg: string; border: string; label: string }> = {
-  FRESH:    { icon: CheckCircle2,   color: 'text-emerald-300', bg: 'bg-emerald-500/15',  border: 'border-emerald-500/40', label: 'FRESH' },
-  RETRYING: { icon: RefreshCw,      color: 'text-amber-300',   bg: 'bg-amber-500/15',    border: 'border-amber-500/40',   label: 'RETRYING' },
-  STALE:    { icon: XCircle,        color: 'text-red-300',     bg: 'bg-red-500/15',      border: 'border-red-500/40',     label: 'STALE' },
-  MISSING:  { icon: AlertTriangle,  color: 'text-red-200',     bg: 'bg-red-600/20',      border: 'border-red-600/50',     label: 'MISSING' },
-  PENDING:  { icon: Clock,          color: 'text-slate-300',   bg: 'bg-slate-500/15',    border: 'border-slate-500/40',   label: 'PENDING' },
-  UNKNOWN:  { icon: AlertTriangle,  color: 'text-slate-400',   bg: 'bg-slate-700/30',    border: 'border-slate-600/40',   label: 'UNKNOWN' }
+  FRESH:           { icon: CheckCircle2,   color: 'text-emerald-300', bg: 'bg-emerald-500/15',  border: 'border-emerald-500/40', label: 'FRESH' },
+  RETRYING:        { icon: RefreshCw,      color: 'text-amber-300',   bg: 'bg-amber-500/15',    border: 'border-amber-500/40',   label: 'RETRYING' },
+  STALE:           { icon: XCircle,        color: 'text-red-300',     bg: 'bg-red-500/15',      border: 'border-red-500/40',     label: 'STALE' },
+  MISSING:         { icon: AlertTriangle,  color: 'text-red-200',     bg: 'bg-red-600/20',      border: 'border-red-600/50',     label: 'MISSING' },
+  PENDING:         { icon: Clock,          color: 'text-slate-300',   bg: 'bg-slate-500/15',    border: 'border-slate-500/40',   label: 'PENDING' },
+  UNKNOWN:         { icon: AlertTriangle,  color: 'text-slate-400',   bg: 'bg-slate-700/30',    border: 'border-slate-600/40',   label: 'UNKNOWN' },
+  EMPTY_BY_DESIGN: { icon: Info,           color: 'text-sky-300',     bg: 'bg-sky-500/10',      border: 'border-sky-500/40',     label: 'EMPTY' },
+  EXPECTED_AT_EOD: { icon: Clock,          color: 'text-indigo-300',  bg: 'bg-indigo-500/10',   border: 'border-indigo-500/40',  label: 'EXPECTED AT EOD' }
+}
+
+// Defensive lookup: any unexpected backend status falls back to UNKNOWN so the
+// page renders rather than crashes on `undefined.icon`. Root cause of the
+// 2026-04-24 crash: backend started emitting EMPTY_BY_DESIGN (block-deals guard)
+// without a matching frontend entry.
+function styleFor(status: string) {
+  return STATUS_STYLE[status as Status] ?? STATUS_STYLE.UNKNOWN
 }
 
 const CATEGORY_LABEL: Record<JobStatus['category'], string> = {
   SCRAPER:    'Market-Pulse Scrapers',
   HOTSTOCKS:  'HotStocks Pipeline',
   TRADE_EXEC: 'Trade Execution',
-  LIVE_FEED:  'Live Feeds'
+  LIVE_FEED:  'Live Feeds',
+  PLANNED:    'Planned / Deferred Work'
 }
 
 function formatTime(ms?: number | null): string {
@@ -76,7 +87,7 @@ export default function HealthCheckPage() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/health-check`)
+      const r = await fetchWithAuth(`${API_BASE}/health-check`)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const data = await r.json() as JobStatus[]
       setJobs(data)
@@ -98,7 +109,7 @@ export default function HealthCheckPage() {
     setTriggering(jobId)
     setTriggerResult(null)
     try {
-      const r = await fetch(`${API_BASE}/health-check/trigger/${jobId}`, { method: 'POST' })
+      const r = await fetchWithAuth(`${API_BASE}/health-check/trigger/${jobId}`, { method: 'POST' })
       const body = await r.json().catch(() => ({ success: false, message: `HTTP ${r.status}` }))
       setTriggerResult({ jobId, ok: r.ok && body.success !== false, msg: body.message ?? 'ok' })
       // Refresh status after a trigger
@@ -111,14 +122,19 @@ export default function HealthCheckPage() {
   }, [load])
 
   const summary = useMemo(() => {
-    const c: Record<Status, number> = { FRESH: 0, RETRYING: 0, STALE: 0, MISSING: 0, PENDING: 0, UNKNOWN: 0 }
-    for (const j of jobs) c[j.status] = (c[j.status] ?? 0) + 1
+    const c: Record<Status, number> = {
+      FRESH: 0, RETRYING: 0, STALE: 0, MISSING: 0, PENDING: 0, UNKNOWN: 0, EMPTY_BY_DESIGN: 0, EXPECTED_AT_EOD: 0
+    }
+    for (const j of jobs) {
+      const key = (j.status in c ? j.status : 'UNKNOWN') as Status
+      c[key] = c[key] + 1
+    }
     return c
   }, [jobs])
 
   const grouped = useMemo(() => {
     const g: Record<JobStatus['category'], JobStatus[]> = {
-      SCRAPER: [], HOTSTOCKS: [], TRADE_EXEC: [], LIVE_FEED: []
+      SCRAPER: [], HOTSTOCKS: [], TRADE_EXEC: [], LIVE_FEED: [], PLANNED: []
     }
     for (const j of jobs) g[j.category].push(j)
     return g
@@ -149,9 +165,9 @@ export default function HealthCheckPage() {
 
         {/* Summary strip */}
         <div className="px-4 pb-3 flex gap-2 flex-wrap">
-          {(['FRESH','RETRYING','STALE','MISSING','PENDING','UNKNOWN'] as Status[]).map(s => {
+          {(['FRESH','RETRYING','STALE','MISSING','PENDING','UNKNOWN','EMPTY_BY_DESIGN','EXPECTED_AT_EOD'] as Status[]).map(s => {
             const n = summary[s]
-            const sty = STATUS_STYLE[s]
+            const sty = styleFor(s)
             if (n === 0) return null
             const Icon = sty.icon
             return (
@@ -173,7 +189,7 @@ export default function HealthCheckPage() {
 
       {/* Grouped tables */}
       <div className="px-4 py-4 space-y-6">
-        {(['SCRAPER', 'HOTSTOCKS', 'TRADE_EXEC', 'LIVE_FEED'] as const).map(cat => {
+        {(['SCRAPER', 'HOTSTOCKS', 'TRADE_EXEC', 'LIVE_FEED', 'PLANNED'] as const).map(cat => {
           const rows = grouped[cat]
           if (!rows.length) return null
           return (
@@ -196,7 +212,7 @@ export default function HealthCheckPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-700/30">
                     {rows.map(j => {
-                      const sty = STATUS_STYLE[j.status]
+                      const sty = styleFor(j.status)
                       const Icon = sty.icon
                       return (
                         <tr key={j.id} className="hover:bg-slate-700/20 transition-colors">

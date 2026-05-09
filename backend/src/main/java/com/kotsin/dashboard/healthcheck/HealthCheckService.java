@@ -45,6 +45,14 @@ public class HealthCheckService {
     private String fastAnalyticsBaseUrl;
 
     /**
+     * Gates the 20 Tier-1 v2 jobs. Default OFF — when false, tier==2 jobs always report
+     * {@link Status#PENDING} regardless of StatusSource so the UI stays clean pre-launch.
+     * Flip to {@code true} after reviewing the new entries in the UI.
+     */
+    @Value("${health-check.v2.enabled:false}")
+    private boolean v2Enabled;
+
+    /**
      * Job-level lifecycle states reported to the dashboard.
      *
      * <p>{@link #EMPTY_BY_DESIGN} means the scraper ran and confirmed NSE genuinely
@@ -52,7 +60,7 @@ public class HealthCheckService {
      * was written. Semantically this is "FRESH but empty", distinct from MISSING
      * (scraper never wrote anything).</p>
      */
-    public enum Status { FRESH, RETRYING, STALE, MISSING, PENDING, UNKNOWN, EMPTY_BY_DESIGN }
+    public enum Status { FRESH, RETRYING, STALE, MISSING, PENDING, UNKNOWN, EMPTY_BY_DESIGN, EXPECTED_AT_EOD }
 
     public static final class JobStatus {
         public String id;
@@ -96,6 +104,15 @@ public class HealthCheckService {
         js.nextRunEpochMs = HealthJobRegistry.computeNextRun(job, now)
             .toInstant().toEpochMilli();
 
+        // v2 gate — Tier-1 new jobs are all tier==2 in the registry. When the
+        // health-check.v2.enabled flag is false they report PENDING without
+        // touching Redis / logs / sockets so v1 observability remains untouched.
+        if (job.tier >= 2 && !v2Enabled) {
+            js.status = Status.PENDING;
+            js.statusReason = "v2 flag disabled (health-check.v2.enabled=false)";
+            return js;
+        }
+
         try {
             switch (job.statusSource) {
                 case REDIS_EPOCH_FRESHNESS:
@@ -110,12 +127,231 @@ public class HealthCheckService {
                 case LOG_PATTERN:
                     resolveFromLog(job, js, today);
                     break;
+                case PORT_BOUND:
+                    resolvePortBound(job, js);
+                    break;
+                case FILE_EXISTS:
+                    resolveFileExists(job, js, today);
+                    break;
+                case HTTP_GET_JSON:
+                    resolveHttpGetJson(job, js);
+                    break;
+                case REDIS_KEY_INT_LT:
+                    resolveRedisKeyIntLt(job, js, today);
+                    break;
+                case REDIS_KEY_EXISTS:
+                    resolveRedisKeyExists(job, js, today);
+                    break;
+                case REDIS_KEY_EMPTY_ARRAY:
+                    resolveRedisKeyEmptyArray(job, js);
+                    break;
             }
         } catch (Exception e) {
             js.status = Status.UNKNOWN;
             js.statusReason = "resolve error: " + e.getMessage();
         }
         return js;
+    }
+
+    // ════════════════════ v2 Tier-1 resolvers ════════════════════
+
+    /** Checks that a TCP port is listening locally via {@code ss -tlnp}. */
+    private void resolvePortBound(HealthJob job, JobStatus js) {
+        String portStr = job.extraConfig.get("port");
+        if (portStr == null) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "port not configured";
+            return;
+        }
+        try {
+            Process p = new ProcessBuilder("bash", "-c", "ss -tlnp 2>/dev/null | grep -E ':" + portStr + "\\b'")
+                .redirectErrorStream(true).start();
+            boolean done = p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            if (!done) {
+                p.destroyForcibly();
+                js.status = Status.UNKNOWN;
+                js.statusReason = "ss timed out";
+                return;
+            }
+            String out = new String(p.getInputStream().readAllBytes()).trim();
+            if (!out.isEmpty()) {
+                js.status = Status.FRESH;
+                js.statusReason = "port " + portStr + " bound";
+            } else {
+                js.status = Status.STALE;
+                js.statusReason = "port " + portStr + " not bound";
+            }
+        } catch (Exception e) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "ss error: " + e.getMessage();
+        }
+    }
+
+    /** Checks that a file exists on disk. Supports {yesterday} placeholder. */
+    private void resolveFileExists(HealthJob job, JobStatus js, LocalDate today) {
+        String template = job.extraConfig.get("path");
+        if (template == null) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "path not configured";
+            return;
+        }
+        String yesterday = today.minusDays(1).toString();
+        String path = template.replace("{yesterday}", yesterday).replace("{today}", today.toString());
+        if (Files.exists(Path.of(path))) {
+            js.status = Status.FRESH;
+            js.statusReason = "exists: " + path;
+        } else {
+            js.status = Status.MISSING;
+            js.statusReason = "missing: " + path;
+        }
+    }
+
+    /**
+     * HTTP GET a URL and evaluate a JSON field against a threshold.
+     * comparator=gt → FRESH if jsonPath value > threshold. comparator=lt → FRESH if value < threshold.
+     * If the URL is unreachable, mark PENDING (likely not-yet-shipped endpoint) rather than STALE.
+     */
+    private void resolveHttpGetJson(HealthJob job, JobStatus js) {
+        String url = job.extraConfig.get("url");
+        String jsonPath = job.extraConfig.get("jsonPath");
+        String thrStr = job.extraConfig.get("threshold");
+        String comparator = job.extraConfig.getOrDefault("comparator", "gt");
+        if (url == null) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "url not configured";
+            return;
+        }
+        try {
+            String body = restTemplate.getForObject(url, String.class);
+            if (body == null || body.isBlank()) {
+                js.status = Status.STALE;
+                js.statusReason = "empty response from " + url;
+                return;
+            }
+            if (jsonPath == null || thrStr == null) {
+                js.status = Status.FRESH;
+                js.statusReason = "HTTP 200";
+                return;
+            }
+            long thr = Long.parseLong(thrStr);
+            JsonNode root = mapper.readTree(body);
+            JsonNode node = root;
+            for (String seg : jsonPath.split("\\.")) {
+                if (node == null) break;
+                node = node.get(seg);
+            }
+            if (node == null || !node.isNumber()) {
+                js.status = Status.UNKNOWN;
+                js.statusReason = "jsonPath " + jsonPath + " absent or non-numeric";
+                return;
+            }
+            long v = node.asLong();
+            boolean ok = "gt".equals(comparator) ? v > thr : v < thr;
+            if (ok) {
+                js.status = Status.FRESH;
+                js.statusReason = jsonPath + "=" + v + " " + comparator + " " + thr;
+            } else {
+                js.status = Status.STALE;
+                js.statusReason = jsonPath + "=" + v + " breaches " + comparator + " " + thr;
+            }
+        } catch (org.springframework.web.client.ResourceAccessException rae) {
+            // Endpoint not reachable — e.g., /api/admin/kafka-lag not shipped yet.
+            js.status = Status.PENDING;
+            js.statusReason = "endpoint unreachable: " + rae.getMessage();
+        } catch (Exception e) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "http error: " + e.getMessage();
+        }
+    }
+
+    /** Redis key value parses as int and must be {@code < threshold}. Missing key → FRESH (zero counts). */
+    private void resolveRedisKeyIntLt(HealthJob job, JobStatus js, LocalDate today) {
+        String keyTpl = job.extraConfig.get("redisKey");
+        String thrStr = job.extraConfig.get("threshold");
+        if (keyTpl == null || thrStr == null) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "redisKey/threshold not configured";
+            return;
+        }
+        String key = keyTpl.replace("{today}", today.toString())
+                           .replace("{yesterday}", today.minusDays(1).toString());
+        String raw = redis.opsForValue().get(key);
+        long thr = Long.parseLong(thrStr);
+        if (raw == null || raw.isBlank()) {
+            // Daily counters start at 0 and increment. Before market open key is absent — that's fine.
+            js.status = Status.FRESH;
+            js.statusReason = "counter unset (0) < " + thr;
+            return;
+        }
+        try {
+            long v = Long.parseLong(raw.trim());
+            if (v < thr) {
+                js.status = Status.FRESH;
+                js.statusReason = key + "=" + v + " < " + thr;
+            } else {
+                js.status = Status.STALE;
+                js.statusReason = key + "=" + v + " breaches threshold " + thr;
+            }
+        } catch (NumberFormatException nfe) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "unparseable int: " + raw;
+        }
+    }
+
+    /** Redis key must exist (any non-empty value). */
+    private void resolveRedisKeyExists(HealthJob job, JobStatus js, LocalDate today) {
+        String keyTpl = job.extraConfig.get("redisKey");
+        if (keyTpl == null) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "redisKey not configured";
+            return;
+        }
+        String key = keyTpl.replace("{today}", today.toString())
+                           .replace("{yesterday}", today.minusDays(1).toString());
+        String raw = redis.opsForValue().get(key);
+        if (raw != null && !raw.isBlank()) {
+            js.status = Status.FRESH;
+            js.statusReason = key + " present";
+        } else {
+            js.status = Status.MISSING;
+            js.statusReason = key + " absent";
+        }
+    }
+
+    /** Redis key holds JSON array — FRESH when array is empty {@code []} (no drift). */
+    private void resolveRedisKeyEmptyArray(HealthJob job, JobStatus js) {
+        String key = job.extraConfig.get("redisKey");
+        if (key == null) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "redisKey not configured";
+            return;
+        }
+        String raw = redis.opsForValue().get(key);
+        if (raw == null) {
+            // Build sentinel hasn't run yet today — mark MISSING so operator sees it.
+            js.status = Status.MISSING;
+            js.statusReason = key + " absent (build sentinel may not have run)";
+            return;
+        }
+        String trimmed = raw.trim();
+        if ("[]".equals(trimmed)) {
+            js.status = Status.FRESH;
+            js.statusReason = "drift=[]";
+            return;
+        }
+        try {
+            JsonNode n = mapper.readTree(raw);
+            if (n.isArray() && n.size() == 0) {
+                js.status = Status.FRESH;
+                js.statusReason = "drift=[]";
+            } else {
+                js.status = Status.STALE;
+                js.statusReason = "drift non-empty: " + trimmed;
+            }
+        } catch (Exception e) {
+            js.status = Status.UNKNOWN;
+            js.statusReason = "unparseable JSON: " + trimmed;
+        }
     }
 
     /** REDIS_EPOCH_FRESHNESS: key stores a Unix epoch (seconds or millis).
@@ -192,6 +428,30 @@ public class HealthCheckService {
         String key = String.format(job.dataKeyPattern, latest.toString());
         String raw = redis.opsForValue().get(key);
         if (raw == null) {
+            // EXPECTED_AT_EOD: scrapers like bulk-deals (16:30-20:00 IST) and short-selling
+            // (18:00-21:00 IST) only publish after NSE close — a missing key during the
+            // trading session is expected, not a failure. Defer the MISSING verdict until
+            // the active window has had a chance to run (+30 min grace past the end).
+            // Before activeWindowStart → EXPECTED_AT_EOD (informational, sky-blue like EMPTY).
+            if (job.retryWindowStart != null && job.retryWindowEnd != null) {
+                java.time.LocalTime nowTime = java.time.ZonedDateTime.now(IST).toLocalTime();
+                java.time.LocalTime graceEnd = job.retryWindowEnd.plusMinutes(30);
+                boolean beforeWindow = nowTime.isBefore(job.retryWindowStart);
+                boolean inWindow = !nowTime.isBefore(job.retryWindowStart) && nowTime.isBefore(graceEnd);
+                if (beforeWindow) {
+                    js.status = Status.EXPECTED_AT_EOD;
+                    js.statusReason = "waiting for active window " + job.retryWindowStart
+                        + "-" + job.retryWindowEnd + " IST";
+                    return;
+                }
+                if (inWindow) {
+                    // In-window but no data yet — pending scrape, not a hard MISSING.
+                    js.status = Status.PENDING;
+                    js.statusReason = "active window " + job.retryWindowStart
+                        + "-" + job.retryWindowEnd + " IST, awaiting scraper completion";
+                    return;
+                }
+            }
             js.status = Status.MISSING;
             js.statusReason = "no key for " + latest + " (" + key + ")";
             return;

@@ -50,6 +50,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/signal-audit/**").permitAll()
                 .requestMatchers("/api/ws-audit/**").permitAll()
                 .requestMatchers("/api/monday-ship/**").permitAll()
+                .requestMatchers("/api/pivotboss/**").permitAll()
                 .requestMatchers("/api/strategy-wallets/**").permitAll()
                 .requestMatchers("/api/counter-trend/**").permitAll()
                 .requestMatchers("/api/f14/**").permitAll()
@@ -75,8 +76,11 @@ public class SecurityConfig {
                 .requestMatchers("/api/analysis/**").permitAll()
                 .requestMatchers("/api/slippage/**").permitAll()
                 .requestMatchers("/api/stock/**").permitAll()
-                .requestMatchers("/api/health-check/**").permitAll()
-                // Admin-only
+                // Admin-only — ops/diagnostic surfaces (health-check exposes job
+                // schedules + Kafka topology; kafka-lag exposes consumer-group
+                // names + lag). Both reveal internal architecture so they're
+                // restricted to ADMIN; VIEWER role gets 403.
+                .requestMatchers("/api/health-check/**").hasRole("ADMIN")
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // All other API endpoints require authentication
                 .requestMatchers("/api/**").authenticated()

@@ -174,9 +174,12 @@ public class WalletService {
             Map<String, Object> data = objectMapper.readValue(json, Map.class);
 
             // FIX: scripCode field name is correct
+            // BUG-A5 fix: per-strategy keys are virtual:positions:{STRATEGY}:{scripCode}.
+            // Naive .replace() leaves "FUDKII:176923" in scripCode and downstream
+            // lookups silently fail. Take substring after the LAST colon.
             String scripCode = (String) data.get("scripCode");
             if (scripCode == null) {
-                scripCode = key.replace("virtual:positions:", "");
+                scripCode = StrategyWalletsService.extractScripCodeFromKey(key);
             }
 
             // FIX: VirtualPosition uses 'qtyOpen' not 'qty'
@@ -314,6 +317,11 @@ public class WalletService {
             List<Map<String, Object>> exitHistory = data.get("exitHistory") != null
                 ? (List<Map<String, Object>>) data.get("exitHistory") : null;
 
+            // BUG-A1 fix: WS-orphan badge from tradeExec.stampFeedStateOnPosition
+            String feedState = data.get("feedState") != null ? data.get("feedState").toString() : null;
+            Long feedStateAt = data.get("feedStateAt") != null
+                ? ((Number) data.get("feedStateAt")).longValue() : null;
+
             // Use instrumentSymbol for display if available (strategy trades)
             String displayName = data.get("instrumentSymbol") != null
                 ? data.get("instrumentSymbol").toString()
@@ -374,6 +382,8 @@ public class WalletService {
                     .chargesSebi(chargesSebi)
                     .chargesStamp(chargesStamp)
                     .exitHistory(exitHistory)
+                    .feedState(feedState)
+                    .feedStateAt(feedStateAt)
                     .build();
 
         } catch (Exception e) {

@@ -21,6 +21,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/react": "^18.2.37",
     "@types/react-dom": "^18.2.15",
     "@types/sockjs-client": "^1.5.4",

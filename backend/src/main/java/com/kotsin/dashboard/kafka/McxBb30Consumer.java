@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.kotsin.dashboard.model.entity.McxBb30SignalEntity;
+import com.kotsin.dashboard.repository.McxBb30SignalRepository;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
 import com.kotsin.dashboard.model.dto.SignalDTO;
 import com.kotsin.dashboard.service.ScripLookupService;
@@ -30,6 +32,7 @@ public class McxBb30Consumer implements OptionSwapAware {
     private final WebSocketSessionManager sessionManager;
     private final SignalConsumer signalConsumer;
     private final ScripLookupService scripLookup;
+    private final McxBb30SignalRepository signalRepository;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
@@ -41,6 +44,17 @@ public class McxBb30Consumer implements OptionSwapAware {
     @Value("${mcxbb30.max.signals.per.day:10}")
     private int maxSignalsPerDay;
 
+    /**
+     * 2026-05-01 fix: reject Kafka messages whose source timestamp is older than
+     * this many minutes. Caught a real ZINC 488794 ghost that replayed today
+     * after a dashboard restart re-consumed retained messages from before the
+     * instrument expired (Apr 30). 12h cap is generous — covers same-day cross-
+     * session replays without rejecting the just-published evening signals.
+     * Kill-switch: set to 0 to disable.
+     */
+    @Value("${mcxbb30.max.message.age.minutes:720}")
+    private long maxMessageAgeMinutes;
+
     private Cache<String, Boolean> dedupCache;
     private Cache<String, Map<String, Object>> activeTriggers;
     private final ConcurrentHashMap<String, Map<String, Object>> latestMcxBb30 = new ConcurrentHashMap<>();
@@ -49,10 +63,12 @@ public class McxBb30Consumer implements OptionSwapAware {
 
     public McxBb30Consumer(WebSocketSessionManager sessionManager,
                            SignalConsumer signalConsumer,
-                           ScripLookupService scripLookup) {
+                           ScripLookupService scripLookup,
+                           McxBb30SignalRepository signalRepository) {
         this.sessionManager = sessionManager;
         this.signalConsumer = signalConsumer;
         this.scripLookup = scripLookup;
+        this.signalRepository = signalRepository;
     }
 
     @PostConstruct
@@ -77,6 +93,20 @@ public class McxBb30Consumer implements OptionSwapAware {
 
             String scripCode = root.path("scripCode").asText();
             if (scripCode == null || scripCode.isEmpty()) return;
+
+            // Fix 4 (2026-05-01): reject stale Kafka replays. Without this gate,
+            // a dashboard restart can replay retained messages from days ago,
+            // surfacing trigger cards for instruments that expired or never
+            // actually fired today. See ZINC 488794 ghost incident 2026-05-01.
+            long sourceTs = root.path("timestamp").asLong(0L);
+            if (maxMessageAgeMinutes > 0 && sourceTs > 0) {
+                long ageMinutes = (System.currentTimeMillis() - sourceTs) / 60_000L;
+                if (ageMinutes > maxMessageAgeMinutes) {
+                    log.warn("MCX-BB-30 STALE_REJECT: scripCode={} ageMinutes={} (cap={})",
+                            scripCode, ageMinutes, maxMessageAgeMinutes);
+                    return;
+                }
+            }
 
             String triggerTimeStr = root.path("triggerTime").asText("");
             String dedupKey = scripCode + "|" + triggerTimeStr;
@@ -217,6 +247,18 @@ public class McxBb30Consumer implements OptionSwapAware {
 
             signalConsumer.addExternalSignal(signalDTO);
 
+            // Fix 2 (2026-05-01): persist to Mongo so cards survive past 30-min Caffeine TTL.
+            // Idempotent on dedupKey via findByDedupKey check + upsert. Exceptions here
+            // must NOT block the WebSocket broadcast below — persistence is best-effort.
+            try {
+                persistTrigger(scripCode, displayName, symbol, direction, triggerPrice, triggerScore,
+                        bbUpper, bbLower, surgeT, oiChangeRatio, stopLoss, target1, riskReward,
+                        triggerTimeStr, dedupKey, sourceTs, root);
+            } catch (Exception persistEx) {
+                log.warn("MCX-BB-30 persist failed for scripCode={} dedupKey={}: {}",
+                        scripCode, dedupKey, persistEx.getMessage());
+            }
+
             // Broadcast notification
             String emoji = "BULLISH".equals(direction) ? "^" : "v";
             sessionManager.broadcastNotification("MCX_BB_30_TRIGGER",
@@ -226,6 +268,53 @@ public class McxBb30Consumer implements OptionSwapAware {
         } catch (Exception e) {
             log.error("Error processing MCX-BB-30: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Idempotent upsert into mcx_bb_30_signals. dedupKey is the unique index, so
+     * a re-delivered Kafka message produces zero duplicate documents.
+     */
+    private void persistTrigger(String scripCode, String displayName, String symbol,
+                                String direction, double triggerPrice, double triggerScore,
+                                double bbUpper, double bbLower, double surgeT, double oiChangeRatio,
+                                double stopLoss, double target1, double riskReward,
+                                String triggerTimeStr, String dedupKey, long sourceTs,
+                                JsonNode root) {
+        if (signalRepository == null) return;
+        if (signalRepository.findByDedupKey(dedupKey).isPresent()) return;
+
+        McxBb30SignalEntity entity = McxBb30SignalEntity.builder()
+                .dedupKey(dedupKey)
+                .scripCode(scripCode)
+                .symbol(symbol)
+                .companyName(displayName)
+                .exchange(root.path("exchange").asText("M"))
+                .direction(direction)
+                .triggerPrice(triggerPrice)
+                .triggerScore(triggerScore)
+                .bbUpper(bbUpper)
+                .bbLower(bbLower)
+                .bbMiddle(root.path("bbMiddle").asDouble(0))
+                .atr30m(root.path("atr30m").asDouble(0))
+                .surgeT(surgeT)
+                .volumeT(root.path("volumeT").asLong(0))
+                .oiChangeRatio(oiChangeRatio)
+                .expansionRate(root.path("expansionRate").asDouble(0))
+                .bodyOutsideRatio(root.path("bodyOutsideRatio").asDouble(0))
+                .stopLoss(stopLoss)
+                .target1(target1)
+                .target2(root.path("target2").asDouble(0))
+                .riskReward(riskReward)
+                .technicalScore(root.path("technicalScore").asInt(0))
+                .institutionalScore(root.path("institutionalScore").asInt(0))
+                .institutionalClass(root.path("institutionalClass").asText("UNKNOWN"))
+                .combinedConviction(root.path("combinedConviction").asDouble(0))
+                .sizeClass(root.path("sizeClass").asText("MINIMUM"))
+                .triggerTime(triggerTimeStr)
+                .sourceTimestampMs(sourceTs)
+                .consumedAt(Instant.now())
+                .build();
+        signalRepository.save(entity);
     }
 
     private void resetDailyCounterIfNeeded() {

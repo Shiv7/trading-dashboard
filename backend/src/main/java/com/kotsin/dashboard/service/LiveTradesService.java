@@ -195,6 +195,12 @@ public class LiveTradesService {
         out.put("totalTargets", totalTargets);
         out.put("exitProgress", exitProgress);
 
+        // 2026-05-07 (Q4): per-strategy 30m dedup stamps these on the position
+        // when it drops a duplicate fire. Frontend renders a small badge so the
+        // user can see that the strategy tried to re-open and was suppressed.
+        out.put("duplicateDroppedCount", getInt(position, "duplicateDroppedCount"));
+        out.put("lastDuplicateDroppedAt", getLong(position, "lastDuplicateDroppedAt"));
+
         // Signal enrichment metrics
         out.put("confidence", getDouble(targets, "confidence"));
         out.put("atr", getDouble(targets, "atr"));
@@ -277,6 +283,14 @@ public class LiveTradesService {
             charges.put("total", round2(totalCharges));
         }
         out.put("charges", charges);
+
+        // BUG-A1 fix: surface F5 WS-orphan badge to frontend.
+        if (position.get("feedState") != null) {
+            out.put("feedState", position.get("feedState"));
+        }
+        if (position.get("feedStateAt") != null) {
+            out.put("feedStateAt", position.get("feedStateAt"));
+        }
 
         return out;
     }

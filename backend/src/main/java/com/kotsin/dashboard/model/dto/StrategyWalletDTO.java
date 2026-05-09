@@ -138,5 +138,9 @@ public class StrategyWalletDTO {
         private Double oiChangePercent;
         private Double blockDealPercent;
         private Double riskReward;
+
+        // F5 WS-orphan badge: HEALTHY | DEGRADED | ORPHAN_PROXY | ORPHAN_BLIND | EXITING
+        private String feedState;
+        private Long feedStateAt;
     }
 }

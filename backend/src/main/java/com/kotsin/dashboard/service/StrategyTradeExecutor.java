@@ -74,11 +74,48 @@ public class StrategyTradeExecutor {
     @Autowired
     private com.kotsin.dashboard.greeks.GreekTrailingEngine greekTrailingEngine;
 
+    @Autowired
+    private com.kotsin.dashboard.calendar.NseCalendarHelper calendar;
+
+    /**
+     * HotStocks multi-day hold cap — positions older than this many trading days get
+     * force-closed at 15:20 IST (10 min before NSE close) to recycle capital for
+     * fresh picks. Configurable via {@code hotstocks.maxhold.trading.days}.
+     */
+    @Value("${hotstocks.maxhold.trading.days:5}")
+    private int hotStocksMaxHoldDays;
+
     @Value("${kafka.topics.trade-outcomes:trade-outcomes}")
     private String tradeOutcomesTopic;
 
     @Value("${strategy.execution.enabled:true}")
     private boolean executionEnabled;
+
+    /**
+     * S37 fix 2026-04-26: decouple risk/EOD crons from the trade-execution flag.
+     *
+     * Background: strategy.execution.enabled was set to false on 2026-03-17 to delegate
+     * trade execution to tradeExcutionModule (port 8089). That change unintentionally
+     * disabled the EOD close crons, the expiry-day close, and hotStocksMaxHoldExit —
+     * all of which are risk-management operations that must run regardless of where
+     * new trades are executed. On 2026-04-23 that hole caused 4 HotStocks positions
+     * to carry overnight.
+     */
+    @Value("${strategy.risk.enabled:true}")
+    private boolean riskEnabled;
+
+    /**
+     * S2 fix 2026-04-26 (HotStocks Option B): HotStocks is a multi-day positional
+     * strategy. When enabled, the 15:25 NSE EOD cron exempts strategy=HOTSTOCKS so
+     * positions ride to next session up to the hotstocks.maxhold.trading.days cap.
+     * Flip to false to revert to intra-day behavior (every HotStocks closes at 15:25).
+     */
+    @Value("${hotstocks.multiday.enabled:true}")
+    private boolean hotstocksMultidayEnabled;
+
+    /** S2 companion — pre-EOD options-close cron kill-switch. */
+    @Value("${options.preeod.close.enabled:true}")
+    private boolean preEodOptionsCloseEnabled;
 
     // Drawdown exit protection config
     @Value("${strategy.exit.dd.min.entry.t1.pct:5}")
@@ -2487,7 +2524,7 @@ public class StrategyTradeExecutor {
      */
     @Scheduled(cron = "0 25 15 * * MON-FRI", zone = "Asia/Kolkata")
     public void eodExitNsePositions() {
-        if (!executionEnabled) return;
+        if (!riskEnabled) return;
         eodExitForExchanges(Set.of("N", ""), "15:25 IST (NSE)");
     }
 
@@ -2496,7 +2533,7 @@ public class StrategyTradeExecutor {
      */
     @Scheduled(cron = "0 55 16 * * MON-FRI", zone = "Asia/Kolkata")
     public void eodExitCurrencyPositions() {
-        if (!executionEnabled) return;
+        if (!riskEnabled) return;
         eodExitForExchanges(Set.of("C"), "16:55 IST (Currency)");
     }
 
@@ -2508,7 +2545,7 @@ public class StrategyTradeExecutor {
      */
     @Scheduled(cron = "0 25 23 * * MON-FRI", zone = "Asia/Kolkata")
     public void eodExitMcxPositionsDst() {
-        if (!executionEnabled) return;
+        if (!riskEnabled) return;
         if (isMcxDstClose()) {
             eodExitForExchanges(Set.of("M"), "23:25 IST (MCX DST)");
         } else {
@@ -2518,7 +2555,7 @@ public class StrategyTradeExecutor {
 
     @Scheduled(cron = "0 50 23 * * MON-FRI", zone = "Asia/Kolkata")
     public void eodExitMcxPositionsStandard() {
-        if (!executionEnabled) return;
+        if (!riskEnabled) return;
         if (!isMcxDstClose()) {
             eodExitForExchanges(Set.of("M"), "23:50 IST (MCX standard)");
         } else {
@@ -2533,7 +2570,7 @@ public class StrategyTradeExecutor {
     @Scheduled(cron = "0 30 14 * * MON-FRI", zone = "Asia/Kolkata")
     @SuppressWarnings("unchecked")
     public void expiryDayForcedExit() {
-        if (!executionEnabled) return;
+        if (!riskEnabled) return;
         String todayStr = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).toString();
         log.info("{} Expiry-day forced exit check at 14:30 IST for expiry={}", LOG_PREFIX, todayStr);
 
@@ -2578,6 +2615,138 @@ public class StrategyTradeExecutor {
         }
     }
 
+    /**
+     * HotStocks max-hold enforcement at 15:20 IST (5 min before NSE EOD at 15:25).
+     * Force-closes any HOTSTOCKS position held longer than
+     * {@code hotstocks.maxhold.trading.days} trading days (default 5) so multi-day
+     * swing picks don't accumulate stale slots that block fresh entries.
+     *
+     * Trading-day count uses NseCalendarHelper so weekends and NSE holidays are excluded.
+     * Exit reason is MAX_HOLD_{N}D and hits the same {@link #executeExit} path as
+     * expiry-day forced exits, preserving P&L tracking + wallet updates.
+     */
+    @Scheduled(cron = "0 20 15 * * MON-FRI", zone = "Asia/Kolkata")
+    @SuppressWarnings("unchecked")
+    public void hotStocksMaxHoldExit() {
+        if (!riskEnabled) return;
+        LocalDate today = LocalDate.now(IST);
+        int maxDays = hotStocksMaxHoldDays;
+        log.info("{} HotStocks max-hold check at 15:20 IST (threshold={} trading days)", LOG_PREFIX, maxDays);
+
+        try {
+            Set<String> targetKeys = redisTemplate.keys(TARGETS_PREFIX + "*");
+            if (targetKeys == null || targetKeys.isEmpty()) return;
+
+            int exitCount = 0;
+            for (String targetKey : targetKeys) {
+                try {
+                    String targetsJson = redisTemplate.opsForValue().get(targetKey);
+                    if (targetsJson == null) continue;
+
+                    Map<String, Object> targets = objectMapper.readValue(targetsJson, Map.class);
+                    String strategy = (String) targets.get("strategy");
+                    if (!"HOTSTOCKS".equals(strategy)) continue;
+
+                    int remainingQty = ((Number) targets.get("remainingQty")).intValue();
+                    if (remainingQty <= 0) continue;
+
+                    Object openedAtObj = targets.get("openedAt");
+                    if (!(openedAtObj instanceof Number)) continue;
+                    long openedAtMs = ((Number) openedAtObj).longValue();
+                    LocalDate openedDate = java.time.Instant.ofEpochMilli(openedAtMs)
+                        .atZone(IST).toLocalDate();
+
+                    // countTradingDays is STRICTLY AFTER `from` — so we count trading days
+                    // that have fully elapsed since the open. openedDate itself is day 0.
+                    int tradingDaysHeld = calendar.countTradingDays(openedDate, today);
+                    if (tradingDaysHeld < maxDays) continue;
+
+                    String scripCode = (String) targets.get("scripCode");
+                    String exchange = (String) targets.get("exchange");
+                    double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
+                    double currentLtp = getLtpFromRedis(exchange, scripCode);
+                    if (currentLtp <= 0) currentLtp = entryPrice;
+
+                    executeExit(targets, scripCode, currentLtp, remainingQty,
+                        "MAX_HOLD_" + maxDays + "D", targetKey);
+                    exitCount++;
+                    log.info("{} HotStocks max-hold exit: {} openedDate={} tradingDaysHeld={} qty={} price={}",
+                        LOG_PREFIX, scripCode, openedDate, tradingDaysHeld,
+                        remainingQty, String.format("%.2f", currentLtp));
+                } catch (Exception e) {
+                    log.error("{} HotStocks max-hold error for {}: {}", LOG_PREFIX, targetKey, e.getMessage());
+                }
+            }
+            log.info("{} HotStocks max-hold check complete: force-closed {} positions", LOG_PREFIX, exitCount);
+        } catch (Exception e) {
+            log.error("{} HotStocks max-hold check failed: {}", LOG_PREFIX, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * S2 fix 2026-04-26 (Option B companion): pre-EOD options close at 15:20 IST.
+     *
+     * Closes OPTION legs on non-HOTSTOCKS strategies 5 min before the 15:25 NSE EOD
+     * cron so we never ride an option through the last-5-min theta cliff or the EOD
+     * settlement wick. HotStocks is equity-only multi-day, so this cron skips it.
+     * Kill-switch: options.preeod.close.enabled=false.
+     */
+    @Scheduled(cron = "0 20 15 * * MON-FRI", zone = "Asia/Kolkata")
+    @SuppressWarnings("unchecked")
+    public void preEodOptionsClose() {
+        if (!riskEnabled) return;
+        if (!preEodOptionsCloseEnabled) return;
+        log.info("{} Pre-EOD options close triggered at 15:20 IST (non-HOTSTOCKS options)", LOG_PREFIX);
+        try {
+            Set<String> targetKeys = redisTemplate.keys(TARGETS_PREFIX + "*");
+            if (targetKeys == null || targetKeys.isEmpty()) {
+                log.info("{} Pre-EOD options close: no active targets", LOG_PREFIX);
+                return;
+            }
+            int closed = 0;
+            int skipped = 0;
+            int errors = 0;
+            for (String targetKey : targetKeys) {
+                try {
+                    String targetsJson = redisTemplate.opsForValue().get(targetKey);
+                    if (targetsJson == null) continue;
+                    Map<String, Object> targets = objectMapper.readValue(targetsJson, Map.class);
+
+                    int remainingQty = ((Number) targets.get("remainingQty")).intValue();
+                    if (remainingQty <= 0) continue;
+
+                    String instrumentType = (String) targets.get("instrumentType");
+                    if (!"OPTION".equals(instrumentType)) { skipped++; continue; }
+
+                    String strategy = (String) targets.get("strategy");
+                    if ("HOTSTOCKS".equalsIgnoreCase(strategy)) { skipped++; continue; }
+
+                    String exchange = (String) targets.get("exchange");
+                    String exch = exchange != null ? exchange : "";
+                    // Only NSE-window close here; MCX/CDS have their own EOD crons.
+                    if (!"N".equals(exch) && !exch.isEmpty()) { skipped++; continue; }
+
+                    String scripCode = (String) targets.get("scripCode");
+                    double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
+                    double currentLtp = getLtpFromRedis(exchange, scripCode);
+                    if (currentLtp <= 0) currentLtp = entryPrice;
+
+                    executeExit(targets, scripCode, currentLtp, remainingQty, "PRE_EOD_OPT", targetKey);
+                    closed++;
+                    log.info("{} Pre-EOD option close: strategy={} scrip={} qty={} price={}",
+                        LOG_PREFIX, strategy, scripCode, remainingQty, String.format("%.2f", currentLtp));
+                } catch (Exception e) {
+                    errors++;
+                    log.error("{} Pre-EOD options close error for {}: {}", LOG_PREFIX, targetKey, e.getMessage());
+                }
+            }
+            log.info("{} Pre-EOD options close complete: closed={} skipped={} errors={}",
+                LOG_PREFIX, closed, skipped, errors);
+        } catch (Exception e) {
+            log.error("{} Pre-EOD options close cycle FATAL: {}", LOG_PREFIX, e.getMessage(), e);
+        }
+    }
+
     private static final ZoneId US_EASTERN = ZoneId.of("America/New_York");
 
     /**
@@ -2613,6 +2782,7 @@ public class StrategyTradeExecutor {
 
             int exitCount = 0;
             int skippedCount = 0;
+            int skippedMultiday = 0;
             int errorCount = 0;
             for (String targetKey : targetKeys) {
                 try {
@@ -2624,6 +2794,7 @@ public class StrategyTradeExecutor {
                     int remainingQty = ((Number) targets.get("remainingQty")).intValue();
                     String exchange = (String) targets.get("exchange");
                     double entryPrice = ((Number) targets.get("entryPrice")).doubleValue();
+                    String strategy = (String) targets.get("strategy");
 
                     if (remainingQty <= 0) continue;
 
@@ -2631,6 +2802,20 @@ public class StrategyTradeExecutor {
                     String exch = exchange != null ? exchange : "";
                     if (!exchanges.contains(exch)) {
                         skippedCount++;
+                        continue;
+                    }
+
+                    // S2 fix 2026-04-26 (Option B): exempt HOTSTOCKS — it's a multi-day
+                    // positional strategy that must ride across sessions (up to the
+                    // hotstocks.maxhold.trading.days cap enforced by hotStocksMaxHoldExit
+                    // at 15:20 IST). Without this carve-out the 15:25 NSE EOD cron
+                    // closes every HotStocks position daily, defeating the design intent.
+                    // Kill-switch: flip hotstocks.multiday.enabled=false to revert to
+                    // intra-day (legacy) behavior.
+                    if (hotstocksMultidayEnabled
+                            && "HOTSTOCKS".equalsIgnoreCase(strategy)
+                            && (exchanges.contains("N") || exchanges.contains(""))) {
+                        skippedMultiday++;
                         continue;
                     }
 
@@ -2646,8 +2831,8 @@ public class StrategyTradeExecutor {
                     log.error("{} EOD exit error for {}: {}", LOG_PREFIX, targetKey, e.getMessage(), e);
                 }
             }
-            log.info("{} EOD exit complete: {} exited, {} skipped (different exchange), {} errors",
-                LOG_PREFIX, exitCount, skippedCount, errorCount);
+            log.info("{} EOD exit complete: {} exited, {} skipped (different exchange), {} skipped (HOTSTOCKS multi-day), {} errors",
+                LOG_PREFIX, exitCount, skippedCount, skippedMultiday, errorCount);
             if (errorCount > 0) {
                 log.error("{} EOD EXIT HAD {} ERRORS — positions may be orphaned overnight", LOG_PREFIX, errorCount);
             }

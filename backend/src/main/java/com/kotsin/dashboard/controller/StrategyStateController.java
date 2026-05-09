@@ -66,6 +66,7 @@ public class StrategyStateController {
     private final McxBb15Consumer mcxBb15Consumer;
     private final NseBb30Consumer nseBb30Consumer;
     private final RetestConsumer retestConsumer;
+    private final com.kotsin.dashboard.repository.McxBb30SignalRepository mcxBb30SignalRepository;
     private final TradingSignalService tradingSignalService;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
@@ -915,6 +916,22 @@ public class StrategyStateController {
     @GetMapping("/mcxbb30/latest")
     public ResponseEntity<Map<String, Map<String, Object>>> getMcxBb30Latest() {
         return ResponseEntity.ok(mcxBb30Consumer.getLatestMcxBb30());
+    }
+
+    /**
+     * Mongo-backed history of MCX_BB_30 triggers. Survives the 30-min Caffeine TTL
+     * that {@link #getMcxBb30Triggers} is bound by, and the dashboard restart cycle.
+     * Default window = last 1 day; cap = last 14 days.
+     */
+    @GetMapping("/mcxbb30/history")
+    public ResponseEntity<List<com.kotsin.dashboard.model.entity.McxBb30SignalEntity>> getMcxBb30History(
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "1") int days) {
+        int clamped = Math.max(1, Math.min(14, days));
+        java.time.Instant after = java.time.Instant.now().minus(java.time.Duration.ofDays(clamped));
+        List<com.kotsin.dashboard.model.entity.McxBb30SignalEntity> history =
+                mcxBb30SignalRepository.findByConsumedAtAfterOrderByConsumedAtDesc(after);
+        log.debug("[API] GET /strategy-state/mcxbb30/history?days={} | {} records", clamped, history.size());
+        return ResponseEntity.ok(history);
     }
 
     // ==================== MCX-BB-15 STRATEGY ENDPOINTS ====================

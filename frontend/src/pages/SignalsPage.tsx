@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react'
-import SignalCard from '../components/Signals/SignalCard'
+import { useEffect, useMemo, useState } from 'react'
+import SignalCard, { type AbortRecord } from '../components/Signals/SignalCard'
 import { useDashboardStore } from '../store/dashboardStore'
 import { signalsApi } from '../services/api'
 import type { Signal } from '../types'
+
+// F1 (2026-04-30): aborts come from /api/signal-audit/aborts/recent which proxies
+// to tradeExec's signal_aborts collection. Frontend builds a (strategy, scripCode)
+// → AbortRecord lookup so each SignalCard can show an "Aborted" badge.
+const API_BASE = (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE || ''
+type AbortApiRow = AbortRecord & { strategy?: string; scripCode?: string }
 
 export default function SignalsPage() {
   const [signals, setSignals] = useState<Signal[]>([])
@@ -10,6 +16,7 @@ export default function SignalsPage() {
   const [page, setPage] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
   const [filterEmitted, setFilterEmitted] = useState<boolean | undefined>(undefined)
+  const [aborts, setAborts] = useState<AbortApiRow[]>([])
 
   const wsSignals = useDashboardStore((s) => s.signals)
 
@@ -28,6 +35,40 @@ export default function SignalsPage() {
     }
     loadSignals()
   }, [page, filterEmitted])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadAborts() {
+      try {
+        const r = await fetch(`${API_BASE}/api/signal-audit/aborts/recent?sinceMinutes=1440&limit=500`)
+        if (!r.ok) return
+        const rows = (await r.json()) as AbortApiRow[]
+        if (!cancelled) setAborts(Array.isArray(rows) ? rows : [])
+      } catch (e) {
+        console.warn('aborts fetch failed', e)
+      }
+    }
+    loadAborts()
+    const id = window.setInterval(loadAborts, 30_000) // refresh every 30s
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
+
+  // (strategy + scripCode) → most-recent abort. Multiple aborts per pair keep newest.
+  const abortLookup = useMemo(() => {
+    const map = new Map<string, AbortRecord>()
+    for (const a of aborts) {
+      const key = `${(a.strategy ?? '').toUpperCase()}|${a.scripCode ?? ''}`
+      if (!map.has(key)) map.set(key, a)
+    }
+    return map
+  }, [aborts])
+
+  function getAbortForSignal(s: Signal): AbortRecord | null {
+    const strategy = (s.signalSource ?? '').toUpperCase()
+    const scripCode = String(s.scripCode ?? '')
+    if (!strategy || !scripCode) return null
+    return abortLookup.get(`${strategy}|${scripCode}`) ?? null
+  }
 
   // Show new signals from WebSocket at top
   const newSignals = wsSignals.filter(ws => 
@@ -89,7 +130,11 @@ export default function SignalsPage() {
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {displaySignals.map(signal => (
-              <SignalCard key={signal.signalId} signal={signal} />
+              <SignalCard
+                key={signal.signalId}
+                signal={signal}
+                abortRecord={getAbortForSignal(signal)}
+              />
             ))}
           </div>
 

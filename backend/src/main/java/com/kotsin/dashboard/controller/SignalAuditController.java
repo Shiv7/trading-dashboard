@@ -53,6 +53,29 @@ public class SignalAuditController {
         return proxy("/api/audit/drift-stats?sinceMinutes=" + sinceMinutes);
     }
 
+    /**
+     * P6 (2026-04-30): proxy to {@code /api/aborts/*} on trade-exec for the
+     * "Aborted" badge on signal cards. Frontend polls /aborts/recent and
+     * matches against on-screen signals by (strategy, scripCode).
+     */
+    @GetMapping("/aborts/recent")
+    public ResponseEntity<?> getRecentAborts(@RequestParam(defaultValue = "1440") int sinceMinutes,
+                                              @RequestParam(defaultValue = "500") int limit) {
+        return proxy("/api/aborts/recent?sinceMinutes=" + sinceMinutes + "&limit=" + limit);
+    }
+
+    @GetMapping("/aborts/by-strategy/{strategy}")
+    public ResponseEntity<?> getAbortsByStrategy(@PathVariable String strategy,
+                                                   @RequestParam(defaultValue = "1440") int sinceMinutes,
+                                                   @RequestParam(defaultValue = "200") int limit) {
+        return proxy("/api/aborts/by-strategy/" + strategy + "?sinceMinutes=" + sinceMinutes + "&limit=" + limit);
+    }
+
+    @GetMapping("/aborts/count")
+    public ResponseEntity<?> getAbortCount(@RequestParam(defaultValue = "1440") int sinceMinutes) {
+        return proxy("/api/aborts/count?sinceMinutes=" + sinceMinutes);
+    }
+
     private ResponseEntity<?> proxy(String path) {
         try {
             return http.getForEntity(tradeExecBaseUrl + path, Object.class);

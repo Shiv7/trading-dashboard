@@ -88,7 +88,7 @@ public class LiveLtpResolver {
     }
 
     /** Redis read. Returns Optional.empty() on any failure (missing key, bad value, IO error). */
-    Optional<Double> readLivePrice(String scripCode, String exchange) {
+    public Optional<Double> readLivePrice(String scripCode, String exchange) {
         if (scripCode == null || scripCode.isBlank()) return Optional.empty();
         try {
             String raw = redis.opsForValue().get(buildPriceKey(scripCode, exchange));

@@ -7,6 +7,18 @@ import ConvictionBadge from '../ConvictionBadge'
 interface SignalCardProps {
   signal: Signal
   showQuickTrade?: boolean
+  // P6 (2026-04-30): when truthy, render an "Aborted" badge with the cascade reason
+  // and tooltip listing attempts. Parent page should pre-fetch /api/signal-audit/aborts/recent
+  // and pass per-signal abortRecord on match by (strategy, scripCode).
+  abortRecord?: AbortRecord | null
+}
+
+export interface AbortRecord {
+  abortReason: string
+  attemptCount: number
+  walkElapsedMs: number
+  createdAt?: string
+  attempts?: Array<{ scripCode: string; strike: number; decision: string; reason: string; detail?: string }>
 }
 
 // Signal source badge colors
@@ -20,7 +32,7 @@ const sourceColors: Record<string, string> = {
   CURATED: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/50',
 }
 
-export default function SignalCard({ signal, showQuickTrade = true }: SignalCardProps) {
+export default function SignalCard({ signal, showQuickTrade = true, abortRecord = null }: SignalCardProps) {
   const [tradeModalOpen, setTradeModalOpen] = useState(false)
   const isBullish = signal.direction === 'BULLISH'
   const isMasterArch = signal.isMasterArch || signal.signalSource === 'MASTER_ARCH'
@@ -64,6 +76,14 @@ export default function SignalCard({ signal, showQuickTrade = true }: SignalCard
             <span className={`badge ${signal.allGatesPassed ? 'badge-success' : 'badge-danger'}`}>
               {signal.allGatesPassed ? 'PASSED' : 'REJECTED'}
             </span>
+            {abortRecord && (
+              <span
+                className="text-[10px] px-2 py-0.5 rounded-full border bg-red-500/20 text-red-300 border-red-500/50 cursor-help"
+                title={`Aborted: ${abortRecord.abortReason}\nAttempts: ${abortRecord.attemptCount}\nWalk: ${abortRecord.walkElapsedMs}ms${abortRecord.attempts?.length ? '\n\n' + abortRecord.attempts.map(a => `  ${a.scripCode}@${a.strike} → ${a.reason}`).join('\n') : ''}`}
+              >
+                Aborted
+              </span>
+            )}
           </div>
           <div className="text-xs text-slate-400 mt-1">
             {signal.signalType} • {new Date(signal.timestamp).toLocaleTimeString()}

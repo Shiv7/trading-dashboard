@@ -352,8 +352,12 @@ public class StrategyWalletsService {
                     data.put("executionMode", StrategyNameResolver.extractExecutionMode(data));
 
                     // Resolve company name — prefer instrumentSymbol (option/futures display name from trade)
+                    // BUG-A5 fix: per-strategy keys are virtual:positions:{STRATEGY}:{scripCode}.
+                    // The naive .replace() leaves "FUDKII:176923" in scripCode. Take whatever
+                    // follows the LAST colon to recover the real scripCode for both legacy and
+                    // per-strategy key shapes.
                     String scripCode = data.get("scripCode") != null ? data.get("scripCode").toString()
-                            : key.replace("virtual:positions:", "");
+                            : extractScripCodeFromKey(key);
                     data.put("scripCode", scripCode);
                     if (data.get("instrumentSymbol") != null) {
                         data.put("companyName", data.get("instrumentSymbol").toString());
@@ -480,6 +484,10 @@ public class StrategyWalletsService {
                     .confidence(getMetricDouble(pos, "confidence"))
                     .rMultiple(null)
                     .durationMinutes(null)
+                    // BUG-A1 fix: WS-orphan badge stamped by tradeExec.
+                    .feedState(pos.get("feedState") != null ? pos.get("feedState").toString() : null)
+                    .feedStateAt(pos.get("feedStateAt") != null
+                            ? ((Number) pos.get("feedStateAt")).longValue() : null)
                     .build();
         } catch (Exception e) {
             log.warn("Error converting active position to trade: {}", e.getMessage());
@@ -660,6 +668,22 @@ public class StrategyWalletsService {
     /**
      * Extract exchange from position data, falling back to scrip-based guess.
      */
+    /**
+     * Extract the scripCode from a Redis position key. Handles both shapes:
+     *   legacy:        virtual:positions:{scripCode}        → {scripCode}
+     *   per-strategy:  virtual:positions:{STRATEGY}:{scrip} → {scrip}
+     * Falls back to the original key if neither shape is recognized.
+     * BUG-A5 fix (2026-05-03).
+     */
+    static String extractScripCodeFromKey(String key) {
+        if (key == null) return null;
+        String tail = key.startsWith("virtual:positions:")
+                ? key.substring("virtual:positions:".length())
+                : key;
+        int lastColon = tail.lastIndexOf(':');
+        return lastColon >= 0 ? tail.substring(lastColon + 1) : tail;
+    }
+
     private String extractExchangeFromPosition(Map<String, Object> pos) {
         if (pos.get("exchange") != null) {
             String exch = pos.get("exchange").toString().trim();

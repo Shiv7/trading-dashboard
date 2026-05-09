@@ -1,43 +1,62 @@
-import { useEffect, Component } from 'react'
+import { useEffect, Component, lazy, Suspense } from 'react'
 import type { ReactNode, ErrorInfo } from 'react'
 import { Routes, Route, useLocation } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import Layout from './components/Layout/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
+
+// Eagerly imported: public routes hit first (LandingPage / LoginPage) — no code-split
+// benefit since they're the first render path anyway.
 import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
-import SignupPage from './pages/SignupPage'
-import DashboardPage from './pages/DashboardPage'
-import WalletPage from './pages/WalletPage'
-import TradesPage from './pages/TradesPage'
-import MarketPulsePage from './pages/MarketPulsePage'
-import InsightsPage from './pages/InsightsPage'
-import SignalsPage from './pages/SignalsPage'
-import StockDetailPage from './pages/StockDetailPage'
-import QuantScoresPage from './pages/QuantScoresPage'
-import PerformancePage from './pages/PerformancePage'
-import PatternsPage from './pages/PatternsPage'
-import RiskPage from './pages/RiskPage'
-import StrategyTransparencyPage from './pages/StrategyTransparencyPage'
-import OrderHistoryPage from './pages/OrderHistoryPage'
-import ProfilePage from './pages/ProfilePage'
-import AdminPage from './pages/AdminPage'
-import WatchlistPage from './pages/WatchlistPage'
-import PnLDashboardPage from './pages/PnLDashboardPage'
-import SignalAuditPage from './pages/SignalAuditPage'
-import WsAuditPage from './pages/WsAuditPage'
-import OrderManagementPage from './pages/OrderManagementPage'
-import StrategyWalletsPage from './pages/StrategyWalletsPage'
-import MLShadowPage from './pages/MLShadowPage'
-import LivePage from './pages/LivePage'
-import GreekTrailingPage from './pages/GreekTrailingPage'
-import { HotStocksPage } from './pages/HotStocksPage'
-import { HotStocksDetailPage } from './pages/HotStocksDetailPage'
-import PivotBossPage from './pages/PivotBossPage'
-import PivotBossAnalyticsPage from './pages/PivotBossAnalyticsPage'
-import MondayShipPage from './pages/MondayShipPage'
-import HealthCheckPage from './pages/HealthCheckPage'
-import NoAccessPage from './pages/NoAccessPage'
+
+// All other pages lazy-loaded — shrinks initial bundle from 2.1MB to ~500KB.
+// Observed 2026-04-24: LCP 18.2s on mobile → eager 34-page bundle blocked hydration
+// for 18s, during which taps appeared to do nothing ("overlay situation").
+const SignupPage = lazy(() => import('./pages/SignupPage'))
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const WalletPage = lazy(() => import('./pages/WalletPage'))
+const TradesPage = lazy(() => import('./pages/TradesPage'))
+const MarketPulsePage = lazy(() => import('./pages/MarketPulsePage'))
+const InsightsPage = lazy(() => import('./pages/InsightsPage'))
+const SignalsPage = lazy(() => import('./pages/SignalsPage'))
+const StockDetailPage = lazy(() => import('./pages/StockDetailPage'))
+const QuantScoresPage = lazy(() => import('./pages/QuantScoresPage'))
+const PerformancePage = lazy(() => import('./pages/PerformancePage'))
+const PatternsPage = lazy(() => import('./pages/PatternsPage'))
+const RiskPage = lazy(() => import('./pages/RiskPage'))
+const StrategyTransparencyPage = lazy(() => import('./pages/StrategyTransparencyPage'))
+const OrderHistoryPage = lazy(() => import('./pages/OrderHistoryPage'))
+const ProfilePage = lazy(() => import('./pages/ProfilePage'))
+const AdminPage = lazy(() => import('./pages/AdminPage'))
+const WatchlistPage = lazy(() => import('./pages/WatchlistPage'))
+const PnLDashboardPage = lazy(() => import('./pages/PnLDashboardPage'))
+const SignalAuditPage = lazy(() => import('./pages/SignalAuditPage'))
+const WsAuditPage = lazy(() => import('./pages/WsAuditPage'))
+const OrderManagementPage = lazy(() => import('./pages/OrderManagementPage'))
+const StrategyWalletsPage = lazy(() => import('./pages/StrategyWalletsPage'))
+const MLShadowPage = lazy(() => import('./pages/MLShadowPage'))
+const LivePage = lazy(() => import('./pages/LivePage'))
+const GreekTrailingPage = lazy(() => import('./pages/GreekTrailingPage'))
+const HotStocksPage = lazy(() => import('./pages/HotStocksPage').then(m => ({ default: m.HotStocksPage })))
+const HotStocksDetailPage = lazy(() => import('./pages/HotStocksDetailPage').then(m => ({ default: m.HotStocksDetailPage })))
+const PivotBossPage = lazy(() => import('./pages/PivotBossPage'))
+const PivotBossAnalyticsPage = lazy(() => import('./pages/PivotBossAnalyticsPage'))
+const MondayShipPage = lazy(() => import('./pages/MondayShipPage'))
+const HealthCheckPage = lazy(() => import('./pages/HealthCheckPage'))
+const KafkaLagPage = lazy(() => import('./pages/KafkaLagPage'))
+const NoAccessPage = lazy(() => import('./pages/NoAccessPage'))
+
+function PageLoader() {
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-amber-500/20 border-t-amber-500 rounded-full animate-spin" />
+        <div className="text-xs text-slate-500">Loading…</div>
+      </div>
+    </div>
+  )
+}
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -87,6 +106,7 @@ function App() {
     <ErrorBoundary>
     <AuthProvider>
       <ScrollToTop />
+      <Suspense fallback={<PageLoader />}>
       <Routes>
         {/* Public Routes */}
         <Route path="/" element={<LandingPage />} />
@@ -425,7 +445,18 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/kafka-lag"
+          element={
+            <ProtectedRoute requireRole="ADMIN">
+              <Layout>
+                <KafkaLagPage />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
       </Routes>
+      </Suspense>
     </AuthProvider>
     </ErrorBoundary>
   )

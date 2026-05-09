@@ -1,40 +1,36 @@
 package com.kotsin.dashboard.service;
 
+import com.kotsin.dashboard.calendar.TradingCalendarService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
- * Hardcoded NSE holiday calendar for 2026. Purposeful simplicity: if holidays
- * shift, update this file and restart. For production-grade use, replace with
- * a scraper of NSE's official calendar page.
+ * Dashboard NSE holiday lookup. Used by MarketStateClassifier.
+ *
+ * Refactored 2026-05-04: delegates to {@link TradingCalendarService} (single source
+ * of truth). Previous in-class HOLIDAYS_2026 map had 10 entries with 2 wrong dates
+ * (Holi=Mar 4 should be Mar 3; "Good Friday observed" Mar 17 was fabricated) and
+ * was missing 6 dates (Ram Navami, Mahavir Jayanti, Ambedkar, Bakri Id, Muharram,
+ * Ganesh Chaturthi, Dussehra, Gurpurb). MarketStateClassifier silently
+ * mis-classified those dates as trading days.
  */
 @Component
 public class NseHolidayCalendar {
 
-    private static final Map<LocalDate, String> HOLIDAYS_2026 = new HashMap<>();
+    private final TradingCalendarService calendar;
 
-    static {
-        // Placeholder list — update with the actual 2026 NSE calendar before production.
-        HOLIDAYS_2026.put(LocalDate.of(2026, 1, 26), "Republic Day");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 3, 4), "Holi");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 3, 17), "Good Friday observed");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 4, 3), "Good Friday");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 5, 1), "Maharashtra Day");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 8, 15), "Independence Day");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 10, 2), "Gandhi Jayanti");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 11, 9), "Diwali Laxmi Pujan");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 11, 10), "Diwali Balipratipada");
-        HOLIDAYS_2026.put(LocalDate.of(2026, 12, 25), "Christmas");
+    @Autowired
+    public NseHolidayCalendar(TradingCalendarService calendar) {
+        this.calendar = calendar;
     }
 
     public boolean isHoliday(LocalDate date) {
-        return HOLIDAYS_2026.containsKey(date);
+        return calendar.isHoliday(date, "N");
     }
 
     public String holidayName(LocalDate date) {
-        return HOLIDAYS_2026.get(date);
+        return calendar.holidayName(date, "N");
     }
 }

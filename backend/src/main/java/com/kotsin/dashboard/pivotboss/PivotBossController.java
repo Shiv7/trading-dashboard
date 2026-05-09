@@ -24,9 +24,11 @@ import java.util.Map;
 public class PivotBossController {
 
     private final PivotBossAuditRepository repo;
+    private final BasketAuditRepository basketRepo;
 
-    public PivotBossController(PivotBossAuditRepository repo) {
+    public PivotBossController(PivotBossAuditRepository repo, BasketAuditRepository basketRepo) {
         this.repo = repo;
+        this.basketRepo = basketRepo;
     }
 
     /** Recent audit rows. */
@@ -81,6 +83,77 @@ public class PivotBossController {
             out.add(row);
         }
         out.sort((a, b) -> Integer.compare((Integer) a.get("setupId"), (Integer) b.get("setupId")));
+        return out;
+    }
+
+    /**
+     * Nifty50 Basket Retest signals — reads signal_rich_audit (written by trade-exec
+     * Nifty50BasketSignalConsumer). Surfaces under the PivotBoss sidebar's
+     * "Nifty50 Basket Retest" tab.
+     *
+     * @param days lookback window in days (default 2)
+     * @param limit max rows (default 200, capped at 1000)
+     * @param path  optional filter "RETEST" or "TREND"
+     * @param mode  optional filter "PAPER" or "LIVE"
+     */
+    @GetMapping("/basket-audit")
+    public List<BasketAuditDoc> basketAudit(
+            @RequestParam(defaultValue = "2") int days,
+            @RequestParam(defaultValue = "200") int limit,
+            @RequestParam(required = false) String path,
+            @RequestParam(required = false) String mode,
+            @RequestParam(defaultValue = "NIFTY50_BASKET") String strategy) {
+        Instant from = Instant.now().minus(Math.max(1, days), ChronoUnit.DAYS);
+        Instant to = Instant.now();
+        PageRequest p = PageRequest.of(0, Math.max(1, Math.min(limit, 1000)),
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        String strat = strategy.trim().toUpperCase();
+        List<BasketAuditDoc> rows = (path == null || path.isBlank())
+                ? basketRepo.findByStrategyAndCreatedAtBetween(strat, from, to, p)
+                : basketRepo.findByStrategyAndPathAndCreatedAtBetween(strat,
+                        path.trim().toUpperCase(), from, to, p);
+
+        if (mode != null && !mode.isBlank()) {
+            String want = mode.trim().toUpperCase();
+            return rows.stream().filter(r -> want.equalsIgnoreCase(r.getExecutionMode())).toList();
+        }
+        return rows;
+    }
+
+    /**
+     * Per-day fired-vs-rejected stats for Nifty50 Basket Retest. Mirrors the existing
+     * /analytics/setup-stats shape but groups by day instead of setup id.
+     */
+    @GetMapping("/basket-audit/daily-stats")
+    public List<Map<String, Object>> basketDailyStats(
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(defaultValue = "NIFTY50_BASKET") String strategy) {
+        Instant from = Instant.now().minus(Math.max(1, days), ChronoUnit.DAYS);
+        PageRequest all = PageRequest.of(0, 5000, Sort.by(Sort.Direction.DESC, "createdAt"));
+        List<BasketAuditDoc> rows = basketRepo.findByStrategyAndCreatedAtBetween(
+                strategy.trim().toUpperCase(), from, Instant.now(), all);
+
+        Map<String, int[]> byDay = new HashMap<>(); // yyyy-MM-dd -> [retest, trend, total]
+        for (BasketAuditDoc r : rows) {
+            if (r.getCreatedAt() == null) continue;
+            String day = r.getCreatedAt().atZone(java.time.ZoneId.of("Asia/Kolkata")).toLocalDate().toString();
+            byDay.computeIfAbsent(day, k -> new int[3]);
+            int[] c = byDay.get(day);
+            if ("RETEST".equalsIgnoreCase(r.getPath())) c[0]++;
+            else if ("TREND".equalsIgnoreCase(r.getPath())) c[1]++;
+            c[2]++;
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<String, int[]> e : byDay.entrySet()) {
+            Map<String, Object> row = new HashMap<>();
+            row.put("day", e.getKey());
+            row.put("retest", e.getValue()[0]);
+            row.put("trend", e.getValue()[1]);
+            row.put("total", e.getValue()[2]);
+            out.add(row);
+        }
+        out.sort((a, b) -> ((String) b.get("day")).compareTo((String) a.get("day")));
         return out;
     }
 

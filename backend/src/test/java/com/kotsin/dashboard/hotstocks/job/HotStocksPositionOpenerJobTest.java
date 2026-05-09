@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -94,6 +95,10 @@ class HotStocksPositionOpenerJobTest {
         // @Value defaults don't fire without a Spring context — set the caps explicitly.
         org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewFnoPerDay", fnoCap);
         org.springframework.test.util.ReflectionTestUtils.setField(job, "maxNewNonFnoPerDay", nonFnoCap);
+        // 2026-05-07 (HOTSTOCKS-4): pre-flight tick freshness gate is enabled in
+        // production. Tests don't mock trade-tick:{scripCode} so disable it here —
+        // the gate has its own dedicated tests in HotStocksPreflightTest.
+        org.springframework.test.util.ReflectionTestUtils.setField(job, "preflightTickFreshnessEnabled", false);
         return job;
     }
 
@@ -119,12 +124,12 @@ class HotStocksPositionOpenerJobTest {
         HotStocksPositionOpenerJob job = newJob();
 
         // Non-forced call must NOT fetch ranked list nor POST any trades.
-        job.openPositions();
+        job.openPositionsAndDrainRetry(false);
         verify(rest, org.mockito.Mockito.never())
             .postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
 
         // Forced call on a non-trading day bypasses guard and opens the position.
-        job.openPositions(true);
+        job.openPositionsAndDrainRetry(true);
         verify(rest, times(1))
             .postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
     }
@@ -141,7 +146,7 @@ class HotStocksPositionOpenerJobTest {
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
 
         HotStocksPositionOpenerJob job = newJob();
-        job.openPositions();
+        job.openPositionsAndDrainRetry(false);
 
         // MAX_NEW_PER_DAY=6 → 6 POSTs to /api/strategy-trades.
         verify(rest, times(6)).postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
@@ -172,7 +177,7 @@ class HotStocksPositionOpenerJobTest {
         when(service.loadRankedList()).thenReturn(ranked);
 
         HotStocksPositionOpenerJob job = newJob();
-        job.openPositions();
+        job.openPositionsAndDrainRetry(false);
 
         // Already at 50 concurrent; zero new POSTs.
         verify(rest, times(0)).postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
@@ -180,9 +185,9 @@ class HotStocksPositionOpenerJobTest {
 
     @Test
     void opener_opensOnlyUpToMaxConcurrentWhenPartiallyFull() {
-        // 48 existing HOTSTOCKS positions. Cap=50. Should open exactly 2 new, even though 6 ranked.
+        // 28 existing HOTSTOCKS positions. Cap=30. Should open exactly 2 new, even though 6 ranked.
         Set<String> existingKeys = new HashSet<>();
-        for (int i = 0; i < 48; i++) {
+        for (int i = 0; i < 28; i++) {
             existingKeys.add("virtual:positions:" + (2000 + i));
         }
         when(redis.keys(startsWith("virtual:positions:"))).thenReturn(existingKeys);
@@ -201,9 +206,9 @@ class HotStocksPositionOpenerJobTest {
         when(service.loadRankedList()).thenReturn(ranked);
 
         HotStocksPositionOpenerJob job = newJob();
-        job.openPositions();
+        job.openPositionsAndDrainRetry(false);
 
-        // 48 already + room for 2 more = 2 new POSTs.
+        // 28 already + room for 2 more = 2 new POSTs.
         verify(rest, times(2)).postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
     }
 
@@ -215,7 +220,7 @@ class HotStocksPositionOpenerJobTest {
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
 
         HotStocksPositionOpenerJob job = newJob();
-        job.openPositions();
+        job.openPositionsAndDrainRetry(false);
 
         // Capture the /api/strategy-trades payload.
         @SuppressWarnings("unchecked")
@@ -256,7 +261,7 @@ class HotStocksPositionOpenerJobTest {
             .thenReturn("{\"signalSource\":\"HOTSTOCKS\",\"status\":\"OPEN\",\"qtyOpen\":263}");
 
         HotStocksPositionOpenerJob job = newJob();
-        job.openPositions();
+        job.openPositionsAndDrainRetry(false);
 
         // Already held → no new POST.
         verify(rest, times(0)).postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
@@ -314,7 +319,7 @@ class HotStocksPositionOpenerJobTest {
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
         when(resolver.resolve("NOTLISTED")).thenReturn(java.util.Optional.empty());
 
-        newJob().openPositions();
+        newJob().openPositionsAndDrainRetry(false);
 
         // No scripCode → no POST to trade-exec.
         verify(rest, times(0)).postForEntity(endsWith("/api/strategy-trades"), any(HttpEntity.class), eq(Map.class));
@@ -342,7 +347,7 @@ class HotStocksPositionOpenerJobTest {
         when(rest.postForEntity(endsWith("/api/strategy-trades"), captor.capture(), eq(Map.class)))
             .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
 
-        newJob().openPositions();
+        newJob().openPositionsAndDrainRetry(false);
 
         verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
             any(HttpEntity.class), eq(Map.class));
@@ -373,7 +378,7 @@ class HotStocksPositionOpenerJobTest {
         when(rest.postForEntity(endsWith("/api/strategy-trades"), captor.capture(), eq(Map.class)))
             .thenReturn(new ResponseEntity<>(Map.of("success", true), HttpStatus.OK));
 
-        newJob().openPositions();
+        newJob().openPositionsAndDrainRetry(false);
 
         verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
             any(HttpEntity.class), eq(Map.class));
@@ -402,7 +407,7 @@ class HotStocksPositionOpenerJobTest {
         when(resolver.resolve("NF1")).thenReturn(java.util.Optional.of("50001"));
         when(resolver.resolve("NF2")).thenReturn(java.util.Optional.of("50002"));
 
-        newJob(6, 2).openPositions();
+        newJob(6, 2).openPositionsAndDrainRetry(false);
 
         // 6 F&O + 2 non-F&O = 8 total POSTs.
         verify(rest, times(8)).postForEntity(endsWith("/api/strategy-trades"),
@@ -421,7 +426,7 @@ class HotStocksPositionOpenerJobTest {
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
         when(resolver.resolve("NF0")).thenReturn(java.util.Optional.of("50000"));
 
-        newJob(6, 0).openPositions();
+        newJob(6, 0).openPositionsAndDrainRetry(false);
 
         // Only the F&O pick opens; non-F&O blocked by nonFno=0 budget.
         verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
@@ -437,9 +442,68 @@ class HotStocksPositionOpenerJobTest {
         when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
         when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
 
-        newJob().openPositions();
+        newJob().openPositionsAndDrainRetry(false);
 
         verify(confluence, times(0)).computeEquityTargets(anyString(),
             org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    // ── Dynamic sizing + VWAP + retry plumbing ──────────────────────────────────
+
+    @Test
+    void resolvePerPositionRupees_returnsCurrentBalanceDivMaxConcurrentWhenWalletPresent() {
+        // Wallet with 15,00,000 balance → 15L / 30 slots = ₹50,000 per slot (within [25k, 300k] bounds).
+        when(ops.get("wallet:entity:strategy-wallet-HOTSTOCKS"))
+            .thenReturn("{\"currentBalance\":1500000,\"availableMargin\":500000,\"usedMargin\":1000000}");
+        assertEquals(50_000.0, newJob().resolvePerPositionRupees(), 1e-9);
+    }
+
+    @Test
+    void resolvePerPositionRupees_clampsToMinWhenWalletTiny() {
+        // Wallet at 6L → 6L/30 = 20k which is below MIN_PER_POSITION_RUPEES (25k) → clamped to 25k.
+        when(ops.get("wallet:entity:strategy-wallet-HOTSTOCKS"))
+            .thenReturn("{\"currentBalance\":600000}");
+        assertEquals(25_000.0, newJob().resolvePerPositionRupees(), 1e-9);
+    }
+
+    @Test
+    void resolvePerPositionRupees_clampsToMaxWhenWalletHuge() {
+        // Wallet at 2Cr → 2Cr/30 ≈ 666k which exceeds MAX_PER_POSITION_RUPEES (300k) → clamped.
+        when(ops.get("wallet:entity:strategy-wallet-HOTSTOCKS"))
+            .thenReturn("{\"currentBalance\":20000000}");
+        assertEquals(300_000.0, newJob().resolvePerPositionRupees(), 1e-9);
+    }
+
+    @Test
+    void resolvePerPositionRupees_fallsBackToDefaultOnWalletReadFailure() {
+        // Redis returns null (key absent) → use the ₹1.5L default to keep the opener running.
+        when(ops.get("wallet:entity:strategy-wallet-HOTSTOCKS")).thenReturn(null);
+        assertEquals(150_000.0, newJob().resolvePerPositionRupees(), 1e-9);
+    }
+
+    @Test
+    void resolveOpen915Vwap_returnsEmptyWhenTickHistoryAbsent() {
+        // Default Mockito — opsForList() not stubbed → returns null-equivalent → Optional.empty.
+        assertEquals(Optional.empty(), newJob().resolveOpen915Vwap("1234"));
+    }
+
+    @Test
+    void retryPendingWithLiveLtp_drainsAndOpensUsingLiveLtpResolver() {
+        // Primary pass enqueues scrip into pendingRetry (VWAP unavailable in test mocks).
+        // Retry pass should call liveLtpResolver and fire a POST per pending scrip.
+        StockMetrics m = fno("9001", "PENDINGSCRIP", 250.0);
+        when(service.loadRankedList()).thenReturn(List.of(m));
+        when(redis.keys(startsWith("virtual:positions:"))).thenReturn(new HashSet<>());
+        when(ops.get(startsWith("virtual:positions:"))).thenReturn(null);
+
+        HotStocksPositionOpenerJob job = newJob();
+        // Primary pass: VWAP missing → pending.
+        job.openPositions(false);
+        verify(rest, times(0)).postForEntity(endsWith("/api/strategy-trades"),
+            any(HttpEntity.class), eq(Map.class));
+        // Retry pass: live LTP (mocked) resolves → POST fires.
+        job.retryPendingWithLiveLtp();
+        verify(rest, times(1)).postForEntity(endsWith("/api/strategy-trades"),
+            any(HttpEntity.class), eq(Map.class));
     }
 }

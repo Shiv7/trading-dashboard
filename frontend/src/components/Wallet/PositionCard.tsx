@@ -54,7 +54,8 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
     return `${equity.toFixed(0)}/${option.toFixed(2)}`
   }
 
-  /** Format timestamp in IST with date */
+  /** Format timestamp in IST with date + HH:MM:SS (24-hour, second precision).
+   *  P1.b 2026-05-05: show actual entry timestamp at second precision for active trades. */
   const fmtTime = (ts: string | number | undefined) => {
     if (!ts) return null
     try {
@@ -64,20 +65,21 @@ export default function PositionCard({ position, onUpdate, exited }: PositionCar
         timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short'
       })
       const time = d.toLocaleTimeString('en-IN', {
-        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
+        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
       })
       return `${date}, ${time}`
     } catch { return null }
   }
 
-  /** Format time-only for exit history (compact) */
+  /** Format time-only for exit history (compact, HH:MM:SS).
+   *  P1.b 2026-05-05: second precision. */
   const fmtTimeShort = (ts: number | undefined) => {
     if (!ts) return ''
     try {
       const d = new Date(ts)
       if (isNaN(d.getTime())) return ''
       return d.toLocaleTimeString('en-IN', {
-        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true
+        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
       })
     } catch { return '' }
   }

@@ -35,6 +35,8 @@ interface FukaaTrigger {
   triggerScore: number;
   triggerTime: string;
   triggerTimeEpoch: number;
+  /** P1.a 2026-05-05: actual moment Kafka publish fired (epoch ms). Prefer over triggerTime. */
+  firedAt?: number;
   bbUpper: number;
   bbMiddle: number;
   bbLower: number;
@@ -259,18 +261,21 @@ function classifyFukaaTradeType(sig: FukaaTrigger): { label: string; narrative: 
   return { label: 'STANDARD', narrative: `Volume-confirmed signal. Follow lot-split exit plan: partial exits T1 → T4.`, color: 'text-blue-400' };
 }
 
-/** Format trigger timestamp in IST */
+/** Format trigger timestamp in IST as HH:MM:SS.
+ * P1.a 2026-05-05: prefer firedAt (actual publish moment) over triggerTime (candle close time).
+ */
 function formatTriggerTime(sig: FukaaTrigger): string {
-  if (!sig.triggerTime) return '--';
-  const d = new Date(sig.triggerTime);
-  if (isNaN(d.getTime())) return '--';
+  const epoch = sig.firedAt
+    || sig.triggerTimeEpoch
+    || (sig.triggerTime ? new Date(sig.triggerTime).getTime() : 0);
+  if (!epoch || isNaN(epoch)) return '--';
+  const d = new Date(epoch);
   return d.toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
-    day: 'numeric',
-    month: 'short',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: true,
+    second: '2-digit',
+    hour12: false,
   });
 }
 
@@ -379,6 +384,8 @@ function formatVolume(vol: number): string {
 }
 
 function getEpoch(sig: FukaaTrigger): number {
+  // P1.a 2026-05-05: prefer firedAt (actual publish moment) over triggerTime (candle close).
+  if (sig.firedAt) return sig.firedAt;
   if (sig.triggerTimeEpoch) return sig.triggerTimeEpoch;
   if (sig.triggerTime) {
     const d = new Date(sig.triggerTime);

@@ -40,7 +40,7 @@ const sidebarItems = [
   { to: '/ml-shadow', key: 'ml-shadow', label: 'ML Shadow', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /> },
   { to: '/pivotboss', key: 'pivotboss', label: 'PivotBoss', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 13l4-4 4 4 6-6 4 4M3 17h18" /> },
   { to: '/pivotboss-analytics', key: 'pivotboss-analytics', label: 'PB Analytics', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> },
-  { to: '/monday-ship', key: 'monday-ship', label: 'Monday Ship', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /> },
+  // Monday Ship folded into /pivotboss tabs (2026-04-27)
 ]
 
 export default function Layout({ children }: LayoutProps) {
@@ -184,6 +184,21 @@ export default function Layout({ children }: LayoutProps) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.62 48.62 0 0112 20.904a48.62 48.62 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.636 50.636 0 00-2.658-.813A59.906 59.906 0 0112 3.493a59.903 59.903 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5" />
               </svg>
               {!sidebarCollapsed && <span className="text-sm font-medium">Health Check</span>}
+            </NavLink>
+          )}
+
+          {user?.role === 'ADMIN' && (
+            <NavLink
+              to="/kafka-lag"
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all ${
+                isActive('/kafka-lag') ? 'bg-amber-500/10 text-amber-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+              title={sidebarCollapsed ? 'Kafka Lag' : undefined}
+            >
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              {!sidebarCollapsed && <span className="text-sm font-medium">Kafka Lag</span>}
             </NavLink>
           )}
 

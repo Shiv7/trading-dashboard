@@ -30,6 +30,8 @@ interface FudkiiSignal {
   triggerScore: number;
   triggerTime: string;
   triggerTimeEpoch: number;
+  /** P1.a 2026-05-05: actual moment Kafka publish fired (epoch ms). Prefer over triggerTime (which is candle close time). */
+  firedAt?: number;
   bbUpper: number;
   bbMiddle: number;
   bbLower: number;
@@ -264,6 +266,8 @@ interface FudkiiTabContentProps {
    ═══════════════════════════════════════════════════════════════ */
 
 function getEpoch(sig: FudkiiSignal): number {
+  // P1.a 2026-05-05: prefer firedAt (actual publish moment) over triggerTime (candle close).
+  if (sig.firedAt) return sig.firedAt;
   if (sig.triggerTimeEpoch) return sig.triggerTimeEpoch;
   if (sig.triggerTime) {
     const d = new Date(sig.triggerTime);
@@ -286,18 +290,22 @@ function computeKiiScore(sig: FudkiiSignal): number {
   return Math.round((oiPct + surge) / 2);
 }
 
-/** Format trigger timestamp in IST */
+/** Format trigger timestamp in IST as HH:MM:SS.
+ * P1.a 2026-05-05: prefer firedAt (actual publish moment) over triggerTime (candle close time).
+ * Truncates millis (rounds DOWN to the second). Returns '--' if no usable timestamp.
+ */
 function formatTriggerTime(sig: FudkiiSignal): string {
-  if (!sig.triggerTime) return '--';
-  const d = new Date(sig.triggerTime);
-  if (isNaN(d.getTime())) return '--';
+  const epoch = sig.firedAt
+    || sig.triggerTimeEpoch
+    || (sig.triggerTime ? new Date(sig.triggerTime).getTime() : 0);
+  if (!epoch || isNaN(epoch)) return '--';
+  const d = new Date(epoch);
   return d.toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
-    day: 'numeric',
-    month: 'short',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: true,
+    second: '2-digit',
+    hour12: false,
   });
 }
 

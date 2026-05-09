@@ -116,7 +116,7 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
                           }`}>{trade.side}</span>
                         </div>
                         <div className="text-[10px] text-slate-500 mt-0.5">
-                          {trade.exitTime ? new Date(trade.exitTime).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '-'}
+                          {trade.exitTime ? new Date(trade.exitTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '-'}
                           {trade.exitReason && <span className="ml-2 text-slate-400">{trade.exitReason}</span>}
                         </div>
                       </div>
@@ -206,7 +206,7 @@ export default function WalletJournalTab({ walletType }: WalletJournalTabProps) 
                         className="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors cursor-pointer"
                       >
                         <td className="px-4 py-3 text-sm text-slate-300">
-                          {trade.exitTime ? new Date(trade.exitTime).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '-'}
+                          {trade.exitTime ? new Date(trade.exitTime).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '-'}
                         </td>
                         <td className="px-4 py-3 text-sm text-white font-medium">{trade.companyName || trade.scripCode}</td>
                         <td className="px-4 py-3">

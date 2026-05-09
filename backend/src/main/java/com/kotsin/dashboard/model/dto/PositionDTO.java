@@ -85,5 +85,10 @@ public class PositionDTO {
 
     // Exit history: per-target exit events [{level, lots, qty, price, timestamp, source}]
     private java.util.List<java.util.Map<String, Object>> exitHistory;
+
+    // F5 WS-orphan badge: HEALTHY | DEGRADED | ORPHAN_PROXY | ORPHAN_BLIND | EXITING.
+    // Stamped by tradeExec.StrategyTradeExecutor.stampFeedStateOnPosition.
+    private String feedState;
+    private Long feedStateAt;
 }
 

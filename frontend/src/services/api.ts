@@ -1444,5 +1444,5 @@ export interface HotStocksAlert {
 }
 
 // Export helpers for use in other service files
-export { fetchJson, postJson, putJson, deleteJson, patchJson, API_BASE }
+export { fetchJson, postJson, putJson, deleteJson, patchJson, API_BASE, fetchWithAuth }
 

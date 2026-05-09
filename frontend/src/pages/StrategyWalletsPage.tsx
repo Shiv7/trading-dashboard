@@ -706,10 +706,21 @@ export default function StrategyWalletsPage() {
     loadData()
     let interval: ReturnType<typeof setInterval> | null = null
     if (autoRefresh) {
-      interval = setInterval(() => { if (isAnyMarketOpen()) loadData() }, 5000)
+      // 2026-04-24 perf fix:
+      //   (A) Suppress polling while any modal is open — prevents the parent
+      //       re-rendering 12 wallet cards + trade table mid-interaction, which
+      //       was making the "Add Funds" close feel laggy.
+      //   (B) Poll every 15s instead of 5s — wallet summaries only change when
+      //       a trade opens/closes, both of which fan-out via the same backend
+      //       Kafka/WS, so 5s was 3× overkill.
+      interval = setInterval(() => {
+        if (!isAnyMarketOpen()) return
+        if (fundModalStrategy || unlockConfirmStrategy || selectedTrade) return
+        loadData()
+      }, 15_000)
     }
     return () => { if (interval) clearInterval(interval) }
-  }, [loadData, autoRefresh])
+  }, [loadData, autoRefresh, fundModalStrategy, unlockConfirmStrategy, selectedTrade])
 
   // Close dropdowns on outside click
   useEffect(() => {

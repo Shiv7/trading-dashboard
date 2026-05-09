@@ -85,6 +85,9 @@ interface LivePosition {
   estimatedEntrySlippageTotal?: number
   estimatedSlippagePct?: number
   slippageTier?: string
+  // 2026-05-07 (Q4): per-strategy 30m dedup drops; rendered as a small badge.
+  duplicateDroppedCount?: number
+  lastDuplicateDroppedAt?: number
 }
 
 interface LiveData {
@@ -469,6 +472,14 @@ function ActivePositionCard({ position: p }: { position: LivePosition }) {
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/25">
                 <Zap className="w-2.5 h-2.5 animate-pulse" />
                 Trailing
+              </span>
+            )}
+            {(p.duplicateDroppedCount ?? 0) > 0 && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-violet-500/15 text-violet-300 border border-violet-500/25"
+                title={`Duplicate fire from same strategy + scrip + direction was suppressed by 30m dedup. Last drop: ${p.lastDuplicateDroppedAt ? new Date(p.lastDuplicateDroppedAt).toLocaleTimeString('en-IN') : ''}`}
+              >
+                Dup×{p.duplicateDroppedCount}
               </span>
             )}
           </div>

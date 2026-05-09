@@ -85,16 +85,28 @@ class HealthCheckDataKeyPresentTest {
     }
 
     @Test
-    void dataKeyPresent_returnsMissing_whenKeyDoesNotExist() {
+    void dataKeyPresent_returnsAbsent_whenKeyDoesNotExist() {
+        // Semantics refined 2026-04-24: scrapers with a defined activeWindow (retryWindowStart/End)
+        // now split the MISSING state into three:
+        //   EXPECTED_AT_EOD — before the window opens (informational)
+        //   PENDING         — inside the window, scraper hasn't delivered yet
+        //   MISSING         — past window + 30-min grace, never delivered (real alert)
+        // Block-deals window is 09:30-15:40 IST. Depending on test wall-clock, any of these
+        // three is a valid "no data yet" verdict. The rest of the pipeline (FRESH vs absent)
+        // is still binary.
         LocalDate latest = HealthJobRegistry.resolveLatestTradingDate(IST);
         String key = "market-pulse:block-deals:" + latest;
         when(ops.get(key)).thenReturn(null);
 
         JobStatus bd = findJob(svc.computeAll(), "block-deals");
-        assertEquals(Status.MISSING, bd.status, "absent key → MISSING, NOT FRESH");
-        assertTrue(bd.statusReason.contains("no key") || bd.statusReason.toLowerCase().contains("missing")
-                   || bd.statusReason.contains(key),
-            "reason should mention the missing key, got: " + bd.statusReason);
+        assertTrue(
+            bd.status == Status.MISSING
+                || bd.status == Status.PENDING
+                || bd.status == Status.EXPECTED_AT_EOD,
+            "absent key → MISSING / PENDING / EXPECTED_AT_EOD depending on window, got: " + bd.status);
+        assertNotEquals(Status.FRESH, bd.status, "absent key must NOT be FRESH");
+        assertNotEquals(Status.EMPTY_BY_DESIGN, bd.status,
+            "absent key must NOT be EMPTY_BY_DESIGN (that requires an explicit [])");
     }
 
     @Test
@@ -156,7 +168,12 @@ class HealthCheckDataKeyPresentTest {
         List<JobStatus> all = svc.computeAll();
         assertEquals(Status.FRESH, findJob(all, "bulk-deals").status);
         assertEquals(Status.EMPTY_BY_DESIGN, findJob(all, "short-selling").status);
-        assertEquals(Status.MISSING, findJob(all, "block-deals").status);
+        Status bdStatus = findJob(all, "block-deals").status;
+        assertTrue(
+            bdStatus == Status.MISSING
+                || bdStatus == Status.PENDING
+                || bdStatus == Status.EXPECTED_AT_EOD,
+            "absent block-deals → one of MISSING/PENDING/EXPECTED_AT_EOD (depends on wall-clock vs active window), got: " + bdStatus);
     }
 
     @Test

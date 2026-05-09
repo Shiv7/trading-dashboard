@@ -117,6 +117,10 @@ interface McxBbTrigger {
   retestStage?: string;
   retestDirectionAligned?: boolean;
   retestBoost?: number;
+  // 2026-04-30: BB squeeze breakout enhancement
+  breakoutFromSqueeze?: boolean;
+  squeezeBreakoutBonus?: number;
+  squeezeReady?: boolean;
 }
 
 interface TradePlan {
@@ -674,6 +678,17 @@ const McxBbCard: React.FC<{
 
         {/* ── BB BREAKOUT DETAILS ── */}
         <div className="mt-2.5 flex items-center gap-2 flex-wrap text-[10px]">
+          {/* 2026-04-30: badge when this breakout came out of a recent BB squeeze */}
+          {trigger.breakoutFromSqueeze && (
+            <span
+              className="font-mono px-2 py-0.5 rounded-full bg-cyan-500/25 text-cyan-200 border border-cyan-400/50 cursor-help"
+              title={trigger.squeezeBreakoutBonus
+                ? `Breakout emerged from a recent BB squeeze. +${trigger.squeezeBreakoutBonus} bonus on technical score.`
+                : "Breakout emerged from a recent BB squeeze."}
+            >
+              ⚡ Breakout from BB Squeeze
+            </span>
+          )}
           <span className="font-mono text-slate-400">
             {isLong ? `Close > Upper by ${((trigger.triggerPrice - (trigger.bbUpper ?? 0)) / (trigger.bbUpper || 1) * 100).toFixed(1)}%` :
               `Close < Lower by ${(((trigger.bbLower ?? 0) - trigger.triggerPrice) / (trigger.bbLower || 1) * 100).toFixed(1)}%`}

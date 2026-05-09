@@ -29,3 +29,8 @@ out/
 
 
 backend/nohup.out
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/
