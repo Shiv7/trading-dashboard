@@ -11,6 +11,9 @@ import com.kotsin.dashboard.service.PerformanceAnalyticsService;
 import com.kotsin.dashboard.service.ScripLookupService;
 import com.kotsin.dashboard.service.WalletService;
 import com.kotsin.dashboard.websocket.WebSocketSessionManager;
+import com.mongodb.client.model.IndexOptions;
+import com.mongodb.client.model.ReplaceOptions;
+import com.mongodb.client.result.UpdateResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -41,6 +44,25 @@ public class TradeOutcomeConsumer {
     private final MongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    @jakarta.annotation.PostConstruct
+    public void ensureIdempotencyIndex() {
+        // Sparse + unique: protects rows written AFTER this code ships.
+        // Pre-existing trade_outcomes (39M docs without _idempotencyKey) are NOT
+        // covered by design — sparse index excludes them, and there's no realistic
+        // mechanism to replay pre-rollout outcomes. Backfill is a separate one-shot
+        // mongo script (see docs/audits/duplicate-trade-rca-2026-05-09.md).
+        try {
+            mongoTemplate.getCollection("trade_outcomes").createIndex(
+                new Document("_idempotencyKey", 1),
+                new IndexOptions().unique(true).sparse(true)
+            );
+            log.info("trade_outcomes._idempotencyKey unique sparse index ensured");
+        } catch (Exception e) {
+            // Index may already exist from a prior run — that's fine
+            log.warn("Could not create _idempotencyKey index (may already exist): {}", e.getMessage());
+        }
+    }
 
     @KafkaListener(topics = "trade-outcomes", groupId = "${spring.kafka.consumer.group-id:trading-dashboard-v2}")
     public void onTradeOutcome(String payload) {
@@ -330,7 +352,9 @@ public class TradeOutcomeConsumer {
                     .append("maxAdverseExcursion", optionalJsonDouble(root, "maxAdverseExcursion"))
                     .append("maxFavorableExcursion", optionalJsonDouble(root, "maxFavorableExcursion"))
                     // ML Shadow correlation ID for outcome linkage
-                    .append("shadowLogId", root.path("shadowLogId").asText(null));
+                    .append("shadowLogId", root.path("shadowLogId").asText(null))
+                    // T1.3: underlying scrip code for backtest joins (was always null prior)
+                    .append("underlyingScripCode", deriveUnderlyingScripCode(root, trade));
 
             // Store times as Date objects for MongoDB queries
             if (trade.getEntryTime() != null) {
@@ -340,12 +364,65 @@ public class TradeOutcomeConsumer {
                 doc.append("exitTime", Date.from(trade.getExitTime().atZone(ZoneId.of("Asia/Kolkata")).toInstant()));
             }
 
-            mongoTemplate.getCollection("trade_outcomes").insertOne(doc);
-            log.info("trade_outcome_persisted scrip={} strategy={} pnl={} exit={}",
-                    trade.getScripCode(), signalSource, trade.getPnl(), trade.getExitReason());
+            // T1.2: Idempotency-key dedup at write time.
+            // Key = signalId + exitReason + entryTime-truncated-to-minute (IST).
+            // Same exitReason at same minute = duplicate (whether from upstream re-fire or Kafka redelivery).
+            // Different exitReasons for same signalId ARE legitimate (sequential close-with-different-reason).
+            String idempotencyKey;
+            if (trade.getEntryTime() != null && trade.getSignalId() != null && !trade.getSignalId().isEmpty()) {
+                long entryMinute = trade.getEntryTime().atZone(ZoneId.of("Asia/Kolkata"))
+                    .toEpochSecond() / 60L;
+                idempotencyKey = String.format("%s|%s|%d",
+                    trade.getSignalId(),
+                    trade.getExitReason() != null ? trade.getExitReason() : "UNKNOWN",
+                    entryMinute);
+            } else {
+                // Fallback: timestamp-based unique key when signalId or entryTime missing
+                idempotencyKey = "no-key-" + System.nanoTime();
+            }
+            doc.append("_idempotencyKey", idempotencyKey);
+
+            Document filter = new Document("_idempotencyKey", idempotencyKey);
+            UpdateResult result = mongoTemplate.getCollection("trade_outcomes")
+                .replaceOne(filter, doc, new ReplaceOptions().upsert(true));
+
+            if (result.getMatchedCount() > 0) {
+                log.warn("[DEDUP] duplicate trade_outcome blocked: signalId={} exitReason={} idempotencyKey={}",
+                    trade.getSignalId(), trade.getExitReason(), idempotencyKey);
+            } else {
+                log.info("trade_outcome_persisted scrip={} strategy={} pnl={} exit={}",
+                        trade.getScripCode(), signalSource, trade.getPnl(), trade.getExitReason());
+            }
 
         } catch (Exception e) {
             log.error("Failed to persist trade outcome: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * T1.3: Derives underlyingScripCode for the trade outcome.
+     * Priority:
+     *   1. Explicit field from Kafka payload (preferred — when tradeExec publishes it)
+     *   2. ScripGroup lookup by companyName prefix (fallback)
+     *   3. null (sentinel — backtest tooling defaults gracefully)
+     */
+    private String deriveUnderlyingScripCode(JsonNode root, TradeDTO trade) {
+        String fromPayload = root.path("underlyingScripCode").asText(null);
+        if (fromPayload != null && !fromPayload.isEmpty() && !"null".equals(fromPayload)) {
+            return fromPayload;
+        }
+        String companyName = trade.getCompanyName();
+        if (companyName == null || companyName.isEmpty()) return null;
+        String prefix = companyName.split(" ")[0];
+        if (prefix.isEmpty()) return null;
+        try {
+            Document sg = mongoTemplate.getCollection("ScripGroup")
+                .find(new Document("companyName", prefix))
+                .first();
+            return sg != null ? sg.getString("_id") : null;
+        } catch (Exception e) {
+            log.debug("ScripGroup lookup failed for {}: {}", prefix, e.getMessage());
+            return null;
         }
     }
 
